@@ -16,7 +16,12 @@
 // ***************************************************************************************
 #pragma once
 
+#include <pybind11/pybind11.h>
 #include <tcl_util.h>
+
+#include <memory>
+
+#include "IncrementalStaSession.hpp"
 
 namespace python_interface {
 
@@ -24,5 +29,12 @@ bool initSTA(std::string& config, std::map<std::string, std::string>& config_dic
 bool runSTA();
 bool extractLib();
 bool destroySTA();
+ista::StaExecutionRequest parseStaExecutionRequest(const std::map<std::string, std::string>& request);
+pybind11::dict resolveStaExecution(const std::map<std::string, std::string>& request);
+std::unique_ptr<ista::IncrementalStaSession> createIncrementalStaSession(const std::map<std::string, std::string>& request);
+void initializeIncrementalStaSession(ista::IncrementalStaSession& session, const std::string& config,
+                                     std::map<std::string, std::string> config_dict);
+pybind11::dict runIncrementalStaBaseline(ista::IncrementalStaSession& session);
+void closeIncrementalStaSession(ista::IncrementalStaSession& session);
 
 }  // namespace python_interface

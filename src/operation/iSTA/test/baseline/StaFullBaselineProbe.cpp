@@ -14,14 +14,9 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 
-#include "DataManager.hpp"
-#include "STAInterface.hpp"
-#include "idm.h"
-#include "json.hpp"
-
 #include <algorithm>
-#include <array>
 #include <any>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -34,10 +29,18 @@
 #include <string>
 #include <vector>
 
+#include "DataManager.hpp"
+#include "IncrementalStaSession.hpp"
+#include "STAInterface.hpp"
+#include "StaFullBaselineEncoding.hpp"
+#include "idm.h"
+#include "json.hpp"
+
 namespace {
 
 namespace fs = std::filesystem;
 using Json = nlohmann::json;
+using namespace ista::baseline_test;
 
 struct Options
 {
@@ -52,118 +55,6 @@ struct Options
   fs::path snapshot;
   std::string expected_clock;
 };
-
-Json sentinel(const std::string& kind)
-{
-  return Json{{"sentinel", kind}};
-}
-
-Json encodeNumber(double value)
-{
-  if (std::isnan(value)) {
-    throw std::runtime_error("NaN is not a valid baseline value");
-  }
-  if (std::isinf(value)) {
-    return sentinel(value > 0.0 ? "pos_inf" : "neg_inf");
-  }
-  return value;
-}
-
-template <typename Enum, std::size_t N>
-std::string enumName(Enum value, const std::array<const char*, N>& names, const char* type)
-{
-  std::size_t index = static_cast<std::size_t>(value);
-  if (index >= names.size()) {
-    throw std::runtime_error(std::string("unknown ") + type);
-  }
-  return names[index];
-}
-
-std::string analysisName(ista::AnalysisType value)
-{
-  return ista::GetAnalysisTypeName{}(value);
-}
-
-std::string sourceName(ista::PathSourceType value)
-{
-  return enumName(value, std::array{"none", "input", "register"}, "PathSourceType");
-}
-
-std::string transName(ista::TransType value)
-{
-  return ista::GetTransTypeName{}(value);
-}
-
-std::string arcTypeName(ista::ArcType value)
-{
-  return ista::GetArcTypeName{}(value);
-}
-
-std::string directionName(ista::PinDirection value)
-{
-  return ista::GetPinDirectionName{}(value);
-}
-
-std::string checkName(ista::TimingCheckType value)
-{
-  return ista::GetTimingCheckTypeName{}(value);
-}
-
-std::string powerGroupName(ista::PowerGroupType value)
-{
-  return enumName(value, std::array{"none", "io_pad", "memory", "black_box", "clock_network", "register", "sequential", "combinational"},
-                  "PowerGroupType");
-}
-
-std::string arcSenseName(ista::TimingArcSense value)
-{
-  return enumName(value, std::array{"none", "positive", "negative", "non_unate"}, "TimingArcSense");
-}
-
-std::string timeUnitName(ista::TimingTimeUnit value)
-{
-  return enumName(value, std::array{"none", "ns", "ps", "fs"}, "TimingTimeUnit");
-}
-
-std::string capUnitName(ista::TimingCapacitiveUnit value)
-{
-  return enumName(value, std::array{"none", "pf", "ff", "f"}, "TimingCapacitiveUnit");
-}
-
-std::string resistanceUnitName(ista::TimingResistanceUnit value)
-{
-  return enumName(value, std::array{"none", "ohm", "kohm"}, "TimingResistanceUnit");
-}
-
-template <typename T, typename Encoder>
-Json encodeAnalysisTrans(std::map<ista::AnalysisType, std::map<ista::TransType, T>>& values, Encoder encode)
-{
-  Json result = Json::array();
-  for (auto& [analysis, trans_values] : values) {
-    for (auto& [trans, value] : trans_values) {
-      result.push_back({{"analysis", analysisName(analysis)}, {"transition", transName(trans)}, {"value", encode(value)}});
-    }
-  }
-  return result;
-}
-
-template <typename T, typename Encoder>
-Json encodeAnalysisInputOutput(std::map<ista::AnalysisType, std::map<ista::TransType, std::map<ista::TransType, T>>>& values, Encoder encode)
-{
-  Json result = Json::array();
-  for (auto& [analysis, inputs] : values) {
-    for (auto& [input, outputs] : inputs) {
-      for (auto& [output, value] : outputs) {
-        result.push_back({{"analysis", analysisName(analysis)},
-                          {"input_transition", transName(input)},
-                          {"output_transition", transName(output)},
-                          {"value", encode(value)}});
-      }
-    }
-  }
-  return result;
-}
-
 std::string ordinalSuffix(std::size_t ordinal)
 {
   std::ostringstream stream;
@@ -173,9 +64,8 @@ std::string ordinalSuffix(std::size_t ordinal)
 
 Json arcIdentity(ista::Arc& arc)
 {
-  return Json::array({arc.get_source_pin(), arc.get_sink_pin(), arcTypeName(arc.get_type()), arc.get_owner_name(),
-                      arc.get_library_source_port(), arc.get_library_sink_port(), arc.get_is_clock_arc(), arc.get_is_disable_arc(),
-                      arc.get_is_loop_disable()});
+  return Json::array({arc.get_source_pin(), arc.get_sink_pin(), arcTypeName(arc.get_type()), arc.get_owner_name(), arc.get_library_source_port(),
+                      arc.get_library_sink_port(), arc.get_is_clock_arc(), arc.get_is_disable_arc(), arc.get_is_loop_disable()});
 }
 
 struct ArcKeys
@@ -219,9 +109,8 @@ std::map<int32_t, std::string> makeTimingArcKeys(ista::Arc& arc)
     return result;
   }
   for (ista::TimingArc& timing_arc : cell_arc->get_timing_arc_list()) {
-    Json identity = Json::array({timing_arc.get_library_name(), arcSenseName(timing_arc.get_sense()),
-                                 transName(timing_arc.get_trigger_trans_type()), transName(timing_arc.get_check_trans_type()),
-                                 timing_arc.get_sdf_cond()});
+    Json identity = Json::array({timing_arc.get_library_name(), arcSenseName(timing_arc.get_sense()), transName(timing_arc.get_trigger_trans_type()),
+                                 transName(timing_arc.get_check_trans_type()), timing_arc.get_sdf_cond()});
     std::string base = identity.dump();
     std::string key = base + ordinalSuffix(next_ordinal[base]++);
     if (!result.emplace(timing_arc.get_arc_idx(), key).second) {
@@ -239,9 +128,8 @@ std::vector<std::string> sorted(std::vector<std::string> values)
 
 void sortRecords(Json& records, const char* key)
 {
-  std::sort(records.begin(), records.end(), [key](const Json& lhs, const Json& rhs) {
-    return lhs.at(key).get<std::string>() < rhs.at(key).get<std::string>();
-  });
+  std::sort(records.begin(), records.end(),
+            [key](const Json& lhs, const Json& rhs) { return lhs.at(key).get<std::string>() < rhs.at(key).get<std::string>(); });
 }
 
 Json encodeAdjacency(ista::Database& database, const ArcKeys& keys, bool incoming)
@@ -279,19 +167,30 @@ Json encodeTopology(ista::Database& database, const ArcKeys& keys)
     if (auto instance_it = database.get_instance_map().find(pin.get_instance_name()); instance_it != database.get_instance_map().end()) {
       cell = instance_it->second.get_cell_name();
     }
-    nodes.push_back({{"key", node}, {"direction", directionName(pin.get_direction())}, {"is_port", pin.get_is_port()},
-                     {"instance", pin.get_instance_name()}, {"cell", cell}, {"net", pin.get_net_name()},
+    nodes.push_back({{"key", node},
+                     {"direction", directionName(pin.get_direction())},
+                     {"is_port", pin.get_is_port()},
+                     {"instance", pin.get_instance_name()},
+                     {"cell", cell},
+                     {"net", pin.get_net_name()},
                      {"level", point_it->second.get_level()}});
   }
 
   Json arcs = Json::array();
   for (std::size_t index = 0; index < database.get_arc_list().size(); ++index) {
     ista::Arc& arc = database.get_arc_list()[index];
-    arcs.push_back({{"key", keys.keys[index]}, {"identity", arcIdentity(arc)}, {"parallel_ordinal", keys.ordinals[index]},
-                    {"source", arc.get_source_pin()}, {"sink", arc.get_sink_pin()}, {"type", arcTypeName(arc.get_type())},
-                    {"owner", arc.get_owner_name()}, {"library_source_port", arc.get_library_source_port()},
-                    {"library_sink_port", arc.get_library_sink_port()}, {"is_clock", arc.get_is_clock_arc()},
-                    {"is_disabled", arc.get_is_disable_arc()}, {"is_loop_disabled", arc.get_is_loop_disable()}});
+    arcs.push_back({{"key", keys.keys[index]},
+                    {"identity", arcIdentity(arc)},
+                    {"parallel_ordinal", keys.ordinals[index]},
+                    {"source", arc.get_source_pin()},
+                    {"sink", arc.get_sink_pin()},
+                    {"type", arcTypeName(arc.get_type())},
+                    {"owner", arc.get_owner_name()},
+                    {"library_source_port", arc.get_library_source_port()},
+                    {"library_sink_port", arc.get_library_sink_port()},
+                    {"is_clock", arc.get_is_clock_arc()},
+                    {"is_disabled", arc.get_is_disable_arc()},
+                    {"is_loop_disabled", arc.get_is_loop_disable()}});
   }
   sortRecords(arcs, "key");
 
@@ -302,12 +201,13 @@ Json encodeTopology(ista::Database& database, const ArcKeys& keys)
           {"start_points", sorted(database.get_start_point_list())},
           {"end_points", sorted(database.get_end_point_list())},
           {"timing_order", database.get_timing_order_list()},
-          {"counts", {{"instances", database.get_instance_map().size()},
-                      {"pins", database.get_pin_map().size()},
-                      {"nets", database.get_net_map().size()},
-                      {"arcs", database.get_arc_list().size()},
-                      {"timing_points", database.get_timing_point_map().size()},
-                      {"path_groups", database.get_timing_path_group_list().size()}}}};
+          {"counts",
+           {{"instances", database.get_instance_map().size()},
+            {"pins", database.get_pin_map().size()},
+            {"nets", database.get_net_map().size()},
+            {"arcs", database.get_arc_list().size()},
+            {"timing_points", database.get_timing_point_map().size()},
+            {"path_groups", database.get_timing_path_group_list().size()}}}};
 }
 
 Json encodeClockState(ista::TimingPoint& point, bool physical)
@@ -336,11 +236,16 @@ Json encodePathStates(ista::TimingPoint& point, const ArcKeys& keys)
     for (auto& [source, by_trans] : by_source) {
       for (auto& [trans, by_clock] : by_trans) {
         for (auto& [launch_clock, state] : by_clock) {
-          result.push_back({{"analysis", analysisName(analysis)}, {"source_type", sourceName(source)},
-                            {"transition", transName(trans)}, {"launch_clock", launch_clock},
-                            {"arrival", encodeNumber(state.get_arrival())}, {"slew", encodeNumber(state.get_slew())},
-                            {"launch_time", encodeNumber(state.get_launch_time())}, {"start_point", state.get_start_point()},
-                            {"predecessor", state.get_predecessor()}, {"clock_name", state.get_clock_name()},
+          result.push_back({{"analysis", analysisName(analysis)},
+                            {"source_type", sourceName(source)},
+                            {"transition", transName(trans)},
+                            {"launch_clock", launch_clock},
+                            {"arrival", encodeNumber(state.get_arrival())},
+                            {"slew", encodeNumber(state.get_slew())},
+                            {"launch_time", encodeNumber(state.get_launch_time())},
+                            {"start_point", state.get_start_point()},
+                            {"predecessor", state.get_predecessor()},
+                            {"clock_name", state.get_clock_name()},
                             {"crpr_clock_pin", state.get_crpr_clock_pin()},
                             {"predecessor_arc", arcReference(state.get_predecessor_arc_idx(), keys)},
                             {"predecessor_arc_delay", encodeNumber(state.get_predecessor_arc_delay())},
@@ -359,14 +264,19 @@ Json encodeTimingPoints(ista::Database& database, const ArcKeys& keys)
   Json result = Json::array();
   auto encode_numeric = [](double value) { return encodeNumber(value); };
   for (auto& [node, point] : database.get_timing_point_map()) {
-    result.push_back({{"node", node}, {"arrival", encodeNumber(point.get_arrival())},
-                      {"required", encodeNumber(point.get_required())}, {"slack", encodeNumber(point.get_slack())},
-                      {"launch_time", encodeNumber(point.get_launch_time())}, {"level", point.get_level()},
-                      {"predecessor", point.get_predecessor()}, {"clock_name", point.get_clock_name()},
+    result.push_back({{"node", node},
+                      {"arrival", encodeNumber(point.get_arrival())},
+                      {"required", encodeNumber(point.get_required())},
+                      {"slack", encodeNumber(point.get_slack())},
+                      {"launch_time", encodeNumber(point.get_launch_time())},
+                      {"level", point.get_level()},
+                      {"predecessor", point.get_predecessor()},
+                      {"clock_name", point.get_clock_name()},
                       {"predecessor_arc", arcReference(point.get_predecessor_arc_idx(), keys)},
                       {"is_clock_point", point.get_is_clock_point()},
                       {"data_slew", encodeAnalysisTrans(point.get_data_slew_map(), encode_numeric)},
-                      {"clock_effective", encodeClockState(point, false)}, {"clock_physical", encodeClockState(point, true)},
+                      {"clock_effective", encodeClockState(point, false)},
+                      {"clock_physical", encodeClockState(point, true)},
                       {"path_states", encodePathStates(point, keys)}});
   }
   return result;
@@ -392,20 +302,25 @@ Json encodeArcTiming(ista::Database& database, const ArcKeys& keys)
       for (auto& [analysis, inputs] : analyses) {
         for (auto& [input, outputs] : inputs) {
           for (auto& [output, delay] : outputs) {
-            timing_arc_delays.push_back({{"timing_arc", semantic_timing_arc}, {"analysis", analysisName(analysis)},
-                                         {"input_transition", transName(input)}, {"output_transition", transName(output)},
+            timing_arc_delays.push_back({{"timing_arc", semantic_timing_arc},
+                                         {"analysis", analysisName(analysis)},
+                                         {"input_transition", transName(input)},
+                                         {"output_transition", transName(output)},
                                          {"value", encodeNumber(delay)}});
           }
         }
       }
     }
     std::sort(timing_arc_delays.begin(), timing_arc_delays.end(), [](const Json& lhs, const Json& rhs) { return lhs.dump() < rhs.dump(); });
-    result.push_back({{"key", keys.keys[index]}, {"delay", encodeNumber(arc.get_delay())},
-                      {"delay_max", encodeNumber(arc.get_delay_max())}, {"delay_min", encodeNumber(arc.get_delay_min())},
+    result.push_back({{"key", keys.keys[index]},
+                      {"delay", encodeNumber(arc.get_delay())},
+                      {"delay_max", encodeNumber(arc.get_delay_max())},
+                      {"delay_min", encodeNumber(arc.get_delay_min())},
                       {"transition_delay", encodeAnalysisTrans(arc.get_trans_delay_map(), encode_numeric)},
                       {"input_output_delay", encodeAnalysisInputOutput(arc.get_input_output_delay_map(), encode_numeric)},
                       {"graph_delay", encodeAnalysisInputOutput(arc.get_graph_delay_map(), encode_numeric)},
-                      {"timing_arc_delay", timing_arc_delays}, {"transition_map", trans_map}});
+                      {"timing_arc_delay", timing_arc_delays},
+                      {"transition_map", trans_map}});
   }
   sortRecords(result, "key");
   return result;
@@ -413,11 +328,18 @@ Json encodeArcTiming(ista::Database& database, const ArcKeys& keys)
 
 Json encodePathPoint(ista::TimingPathPoint& point)
 {
-  return {{"pin", point.get_pin_name()}, {"instance", point.get_instance_name()}, {"cell", point.get_cell_name()},
-          {"net", point.get_net_name()}, {"arc_name", point.get_arc_name()}, {"arc_source", point.get_source_pin()},
-          {"arc_sink", point.get_sink_pin()}, {"arc_type", arcTypeName(point.get_arc_type())},
-          {"arc_delay", encodeNumber(point.get_arc_delay())}, {"arrival", encodeNumber(point.get_arrival())},
-          {"required", encodeNumber(point.get_required())}, {"slack", encodeNumber(point.get_slack())},
+  return {{"pin", point.get_pin_name()},
+          {"instance", point.get_instance_name()},
+          {"cell", point.get_cell_name()},
+          {"net", point.get_net_name()},
+          {"arc_name", point.get_arc_name()},
+          {"arc_source", point.get_source_pin()},
+          {"arc_sink", point.get_sink_pin()},
+          {"arc_type", arcTypeName(point.get_arc_type())},
+          {"arc_delay", encodeNumber(point.get_arc_delay())},
+          {"arrival", encodeNumber(point.get_arrival())},
+          {"required", encodeNumber(point.get_required())},
+          {"slack", encodeNumber(point.get_slack())},
           {"transition", transName(point.get_trans_type())}};
 }
 
@@ -433,19 +355,28 @@ Json encodePathGroups(ista::Database& database)
         for (ista::TimingPathPoint& point : path.get_point_list()) {
           points.push_back(encodePathPoint(point));
         }
-        paths.push_back({{"start_point", path.get_start_point()}, {"end_point", path.get_end_point()},
-                         {"analysis", analysisName(path.get_analysis_type())}, {"source_type", sourceName(path.get_source_type())},
-                         {"transition", transName(path.get_trans_type())}, {"check_type", checkName(path.get_check_type())},
-                         {"clock_name", path.get_clock_name()}, {"capture_clock_pin", path.get_capture_clock_pin()},
-                         {"last_common_pin", path.get_last_common_pin()}, {"level", path.get_level()},
-                         {"path_delay", encodeNumber(path.get_path_delay())}, {"required_time", encodeNumber(path.get_required_time())},
-                         {"slack", encodeNumber(path.get_slack())}, {"cell_delay", encodeNumber(path.get_cell_delay())},
-                         {"net_delay", encodeNumber(path.get_net_delay())}, {"launch_time", encodeNumber(path.get_launch_time())},
+        paths.push_back({{"start_point", path.get_start_point()},
+                         {"end_point", path.get_end_point()},
+                         {"analysis", analysisName(path.get_analysis_type())},
+                         {"source_type", sourceName(path.get_source_type())},
+                         {"transition", transName(path.get_trans_type())},
+                         {"check_type", checkName(path.get_check_type())},
+                         {"clock_name", path.get_clock_name()},
+                         {"capture_clock_pin", path.get_capture_clock_pin()},
+                         {"last_common_pin", path.get_last_common_pin()},
+                         {"level", path.get_level()},
+                         {"path_delay", encodeNumber(path.get_path_delay())},
+                         {"required_time", encodeNumber(path.get_required_time())},
+                         {"slack", encodeNumber(path.get_slack())},
+                         {"cell_delay", encodeNumber(path.get_cell_delay())},
+                         {"net_delay", encodeNumber(path.get_net_delay())},
+                         {"launch_time", encodeNumber(path.get_launch_time())},
                          {"capture_time", encodeNumber(path.get_capture_time())},
                          {"launch_clock_network_delay", encodeNumber(path.get_launch_clock_network_delay())},
                          {"capture_clock_network_delay", encodeNumber(path.get_capture_clock_network_delay())},
                          {"clock_reconvergence_pessimism", encodeNumber(path.get_clock_reconvergence_pessimism())},
-                         {"setup_time", encodeNumber(path.get_setup_time())}, {"check_time", encodeNumber(path.get_check_time())},
+                         {"setup_time", encodeNumber(path.get_setup_time())},
+                         {"check_time", encodeNumber(path.get_check_time())},
                          {"points", points}});
       }
       std::sort(paths.begin(), paths.end(), [](const Json& lhs, const Json& rhs) { return lhs.dump() < rhs.dump(); });
@@ -459,16 +390,20 @@ Json encodePathGroups(ista::Database& database)
 
 Json encodePowerValue(ista::PowerValue& value)
 {
-  return {{"internal", encodeNumber(value.get_internal_power())}, {"switching", encodeNumber(value.get_switching_power())},
-          {"leakage", encodeNumber(value.get_leakage_power())}, {"total", encodeNumber(value.get_total_power())}};
+  return {{"internal", encodeNumber(value.get_internal_power())},
+          {"switching", encodeNumber(value.get_switching_power())},
+          {"leakage", encodeNumber(value.get_leakage_power())},
+          {"total", encodeNumber(value.get_total_power())}};
 }
 
 Json encodePower(ista::Database& database)
 {
   Json instances = Json::array();
   for (auto& [instance_name, instance] : database.get_instance_power_map()) {
-    instances.push_back({{"instance", instance_name}, {"group", powerGroupName(instance.get_power_group_type())},
-                         {"voltage", encodeNumber(instance.get_voltage())}, {"value", encodePowerValue(instance.get_power_value())}});
+    instances.push_back({{"instance", instance_name},
+                         {"group", powerGroupName(instance.get_power_group_type())},
+                         {"voltage", encodeNumber(instance.get_voltage())},
+                         {"value", encodePowerValue(instance.get_power_value())}});
   }
   Json groups = Json::object();
   for (auto& [group, value] : database.get_power_summary().get_group_power_map()) {
@@ -481,13 +416,17 @@ Json encodeConstraints(ista::Database& database)
 {
   Json clocks = Json::array();
   for (auto& [name, clock] : database.get_timing_constraint().get_clock_map()) {
-    clocks.push_back({{"name", name}, {"sources", sorted(clock.get_source_list())}, {"period", encodeNumber(clock.get_period())},
-                      {"rise_edge", encodeNumber(clock.get_rise_edge())}, {"fall_edge", encodeNumber(clock.get_fall_edge())},
+    clocks.push_back({{"name", name},
+                      {"sources", sorted(clock.get_source_list())},
+                      {"period", encodeNumber(clock.get_period())},
+                      {"rise_edge", encodeNumber(clock.get_rise_edge())},
+                      {"fall_edge", encodeNumber(clock.get_fall_edge())},
                       {"is_propagated", clock.get_is_propagated()}});
   }
   Json ports = Json::array();
   for (auto& [name, port] : database.get_timing_constraint().get_port_constraint_map()) {
-    ports.push_back({{"port", name}, {"clock", port.get_clock_name()},
+    ports.push_back({{"port", name},
+                     {"clock", port.get_clock_name()},
                      {"input_delay_max", port.get_has_input_delay_max() ? encodeNumber(port.get_input_delay_max()) : sentinel("missing")},
                      {"input_delay_min", port.get_has_input_delay_min() ? encodeNumber(port.get_input_delay_min()) : sentinel("missing")},
                      {"output_delay_max", port.get_has_output_delay_max() ? encodeNumber(port.get_output_delay_max()) : sentinel("missing")},
@@ -509,43 +448,60 @@ Json buildSnapshot(const Options& options)
   ista::TASummary& summary = database.get_summary().ta_summary;
   ista::Config& config = STADM.getConfig();
   ista::TimingLibrary& library = database.get_timing_library();
-  Json snapshot = {
-      {"schema_version", 1},
-      {"probe", "ista-stage0-full-baseline-v1"},
-      {"case", options.case_name},
-      {"fixture", {{"case_name", options.case_name}, {"top", options.top},
-                   {"inputs", {{"tech_lef", options.tech_lef.filename().string()}, {"cell_lef", options.cell_lef.filename().string()},
-                               {"liberty", options.liberty.filename().string()}, {"verilog", options.verilog.filename().string()},
-                               {"sdc", options.sdc.filename().string()}}}}},
-      {"config", {{"thread_number", config.thread_number}, {"output_timing_reports", config.output_timing_reports},
-                  {"output_timing_features", config.output_timing_features}, {"timing_path_limit", config.timing_path_limit},
-                  {"max_paths", config.path_report_number}, {"nworst", config.endpoint_path_report_number},
-                  {"timing_corner", config.timing_corner}, {"timing_report_delay_type", config.timing_report_delay_type},
-                  {"timing_report_start_end_type", config.timing_report_start_end_type},
-                  {"is_path_report_number_specified", config.is_path_report_number_specified},
-                  {"slack_lesser_than", config.has_timing_report_slack_lesser_than
-                                             ? encodeNumber(config.timing_report_slack_lesser_than) : sentinel("missing")},
-                  {"slack_greater_than", config.has_timing_report_slack_greater_than
-                                              ? encodeNumber(config.timing_report_slack_greater_than) : sentinel("missing")}}},
-      {"semantics", {{"canonical_time_unit", "ns"}, {"node_key", "full_pin_name"},
-                     {"arc_key", "[source,sink,type,owner,library_source,library_sink,clock,disabled,loop_disabled]+parallel_ordinal"},
-                     {"missing", sentinel("missing")}, {"positive_infinity", sentinel("pos_inf")},
-                     {"negative_infinity", sentinel("neg_inf")}, {"nan", "invalid"}}},
-      {"library_units", {{"source_time", timeUnitName(library.get_time_unit())},
-                         {"source_capacitance", capUnitName(library.get_cap_unit())},
-                         {"source_resistance", resistanceUnitName(library.get_resistance_unit())}}},
-      {"constraints", encodeConstraints(database)},
-      {"topology", encodeTopology(database, arc_keys)},
-      {"timing", {{"points", encodeTimingPoints(database, arc_keys)}, {"arcs", encodeArcTiming(database, arc_keys)},
-                  {"path_groups", encodePathGroups(database)},
-                  {"summary", {{"timing_path_count", summary.timing_path_num}, {"checked_endpoint_count", summary.checked_end_point_num},
-                               {"unconstrained_endpoint_count", summary.unconstrained_end_point_num},
-                               {"violating_endpoint_count", summary.violating_end_point_num},
-                               {"worst_slack", encodeNumber(summary.worst_slack)},
-                               {"total_negative_slack", encodeNumber(summary.total_negative_slack)},
-                               {"worst_endpoint", summary.worst_end_point}}}}},
-      {"power", encodePower(database)},
-      {"complete", true}};
+  Json snapshot
+      = {{"schema_version", 1},
+         {"probe", "ista-stage0-full-baseline-v1"},
+         {"case", options.case_name},
+         {"fixture",
+          {{"case_name", options.case_name},
+           {"top", options.top},
+           {"inputs",
+            {{"tech_lef", options.tech_lef.filename().string()},
+             {"cell_lef", options.cell_lef.filename().string()},
+             {"liberty", options.liberty.filename().string()},
+             {"verilog", options.verilog.filename().string()},
+             {"sdc", options.sdc.filename().string()}}}}},
+         {"config",
+          {{"thread_number", config.thread_number},
+           {"output_timing_reports", config.output_timing_reports},
+           {"output_timing_features", config.output_timing_features},
+           {"timing_path_limit", config.timing_path_limit},
+           {"max_paths", config.path_report_number},
+           {"nworst", config.endpoint_path_report_number},
+           {"timing_corner", config.timing_corner},
+           {"timing_report_delay_type", config.timing_report_delay_type},
+           {"timing_report_start_end_type", config.timing_report_start_end_type},
+           {"is_path_report_number_specified", config.is_path_report_number_specified},
+           {"slack_lesser_than", config.has_timing_report_slack_lesser_than ? encodeNumber(config.timing_report_slack_lesser_than) : sentinel("missing")},
+           {"slack_greater_than", config.has_timing_report_slack_greater_than ? encodeNumber(config.timing_report_slack_greater_than) : sentinel("missing")}}},
+         {"semantics",
+          {{"canonical_time_unit", "ns"},
+           {"node_key", "full_pin_name"},
+           {"arc_key", "[source,sink,type,owner,library_source,library_sink,clock,disabled,loop_disabled]+parallel_ordinal"},
+           {"missing", sentinel("missing")},
+           {"positive_infinity", sentinel("pos_inf")},
+           {"negative_infinity", sentinel("neg_inf")},
+           {"nan", "invalid"}}},
+         {"library_units",
+          {{"source_time", timeUnitName(library.get_time_unit())},
+           {"source_capacitance", capUnitName(library.get_cap_unit())},
+           {"source_resistance", resistanceUnitName(library.get_resistance_unit())}}},
+         {"constraints", encodeConstraints(database)},
+         {"topology", encodeTopology(database, arc_keys)},
+         {"timing",
+          {{"points", encodeTimingPoints(database, arc_keys)},
+           {"arcs", encodeArcTiming(database, arc_keys)},
+           {"path_groups", encodePathGroups(database)},
+           {"summary",
+            {{"timing_path_count", summary.timing_path_num},
+             {"checked_endpoint_count", summary.checked_end_point_num},
+             {"unconstrained_endpoint_count", summary.unconstrained_end_point_num},
+             {"violating_endpoint_count", summary.violating_end_point_num},
+             {"worst_slack", encodeNumber(summary.worst_slack)},
+             {"total_negative_slack", encodeNumber(summary.total_negative_slack)},
+             {"worst_endpoint", summary.worst_end_point}}}}},
+         {"power", encodePower(database)},
+         {"complete", true}};
   return snapshot;
 }
 
@@ -560,8 +516,8 @@ Options parseOptions(int argc, char* argv[])
       throw std::runtime_error("duplicate option: " + std::string(argv[index]));
     }
   }
-  const std::vector<std::string> required = {"--tech-lef", "--cell-lef", "--liberty", "--verilog", "--sdc",
-                                              "--top", "--case-name", "--run-dir", "--snapshot", "--expected-clock"};
+  const std::vector<std::string> required
+      = {"--tech-lef", "--cell-lef", "--liberty", "--verilog", "--sdc", "--top", "--case-name", "--run-dir", "--snapshot", "--expected-clock"};
   for (const std::string& name : required) {
     if (!values.contains(name) || values.at(name).empty()) {
       throw std::runtime_error("missing required option: " + name);
@@ -570,8 +526,8 @@ Options parseOptions(int argc, char* argv[])
   if (values.size() != required.size()) {
     throw std::runtime_error("unknown command-line option");
   }
-  return {values.at("--tech-lef"), values.at("--cell-lef"), values.at("--liberty"), values.at("--verilog"), values.at("--sdc"),
-          values.at("--top"), values.at("--case-name"), values.at("--run-dir"), values.at("--snapshot"), values.at("--expected-clock")};
+  return {values.at("--tech-lef"), values.at("--cell-lef"),  values.at("--liberty"), values.at("--verilog"),  values.at("--sdc"),
+          values.at("--top"),      values.at("--case-name"), values.at("--run-dir"), values.at("--snapshot"), values.at("--expected-clock")};
 }
 
 void validateInputs(const Options& options)
@@ -594,9 +550,6 @@ void loadDesign(const Options& options)
   }
   if (!dmInst->readLef(std::vector<std::string>{options.cell_lef.string()})) {
     throw std::runtime_error("failed to read cell LEF");
-  }
-  if (!dmInst->readLib(std::vector<std::string>{options.liberty.string()})) {
-    throw std::runtime_error("failed to read Liberty");
   }
   dmInst->get_config().set_sdc_path(options.sdc.string());
   if (!dmInst->readVerilog(options.verilog.string(), options.top)) {
@@ -645,7 +598,6 @@ void writeAtomically(const fs::path& path, const Json& value)
 
 int main(int argc, char* argv[])
 {
-  bool sta_initialized = false;
   try {
     Options options = parseOptions(argc, argv);
     validateInputs(options);
@@ -658,20 +610,54 @@ int main(int argc, char* argv[])
                                               {"-max_paths", int32_t{20}},
                                               {"-nworst", int32_t{20}},
                                               {"-timing_corner", std::string{}}};
-    STAI.initSTA(config);
-    sta_initialized = true;
-    STAI.runSTA();
-    requireOracleState(options);
-    writeAtomically(options.snapshot, buildSnapshot(options));
-    STAI.destroySTA();
-    sta_initialized = false;
+    Json first_snapshot;
+    for (int run = 0; run < 2; ++run) {
+      if (!dmInst->readLib(std::vector<std::string>{options.liberty.string()})) {
+        throw std::runtime_error("failed to read Liberty");
+      }
+      const ista::StaUpdateStrategy strategy = run == 0 ? ista::StaUpdateStrategy::kFull : ista::StaUpdateStrategy::kIncremental;
+      ista::IncrementalStaSession session({ista::StaBackend::kCpu, strategy, ista::StaFallbackPolicy::kError});
+      ista::throwOnStaFailure(session.initialize(config), session.request());
+      if (run == 0) {
+        ista::IncrementalStaSession overlap({ista::StaBackend::kCpu, ista::StaUpdateStrategy::kFull, ista::StaFallbackPolicy::kError});
+        if (overlap.initialize(config).code != ista::StaSessionStatusCode::kOwnerConflict) {
+          throw std::runtime_error("active session did not reject a second session");
+        }
+        for (void (*blocked)() : std::array<void (*)(), 2>{+[] { STAI.destroySTA(); }, +[] { ista::STAInterface::destroyInst(); }}) {
+          try {
+            blocked();
+          } catch (const std::runtime_error&) {
+            continue;
+          }
+          throw std::runtime_error("active session did not reject a legacy/global destroy");
+        }
+      }
+      ista::StaExecutionRecord record = ista::requireStaExecutionRecord(session.runFullBaseline(), session.request());
+      const bool expected_record = run == 0 ? record.execution_kind == ista::StaExecutionKind::kFullUpdate && !record.fallback_reason
+                                            : record.execution_kind == ista::StaExecutionKind::kBaselineOnly
+                                                  && record.fallback_reason == ista::StaFallbackReason::kNotApplicableNoMutation;
+      if (!expected_record || record.fallback_to_full) {
+        throw std::runtime_error("full/baseline-only execution record mismatch");
+      }
+      requireOracleState(options);
+      Json snapshot = buildSnapshot(options);
+      if (run == 0) {
+        first_snapshot = std::move(snapshot);
+      } else {
+        if (snapshot != first_snapshot)
+          throw std::runtime_error("same-process STA sessions produced different snapshots");
+        writeAtomically(options.snapshot, snapshot);
+      }
+      ista::throwOnStaFailure(session.close(), session.request());
+    }
     ista::STAInterface::destroyInst();
     return 0;
   } catch (const std::exception& error) {
-    if (sta_initialized) {
-      STAI.destroySTA();
+    try {
+      ista::STAInterface::destroyInst();
+    } catch (const std::exception& cleanup_error) {
+      std::cerr << "StaFullBaselineProbe cleanup: " << cleanup_error.what() << '\n';
     }
-    ista::STAInterface::destroyInst();
     std::cerr << "StaFullBaselineProbe: " << error.what() << '\n';
     return 1;
   }

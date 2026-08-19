@@ -48,6 +48,10 @@ runs:
         uv build --wheel --no-build-isolation --verbose
         cmake --build build --parallel 2 --target \
           ista_arc_timing_arc_delay_test \
+          ista_execution_contract_test \
+          ista_lifecycle_guard_test \
+          ista_incremental_session_test \
+          ista_production_lifecycle_test \
           ista_graph_builder_state_test \
           ista_full_baseline_probe
         ctest --test-dir build --no-tests=error --output-on-failure \

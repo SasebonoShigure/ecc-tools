@@ -17,37 +17,53 @@
 #include "STAInterface.hpp"
 
 #include <cmath>
+#include <exception>
 #include <set>
+#include <stdexcept>
 
-#ifdef __GLIBC__
-#include <malloc.h>
-#endif
-
-#include "ClockPropagator.hpp"
 #include "DataManager.hpp"
-#include "DelayCalculator.hpp"
-#include "GraphBuilder.hpp"
 #include "Lib.hh"
 #include "Logger.hpp"
 #include "Monitor.hpp"
-#include "PowerAnalyzer.hpp"
-#include "PowerPropagator.hpp"
-#include "PowerReporter.hpp"
-#include "SDFWriter.hpp"
 #include "STAHeader.hpp"
+#include "StaProductionLifecycle.hpp"
 #include "TCModel.hpp"
-#include "TimingAnalyzer.hpp"
-#include "TimingCharacterizer.hpp"
-#include "TimingPropagator.hpp"
-#include "TimingReporter.hpp"
 #include "Utility.hpp"
 #include "VcdParser.hh"
 #include "idm.h"
 #include "spef/SpefParser.hh"
 
 namespace ista {
+namespace {
+
+std::string currentExceptionMessage()
+{
+  try {
+    throw;
+  } catch (const std::exception& error) {
+    return error.what();
+  } catch (...) {
+    return "unknown native exception";
+  }
+}
+
+template <typename Callable>
+StaOperationResult invokeLifecycleOperation(const char* operation, Callable&& callable)
+{
+  try {
+    return callable();
+  } catch (...) {
+    return StaOperationResult::cleanupFailure(std::string(operation) + " threw before cleanup could be confirmed: " + currentExceptionMessage());
+  }
+}
+
+}  // namespace
 
 // public
+
+STAInterface::STAInterface() : _lifecycle_operations(&defaultStaProductionLifecycleOperations())
+{
+}
 
 STAInterface& STAInterface::getInst()
 {
@@ -60,6 +76,12 @@ STAInterface& STAInterface::getInst()
 void STAInterface::destroyInst()
 {
   if (_sta_interface_instance != nullptr) {
+    {
+      std::scoped_lock lock(_sta_interface_instance->_lifecycle_mutex);
+      if (!_sta_interface_instance->_lifecycle.isNone()) {
+        throw std::runtime_error("cannot destroy STAInterface while lifecycle is " + _sta_interface_instance->_lifecycle.describe());
+      }
+    }
     delete _sta_interface_instance;
     _sta_interface_instance = nullptr;
   }
@@ -71,145 +93,41 @@ void STAInterface::destroyInst()
 
 void STAInterface::initSTA(std::map<std::string, std::any> config_map)
 {
-  Logger::initInst();
-  // clang-format off
-  STALOG.info(Loc::current(), ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-  STALOG.info(Loc::current(), "_____ _______________________       _______________________ ________ ________ ");
-  STALOG.info(Loc::current(), "___(_)__  ___/___  __/___    |      __  ___/___  __/___    |___  __ \\___  __/");
-  STALOG.info(Loc::current(), "__  / _____ \\ __  /   __  /| |      _____ \\ __  /   __  /| |__  /_/ /__  /  ");
-  STALOG.info(Loc::current(), "_  /  ____/ / _  /    _  ___ |      ____/ / _  /    _  ___ |_  _, _/ _  /     ");
-  STALOG.info(Loc::current(), "/_/   /____/  /_/     /_/  |_|      /____/  /_/     /_/  |_|/_/ |_|  /_/      ");
-  STALOG.info(Loc::current(), ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-  // clang-format on
-  STALOG.printLogFilePath();
-  //////////////////////////////////////////////////////
-  //////////////////////////////////////////////////////
-  //////////////////////////////////////////////////////
-  Monitor monitor;
-  STALOG.info(Loc::current(), "Starting...");
-
-  DataManager::initInst();
-  STADM.input(config_map);
-  DelayCalculator::initInst();
-  _is_initialized = true;
-  _is_timing_updated = false;
-
-  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
+  StaStatus status = initializeOwned(StaOwner::legacy(), config_map);
+  if (!status.ok())
+    throw std::runtime_error(status.message);
 }
 
 void STAInterface::runSTA()
 {
-  Monitor monitor;
-  STALOG.info(Loc::current(), "Starting...");
-
-  STADC.init();
-
-  GraphBuilder::initInst();
-  STAGB.build();
-  GraphBuilder::destroyInst();
-
-  ClockPropagator::initInst();
-  STACP.propagate();
-  ClockPropagator::destroyInst();
-
-  TimingPropagator::initInst();
-  STATP.propagate();
-  TimingPropagator::destroyInst();
-
-  PowerPropagator::initInst();
-  STAPP.propagate();
-  PowerPropagator::destroyInst();
-
-  TimingAnalyzer::initInst();
-  STATA.analyze();
-  TimingAnalyzer::destroyInst();
-
-  PowerAnalyzer::initInst();
-  STAPA.analyze();
-  PowerAnalyzer::destroyInst();
-
-  TimingReporter::initInst();
-  STATR.report();
-  TimingReporter::destroyInst();
-
-  PowerReporter::initInst();
-  STAPR.report();
-  PowerReporter::destroyInst();
-
-  SDFWriter::initInst();
-  STASW.write();
-  SDFWriter::destroyInst();
-
-  STADC.destroy();
-
-  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
+  StaStatus status = runOwned(StaOwner::legacy());
+  if (!status.ok())
+    throw std::runtime_error(status.message);
 }
 
 void STAInterface::extractLib()
 {
-  Monitor monitor;
-  STALOG.info(Loc::current(), "Starting...");
-
-  STADC.init();
-
-  GraphBuilder::initInst();
-  STAGB.build();
-  GraphBuilder::destroyInst();
-
-  ClockPropagator::initInst();
-  STACP.propagate();
-  ClockPropagator::destroyInst();
-
-  TimingPropagator::initInst();
-  STATP.propagate();
-  TimingPropagator::destroyInst();
-
-  TimingAnalyzer::initInst();
-  STATA.analyze();
-  TimingAnalyzer::destroyInst();
-
-  TimingCharacterizer::initInst();
-  STATC.characterize();
-  TimingCharacterizer::destroyInst();
-
-  STADC.destroy();
-
-  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
+  requireLegacyOwner();
+  StaOperationResult result = invokeLifecycleOperation("STA extract", [this] { return _lifecycle_operations->extractLib(); });
+  if (!result.succeeded) {
+    if (result.cleanup_failed) {
+      std::scoped_lock lock(_lifecycle_mutex);
+      _lifecycle.quarantineCurrent();
+    }
+    throw std::runtime_error(result.message);
+  }
 }
 
 void STAInterface::destroySTA()
 {
-  Monitor monitor;
-  STALOG.info(Loc::current(), "Starting...");
-
-  STADC.destroy();
-  DelayCalculator::destroyInst();
-  STADM.output();
-  DataManager::destroyInst();
-  _is_initialized = false;
-  _is_timing_updated = false;
-
-  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
-
-  STALOG.printLogFilePath();
-  // clang-format off
-  STALOG.info(Loc::current(), ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-  STALOG.info(Loc::current(), "_____ _______________________       _______________________   ________________________  __  ");
-  STALOG.info(Loc::current(), "___(_)__  ___/___  __/___    |      ___  ____/____  _/___  | / /____  _/__  ___/___  / / /  ");
-  STALOG.info(Loc::current(), "__  / _____ \\ __  /   __  /| |      __  /_     __  /  __   |/ /  __  /  _____ \\ __  /_/ / ");
-  STALOG.info(Loc::current(), "_  /  ____/ / _  /    _  ___ |      _  __/    __/ /   _  /|  /  __/ /   ____/ / _  __  /    ");
-  STALOG.info(Loc::current(), "/_/   /____/  /_/     /_/  |_|      /_/       /___/   /_/ |_/   /___/   /____/  /_/ /_/     ");
-  STALOG.info(Loc::current(), ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-  // clang-format on
-  Logger::destroyInst();
-
-#ifdef __GLIBC__
-  // Every STA object (liberty trees, wrapped netlist, timing graph, report
-  // buffers, ...) has been deleted above, but glibc keeps the freed pages
-  // mapped in its arenas, so repeated in-process STA sessions keep inflating
-  // the process RSS. Hand every freeable heap page back to the OS here.
-  malloc_trim(0);
-#endif
+  {
+    std::scoped_lock lock(_lifecycle_mutex);
+    if (_lifecycle.isNone())
+      return;
+  }
+  StaStatus status = closeOwned(StaOwner::legacy());
+  if (!status.ok())
+    throw std::runtime_error(status.message);
 }
 
 bool STAInterface::updateTiming(std::string& error_message)
@@ -222,20 +140,15 @@ bool STAInterface::updateTiming(std::string& error_message)
     return false;
   }
 
-  STADC.init();
-
-  GraphBuilder::initInst();
-  STAGB.build();
-  GraphBuilder::destroyInst();
-
-  ClockPropagator::initInst();
-  STACP.propagate();
-  ClockPropagator::destroyInst();
-
-  TimingPropagator::initInst();
-  STATP.propagate();
-  TimingPropagator::destroyInst();
-
+  StaOperationResult result = invokeLifecycleOperation("STA timing update", [this] { return _lifecycle_operations->updateTiming(); });
+  if (!result.succeeded) {
+    error_message = result.message;
+    if (result.cleanup_failed) {
+      std::scoped_lock lock(_lifecycle_mutex);
+      _lifecycle.quarantineCurrent();
+    }
+    return false;
+  }
   _is_timing_updated = true;
   return true;
 }
@@ -254,9 +167,15 @@ bool STAInterface::writeSDF(const std::string& file_path, std::string& error_mes
     return false;
   }
 
-  SDFWriter::initInst();
-  STASW.write(file_path);
-  SDFWriter::destroyInst();
+  StaOperationResult result = invokeLifecycleOperation("STA SDF write", [this, &file_path] { return _lifecycle_operations->writeSdf(file_path); });
+  if (!result.succeeded) {
+    error_message = result.message;
+    if (result.cleanup_failed) {
+      std::scoped_lock lock(_lifecycle_mutex);
+      _lifecycle.quarantineCurrent();
+    }
+    return false;
+  }
   return true;
 }
 
@@ -270,14 +189,15 @@ bool STAInterface::reportTiming(std::string& error_message)
     return false;
   }
 
-  TimingAnalyzer::initInst();
-  STATA.analyze();
-  TimingAnalyzer::destroyInst();
-
-  TimingReporter::initInst();
-  STATR.report();
-  TimingReporter::destroyInst();
-
+  StaOperationResult result = invokeLifecycleOperation("STA timing report", [this] { return _lifecycle_operations->reportTiming(); });
+  if (!result.succeeded) {
+    error_message = result.message;
+    if (result.cleanup_failed) {
+      std::scoped_lock lock(_lifecycle_mutex);
+      _lifecycle.quarantineCurrent();
+    }
+    return false;
+  }
   return true;
 }
 
@@ -423,11 +343,154 @@ bool STAInterface::getClocks(const std::vector<std::string>& clock_name_list, st
 
 bool STAInterface::isSTAInitialized(std::string& error_message) const
 {
-  if (_is_initialized) {
+  if (!isLegacyOwner(error_message))
+    return false;
+  if (_is_initialized)
     return true;
-  }
   error_message = "init_sta must be called before STA commands";
   return false;
+}
+
+StaStatus STAInterface::initializeSession(uint64_t token, std::map<std::string, std::any>& config_map)
+{
+  return initializeOwned(StaOwner::session(token), config_map);
+}
+
+StaStatus STAInterface::runSessionBaseline(uint64_t token)
+{
+  return runOwned(StaOwner::session(token));
+}
+
+StaStatus STAInterface::closeSession(uint64_t token)
+{
+  return closeOwned(StaOwner::session(token));
+}
+
+StaStatus STAInterface::initializeOwned(StaOwner owner, std::map<std::string, std::any>& config_map)
+{
+  {
+    std::scoped_lock lock(_lifecycle_mutex);
+    StaLeaseResult lease = owner.kind == StaOwnerKind::kLegacy ? _lifecycle.acquireLegacy() : _lifecycle.acquireSession(owner.token);
+    if (!lease.succeeded) {
+      return StaStatus::failure(lease.quarantined ? StaSessionStatusCode::kQuarantined : StaSessionStatusCode::kOwnerConflict, StaSessionState::kCreated,
+                                lease.message);
+    }
+  }
+  StaOperationResult result;
+  try {
+    result = _lifecycle_operations->initialize(config_map);
+  } catch (...) {
+    const std::string primary_error = "STA initialization threw: " + currentExceptionMessage();
+    StaOperationResult rollback = invokeLifecycleOperation("STA initialization rollback", [this] { return _lifecycle_operations->close(); });
+    _is_initialized = false;
+    _is_timing_updated = false;
+    {
+      std::scoped_lock lock(_lifecycle_mutex);
+      if (rollback.succeeded)
+        _lifecycle.releaseAfterRollback();
+      else
+        _lifecycle.quarantineAfterRollback();
+    }
+    if (!rollback.succeeded) {
+      return StaStatus::failure(StaSessionStatusCode::kCleanupFailed, StaSessionState::kClosed,
+                                primary_error + "; rollback cleanup failed: " + rollback.message);
+    }
+    return StaStatus::failure(StaSessionStatusCode::kInitFailed, StaSessionState::kClosed, primary_error);
+  }
+  if (result.succeeded) {
+    _is_initialized = true;
+    _is_timing_updated = false;
+    return StaStatus::success(StaSessionState::kInitialized);
+  }
+  {
+    std::scoped_lock lock(_lifecycle_mutex);
+    if (result.cleanup_failed)
+      _lifecycle.quarantineAfterRollback();
+    else
+      _lifecycle.releaseAfterRollback();
+  }
+  return StaStatus::failure(result.cleanup_failed ? StaSessionStatusCode::kCleanupFailed : StaSessionStatusCode::kInitFailed, StaSessionState::kClosed,
+                            result.message);
+}
+
+StaStatus STAInterface::runOwned(StaOwner owner)
+{
+  {
+    std::scoped_lock lock(_lifecycle_mutex);
+    StaLeaseResult lease = owner.kind == StaOwnerKind::kLegacy ? _lifecycle.requireLegacyUse() : _lifecycle.requireSessionUse(owner.token);
+    if (!lease.succeeded) {
+      return StaStatus::failure(lease.quarantined ? StaSessionStatusCode::kQuarantined : StaSessionStatusCode::kOwnerConflict, StaSessionState::kInitialized,
+                                lease.message);
+    }
+  }
+  if (!_is_initialized) {
+    return StaStatus::failure(StaSessionStatusCode::kInvalidState, StaSessionState::kCreated, "init_sta must be called before STA commands");
+  }
+  StaOperationResult result = invokeLifecycleOperation("STA full baseline", [this] { return _lifecycle_operations->runFullBaseline(); });
+  if (result.succeeded)
+    return StaStatus::success(StaSessionState::kBaselineExecuted);
+  if (result.cleanup_failed) {
+    std::scoped_lock lock(_lifecycle_mutex);
+    _lifecycle.quarantineCurrent();
+  }
+  return StaStatus::failure(result.cleanup_failed ? StaSessionStatusCode::kCleanupFailed : StaSessionStatusCode::kRunFailed, StaSessionState::kPoisoned,
+                            result.message);
+}
+
+StaStatus STAInterface::closeOwned(StaOwner owner)
+{
+  {
+    std::scoped_lock lock(_lifecycle_mutex);
+    StaLeaseResult lease = owner.kind == StaOwnerKind::kLegacy ? _lifecycle.requireLegacyClose() : _lifecycle.requireSessionClose(owner.token);
+    if (!lease.succeeded) {
+      return StaStatus::failure(lease.quarantined ? StaSessionStatusCode::kQuarantined : StaSessionStatusCode::kOwnerConflict, StaSessionState::kClosed,
+                                lease.message);
+    }
+  }
+  StaOperationResult result = invokeLifecycleOperation("STA persistent close", [this] { return _lifecycle_operations->close(); });
+  _is_initialized = false;
+  _is_timing_updated = false;
+  {
+    std::scoped_lock lock(_lifecycle_mutex);
+    _lifecycle.completeClose(result.succeeded);
+  }
+  if (result.succeeded)
+    return StaStatus::success(StaSessionState::kClosed);
+  return StaStatus::failure(StaSessionStatusCode::kCleanupFailed, StaSessionState::kClosed, result.message);
+}
+
+bool STAInterface::isLegacyOwner(std::string& error_message) const
+{
+  std::scoped_lock lock(_lifecycle_mutex);
+  StaLeaseResult lease = _lifecycle.requireLegacyUse();
+  if (lease.succeeded)
+    return true;
+  error_message = lease.message;
+  return false;
+}
+
+void STAInterface::requireLegacyOwner() const
+{
+  std::string error_message;
+  if (!isLegacyOwner(error_message))
+    throw std::runtime_error(error_message);
+}
+
+std::string STAInterface::lifecycleStateForTesting() const
+{
+  std::scoped_lock lock(_lifecycle_mutex);
+  return _lifecycle.describe();
+}
+
+void STAInterface::setLifecycleOperationsForTesting(StaProductionLifecycleOperations* operations)
+{
+  if (operations == nullptr)
+    throw std::invalid_argument("STA lifecycle test operations must not be null");
+  std::scoped_lock lock(_lifecycle_mutex);
+  if (!_lifecycle.isNone()) {
+    throw std::logic_error("cannot replace STA lifecycle operations while lifecycle is " + _lifecycle.describe());
+  }
+  _lifecycle_operations = operations;
 }
 
 #endif
@@ -723,15 +786,32 @@ void STAInterface::wrapTimingLibrary()
   bool old_silent_output = idb::Lib::isSilentOutput();
   idb::Lib::setSilentOutput(true);
   std::vector<std::unique_ptr<idb::LibLibrary>> lib_list;
-  for (idb::LibertyReader& liberty_reader : dmInst->get_lib_readers()) {
-    liberty_reader.linkLib();
-    idb::LibBuilder* lib_builder = liberty_reader.get_library_builder();
-    lib_list.push_back(lib_builder->takeLib());
-    delete lib_builder;
-    liberty_reader.set_library_builder(nullptr);
+  try {
+    for (idb::LibertyReader& liberty_reader : dmInst->get_lib_readers()) {
+      liberty_reader.set_library_builder(nullptr);
+      try {
+        if (!liberty_reader.linkLib())
+          throw std::runtime_error("failed to link Liberty reader");
+      } catch (...) {
+        delete liberty_reader.get_library_builder();
+        liberty_reader.set_library_builder(nullptr);
+        throw;
+      }
+      std::unique_ptr<idb::LibBuilder> lib_builder(liberty_reader.get_library_builder());
+      liberty_reader.set_library_builder(nullptr);
+      if (!lib_builder)
+        throw std::runtime_error("linked Liberty reader has no library builder");
+      std::unique_ptr<idb::LibLibrary> library = lib_builder->takeLib();
+      if (!library)
+        throw std::runtime_error("linked Liberty reader has no library");
+      lib_list.push_back(std::move(library));
+    }
+    wrapTimingCellMap(lib_list);
+    wrapTimingLibraryInfo(lib_list);
+  } catch (...) {
+    idb::Lib::setSilentOutput(old_silent_output);
+    throw;
   }
-  wrapTimingCellMap(lib_list);
-  wrapTimingLibraryInfo(lib_list);
   idb::Lib::setSilentOutput(old_silent_output);
   STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
 }

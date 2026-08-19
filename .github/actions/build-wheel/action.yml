@@ -43,9 +43,17 @@ runs:
       env:
         SCCACHE_GHA_ENABLED: "true"
       run: |
-        export CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
+        export CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMD_BUILD=ON -DBUILD_TESTING=ON"
         uv sync --no-install-project
         uv build --wheel --no-build-isolation --verbose
+        cmake --build build --parallel 2 --target \
+          ista_arc_timing_arc_delay_test \
+          ista_graph_builder_state_test \
+          ista_full_baseline_probe
+        ctest --test-dir build --no-tests=error --output-on-failure \
+          -L '^ista_unit$'
+        ctest --test-dir build --no-tests=error --output-on-failure \
+          -L '^ista_smoke$'
         mkdir -p dist/wheel/repaired
         uv run --no-sync -m auditwheel show dist/*.whl
         uv run --no-sync -m auditwheel repair dist/*.whl -w dist/wheel/repaired

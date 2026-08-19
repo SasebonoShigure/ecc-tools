@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "description": "Hermetic stage-0 CPU full-STA correctness oracle for future incremental/GPU comparisons.",
+  "source_baseline": {
+    "parent_branch": "IncreGPUSTA",
+    "parent_commit": "f783db8d8c4d22559993d27ddeac314fa35a58ca",
+    "ecc_tools_branch": "IncreGPUSTA",
+    "ecc_tools_base_commit": "31ebf6cae5ba8b4a472b97947acf54e1deb82daa"
+  },
+  "time_unit": "ns",
+  "semantics": {
+    "analysis_types": [
+      "max",
+      "min"
+    ],
+    "transitions": [
+      "rise",
+      "fall"
+    ],
+    "path_sources": [
+      "input",
+      "register"
+    ],
+    "node_key": "full_pin_name",
+    "arc_key": "source,sink,type,owner,lib_source,lib_sink,flags,parallel_ordinal",
+    "missing_value": "typed_missing_sentinel",
+    "infinite_value": "typed_pos_inf_or_neg_inf_sentinel",
+    "root_level": 1,
+    "propagation_scope": "full_graph"
+  },
+  "tolerances": {
+    "absolute": 1e-09,
+    "relative": 1e-09
+  },
+  "fresh_process_repeats": {
+    "ctest": 3,
+    "local": 5
+  },
+  "golden_directory": "golden",
+  "cases": [
+    {
+      "name": "chain",
+      "top": "stage0_chain",
+      "verilog": "fixtures/chain.v",
+      "sdc": "fixtures/chain.sdc",
+      "expected_clock": "vclk",
+      "expected_topology_sha256": "94c0754e0583a40f7ee61e7d44d306f62845d5899bc7109e757ed4549a8b5aa0",
+      "required_artifacts": [
+        "timing_reporter/qor_summary.json",
+        "timing_reporter/timing_paths.json",
+        "power_reporter/power.rpt",
+        "sdf_writer/{top}.sdf"
+      ],
+      "input_sha256": {
+        "fixtures/stage0_tech.lef": "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc",
+        "fixtures/stage0_cells.lef": "9af8e5d7547cb8beb15386e0e2867a0778721df2f7b33917949dc11b651524d8",
+        "fixtures/stage0.lib": "71484897dc56c62760be3dde8a57c3722634cbe4771385e8c2c1c5a6ddcb9577",
+        "fixtures/chain.v": "1cb34cb28ce1fb00fd21c4590fe686ea434271d10259026bf246a133e62943de",
+        "fixtures/chain.sdc": "96b0c4d42f516c88ae8c8be05a8fb583f7f04afa5151e9d5d0980d06a6dff202"
+      }
+    },
+    {
+      "name": "diamond",
+      "top": "stage0_diamond",
+      "verilog": "fixtures/diamond.v",
+      "sdc": "fixtures/diamond.sdc",
+      "expected_clock": "vclk",
+      "expected_topology_sha256": "da8b4d75814db8570c6da233759238849002c0d366bfadb60caf14f521b1d165",
+      "required_artifacts": [
+        "timing_reporter/qor_summary.json",
+        "timing_reporter/timing_paths.json",
+        "power_reporter/power.rpt",
+        "sdf_writer/{top}.sdf"
+      ],
+      "input_sha256": {
+        "fixtures/stage0_tech.lef": "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc",
+        "fixtures/stage0_cells.lef": "9af8e5d7547cb8beb15386e0e2867a0778721df2f7b33917949dc11b651524d8",
+        "fixtures/stage0.lib": "71484897dc56c62760be3dde8a57c3722634cbe4771385e8c2c1c5a6ddcb9577",
+        "fixtures/diamond.v": "9ad3b05aadb6128c273bb032058c808eaee6c65abffdab17c1f8245fd6dff1d6",
+        "fixtures/diamond.sdc": "d8b59e8531e5a1df3aa0ec20d0b4255460225b3116efe8536fa47e0344c9d52b"
+      }
+    }
+  ]
+}

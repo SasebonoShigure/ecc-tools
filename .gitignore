@@ -7,6 +7,7 @@ tags
 
 bin
 build
+/build-*
 catboost_info
 *.rpt
 *.idx
@@ -48,4 +49,4 @@ src/third_party/mt-kahypar/
 .direnv
 result
 .ccache
-test
+/test

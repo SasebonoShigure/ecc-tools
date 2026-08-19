@@ -1,0 +1,617 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecos.org/schemas/incremental_sta_samples_v1.schema.json",
+  "title": "Incremental STA experiment samples, version 1",
+  "description": "Machine-readable raw samples and aggregates for full and incremental CPU/CUDA STA comparisons. Required fields use null for measurements that were not collected; numeric zero means a measured zero. JSON Schema captures shape and declarative mode rules; validate_incremental_sta_samples.py additionally enforces cross-field numeric ordering and tolerance comparisons.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_metadata", "samples"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "run_metadata": {"$ref": "#/$defs/runMetadata"},
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/sample"}
+    }
+  },
+  "$defs": {
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableSha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonEmptyString": {"type": "string", "minLength": 1},
+    "nullableString": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "nonNegativeInteger": {"type": "integer", "minimum": 0},
+    "nullableNonNegativeInteger": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "nullablePositiveInteger": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "nonNegativeNumber": {"type": "number", "minimum": 0},
+    "finiteNumber": {"type": "number"},
+    "nullableNonNegativeNumber": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "nullableFiniteNumber": {
+      "type": ["number", "null"]
+    },
+    "nullableRatio": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    },
+    "nullableBoolean": {
+      "type": ["boolean", "null"]
+    },
+    "runMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parent_sha",
+        "ecc_tools_sha",
+        "dirty",
+        "build_type",
+        "compiler",
+        "flags",
+        "cpu_model",
+        "omp_threads",
+        "cuda_runtime",
+        "driver",
+        "gpu_name",
+        "compute_capability",
+        "seed",
+        "timestamp",
+        "dataset_manifest_hash"
+      ],
+      "properties": {
+        "parent_sha": {"$ref": "#/$defs/gitSha"},
+        "ecc_tools_sha": {"$ref": "#/$defs/gitSha"},
+        "dirty": {"type": "boolean"},
+        "build_type": {
+          "enum": ["Debug", "Release", "RelWithDebInfo", "MinSizeRel"]
+        },
+        "compiler": {"$ref": "#/$defs/nonEmptyString"},
+        "flags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "cpu_model": {"$ref": "#/$defs/nonEmptyString"},
+        "omp_threads": {"type": "integer", "minimum": 1},
+        "cuda_runtime": {"$ref": "#/$defs/nullableString"},
+        "driver": {"$ref": "#/$defs/nullableString"},
+        "gpu_name": {"$ref": "#/$defs/nullableString"},
+        "compute_capability": {"$ref": "#/$defs/nullableString"},
+        "seed": {"$ref": "#/$defs/nonNegativeInteger"},
+        "timestamp": {"type": "string", "format": "date-time"},
+        "dataset_manifest_hash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "design",
+        "corner",
+        "vertices",
+        "arcs",
+        "levels",
+        "mutation_kind",
+        "batch_size",
+        "changed_nodes",
+        "changed_arcs",
+        "affected_fraction",
+        "buffers_inserted",
+        "trace_hash",
+        "baseline_graph_hash",
+        "semantic_workload_kind",
+        "comparability_status"
+      ],
+      "properties": {
+        "design": {"$ref": "#/$defs/nonEmptyString"},
+        "corner": {"$ref": "#/$defs/nonEmptyString"},
+        "vertices": {"$ref": "#/$defs/nonNegativeInteger"},
+        "arcs": {"$ref": "#/$defs/nonNegativeInteger"},
+        "levels": {"$ref": "#/$defs/nonNegativeInteger"},
+        "mutation_kind": {"$ref": "#/$defs/nonEmptyString"},
+        "batch_size": {"$ref": "#/$defs/nonNegativeInteger"},
+        "changed_nodes": {"$ref": "#/$defs/nonNegativeInteger"},
+        "changed_arcs": {"$ref": "#/$defs/nonNegativeInteger"},
+        "affected_fraction": {"type": "number", "minimum": 0, "maximum": 1},
+        "buffers_inserted": {"$ref": "#/$defs/nonNegativeInteger"},
+        "trace_hash": {"$ref": "#/$defs/nullableSha256"},
+        "baseline_graph_hash": {"$ref": "#/$defs/sha256"},
+        "semantic_workload_kind": {
+          "enum": ["baseline", "synthetic", "fixed_trace", "closed_loop_greedy"]
+        },
+        "comparability_status": {
+          "enum": ["exact", "protocol_only", "non_comparable"]
+        }
+      }
+    },
+    "mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_backend",
+        "requested_update_strategy",
+        "fallback_policy",
+        "executed_backend",
+        "executed_update_strategy",
+        "execution_kind",
+        "propagation_scope",
+        "incremental_batch_executed",
+        "fallback_to_full",
+        "fallback_reason"
+      ],
+      "properties": {
+        "requested_backend": {
+          "enum": ["cpu", "cuda"]
+        },
+        "requested_update_strategy": {
+          "enum": ["full", "incremental"]
+        },
+        "fallback_policy": {
+          "enum": ["error", "full_with_record"]
+        },
+        "executed_backend": {
+          "enum": ["cpu", "cuda"]
+        },
+        "executed_update_strategy": {
+          "enum": ["full", "incremental"]
+        },
+        "execution_kind": {
+          "enum": ["baseline_only", "full_update", "incremental_update", "fallback_full"]
+        },
+        "propagation_scope": {
+          "enum": ["none", "full_graph", "affected_cone"]
+        },
+        "incremental_batch_executed": {"type": "boolean"},
+        "fallback_to_full": {"type": "boolean"},
+        "fallback_reason": {
+          "enum": [
+            null,
+            "not_applicable_no_mutation",
+            "same_batch_insert_remove_unsupported",
+            "cell_master_replacement_unsupported",
+            "unsupported_edit",
+            "reverse_slot_not_replaceable",
+            "node_deletion_unsupported",
+            "capacity_fallback",
+            "clock_changed",
+            "constraint_changed",
+            "library_changed",
+            "corner_changed",
+            "parasitic_changed",
+            "sequential_edit_unsupported",
+            "backend_unavailable",
+            "contract_violation"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_kind": {"const": "baseline_only"}
+            }
+          },
+          "then": {
+            "properties": {
+              "propagation_scope": {"const": "full_graph"},
+              "requested_update_strategy": {"const": "incremental"},
+              "executed_update_strategy": {"const": "full"},
+              "incremental_batch_executed": {"const": false},
+              "fallback_to_full": {"const": false},
+              "fallback_reason": {"const": "not_applicable_no_mutation"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "execution_kind": {"const": "full_update"}
+            }
+          },
+          "then": {
+            "properties": {
+              "propagation_scope": {"const": "full_graph"},
+              "requested_update_strategy": {"const": "full"},
+              "executed_update_strategy": {"const": "full"},
+              "incremental_batch_executed": {"const": false},
+              "fallback_to_full": {"const": false},
+              "fallback_reason": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "execution_kind": {"const": "incremental_update"}
+            }
+          },
+          "then": {
+            "properties": {
+              "propagation_scope": {"const": "full_graph"},
+              "requested_update_strategy": {"const": "incremental"},
+              "executed_update_strategy": {"const": "incremental"},
+              "incremental_batch_executed": {"const": true},
+              "fallback_to_full": {"const": false},
+              "fallback_reason": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "execution_kind": {"const": "fallback_full"}
+            }
+          },
+          "then": {
+            "properties": {
+              "requested_update_strategy": {"const": "incremental"},
+              "propagation_scope": {"const": "full_graph"},
+              "fallback_policy": {"const": "full_with_record"},
+              "executed_update_strategy": {"const": "full"},
+              "incremental_batch_executed": {"const": false},
+              "fallback_to_full": {"const": true}
+            }
+          }
+        }
+      ]
+    },
+    "batchSample": {
+      "description": "Null means no edit batch exists and is valid only for baseline_only. Each update execution requires an object with non-null update_core_ms, session_step_ms, and artifact_step_ms; the semantic validator enforces their inclusive ordering.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": [
+        "cold_or_warm",
+        "warmup",
+        "repetition",
+        "setup_ms",
+        "csr_export_ms",
+        "mutation_normalize_ms",
+        "cpu_csr_update_ms",
+        "descriptor_h2d_ms",
+        "gpu_csr_kernel_ms",
+        "base_append_ms",
+        "aux_rebuild_ms",
+        "mixed_graph_ms",
+        "mixed_toposort_ms",
+        "level_d2d_ms",
+        "level_h2d_ms",
+        "node2level_ms",
+        "delay_ms",
+        "forward_ms",
+        "backward_ms",
+        "result_d2h_ms",
+        "scatter_back_ms",
+        "verify_safety_ms",
+        "update_core_ms",
+        "session_step_ms",
+        "postprocess_ms",
+        "artifact_step_ms",
+        "h2d_bytes",
+        "d2h_bytes",
+        "d2d_bytes",
+        "kernel_launches",
+        "visited_vertices",
+        "processed_arcs",
+        "tombstone_ratio",
+        "aux_edges",
+        "allocation_count",
+        "capacity_fallback"
+      ],
+      "properties": {
+        "cold_or_warm": {
+          "enum": ["cold", "warm"]
+        },
+        "warmup": {"type": "boolean"},
+        "repetition": {"$ref": "#/$defs/nonNegativeInteger"},
+        "setup_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "csr_export_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "mutation_normalize_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "cpu_csr_update_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "descriptor_h2d_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "gpu_csr_kernel_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "base_append_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "aux_rebuild_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "mixed_graph_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "mixed_toposort_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "level_d2d_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "level_h2d_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "node2level_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "delay_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "forward_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "backward_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "result_d2h_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "scatter_back_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "verify_safety_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "update_core_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "session_step_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "postprocess_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "artifact_step_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "h2d_bytes": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "d2h_bytes": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "d2d_bytes": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "kernel_launches": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "visited_vertices": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "processed_arcs": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "tombstone_ratio": {"$ref": "#/$defs/nullableRatio"},
+        "aux_edges": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "allocation_count": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "capacity_fallback": {"$ref": "#/$defs/nullableBoolean"}
+      }
+    },
+    "runAggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["process_setup_ms", "cuda_context_ms", "baseline_build_ms", "all_batches_ms", "close_ms", "cold_end_to_end_ms"],
+      "properties": {
+        "process_setup_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "cuda_context_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "baseline_build_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "all_batches_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "close_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "cold_end_to_end_ms": {"$ref": "#/$defs/nullableNonNegativeNumber"}
+      }
+    },
+    "correctness": {
+      "description": "When pass is true all metrics and tolerance are measured, mismatch_count is zero, and the semantic validator requires the absolute value of every v1 error/delta metric to be no greater than the single tolerance. Splitting dimensional tolerances requires a future schema version.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pass", "mismatch_count", "max_abs_error", "max_rel_error", "wns_delta", "tns_delta", "tolerance"],
+      "properties": {
+        "pass": {"$ref": "#/$defs/nullableBoolean"},
+        "mismatch_count": {"$ref": "#/$defs/nullableNonNegativeInteger"},
+        "max_abs_error": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "max_rel_error": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "wns_delta": {"$ref": "#/$defs/nullableFiniteNumber"},
+        "tns_delta": {"$ref": "#/$defs/nullableFiniteNumber"},
+        "tolerance": {"$ref": "#/$defs/nullableNonNegativeNumber"}
+      }
+    },
+    "summary": {
+      "description": "n=null denotes an unmeasured aggregate and requires all statistic fields to be null. n>=1 requires all statistic fields. The semantic validator enforces min<=median<=p95<=max and mean within [min,max]. Any speedup additionally requires passing correctness.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "n",
+        "min",
+        "median",
+        "p95",
+        "max",
+        "mad",
+        "mean",
+        "stddev",
+        "speedup_vs_cpu_full",
+        "speedup_vs_cpu_incremental",
+        "speedup_vs_gpu_full"
+      ],
+      "properties": {
+        "n": {"$ref": "#/$defs/nullablePositiveInteger"},
+        "min": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "median": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "p95": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "max": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "mad": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "mean": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "stddev": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "speedup_vs_cpu_full": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "speedup_vs_cpu_incremental": {"$ref": "#/$defs/nullableNonNegativeNumber"},
+        "speedup_vs_gpu_full": {"$ref": "#/$defs/nullableNonNegativeNumber"}
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case", "mode", "batch_sample", "run_aggregate", "correctness", "summary"],
+      "properties": {
+        "case": {"$ref": "#/$defs/case"},
+        "mode": {"$ref": "#/$defs/mode"},
+        "batch_sample": {"$ref": "#/$defs/batchSample"},
+        "run_aggregate": {"$ref": "#/$defs/runAggregate"},
+        "correctness": {"$ref": "#/$defs/correctness"},
+        "summary": {"$ref": "#/$defs/summary"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "properties": {
+                  "execution_kind": {"const": "baseline_only"}
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "batch_sample": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "properties": {
+                  "execution_kind": {
+                    "enum": ["full_update", "incremental_update", "fallback_full"]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "batch_sample": {"type": "object"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "properties": {
+                  "execution_kind": {"const": "incremental_update"}
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "case": {
+                "properties": {
+                  "batch_size": {"minimum": 1},
+                  "trace_hash": {"$ref": "#/$defs/sha256"},
+                  "mutation_kind": {
+                    "not": {"const": "baseline"}
+                  },
+                  "semantic_workload_kind": {
+                    "enum": ["synthetic", "fixed_trace", "closed_loop_greedy"]
+                  }
+                },
+                "anyOf": [
+                  {
+                    "properties": {
+                      "changed_nodes": {"minimum": 1}
+                    }
+                  },
+                  {
+                    "properties": {
+                      "changed_arcs": {"minimum": 1}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "correctness": {
+                "properties": {
+                  "pass": {"const": true}
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "correctness": {
+                "properties": {
+                  "mismatch_count": {"const": 0},
+                  "max_abs_error": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "max_rel_error": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "wns_delta": {"$ref": "#/$defs/finiteNumber"},
+                  "tns_delta": {"$ref": "#/$defs/finiteNumber"},
+                  "tolerance": {"$ref": "#/$defs/nonNegativeNumber"}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "summary": {
+                "properties": {
+                  "n": {
+                    "not": {"type": "null"}
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "summary": {
+                "properties": {
+                  "min": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "median": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "p95": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "max": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "mad": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "mean": {"$ref": "#/$defs/nonNegativeNumber"},
+                  "stddev": {"$ref": "#/$defs/nonNegativeNumber"}
+                }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "summary": {
+                "properties": {
+                  "min": {"const": null},
+                  "median": {"const": null},
+                  "p95": {"const": null},
+                  "max": {"const": null},
+                  "mad": {"const": null},
+                  "mean": {"const": null},
+                  "stddev": {"const": null}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "summary": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "speedup_vs_cpu_full": {
+                        "not": {"type": "null"}
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "speedup_vs_cpu_incremental": {
+                        "not": {"type": "null"}
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "speedup_vs_gpu_full": {
+                        "not": {"type": "null"}
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "correctness": {
+                "properties": {
+                  "pass": {"const": true}
+                }
+              },
+              "summary": {
+                "properties": {
+                  "n": {"type": "integer", "minimum": 1}
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

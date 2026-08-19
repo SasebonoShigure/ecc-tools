@@ -1,0 +1,7 @@
+create_clock -name vclk -period 8.0 [get_ports clk]
+set_input_delay -clock vclk -max 0.8 [get_ports data_in]
+set_input_delay -clock vclk -min 0.1 [get_ports data_in]
+set_input_transition 0.04 [get_ports data_in]
+set_output_delay -clock vclk -max 0.7 [get_ports data_out]
+set_output_delay -clock vclk -min 0.15 [get_ports data_out]
+set_load 0.012 [get_ports data_out]

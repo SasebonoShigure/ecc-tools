@@ -1,0 +1,3884 @@
+{
+  "artifacts": {
+    "binary_sha256": {
+      "power_reporter/instance_power.bin": "78fa9b36e0f4e208e7f1933204eb8c56a33d7de6713c614c46af84c3b4a0e0b9"
+    },
+    "inventory_paths": [
+      "power_reporter/instance_power.bin",
+      "power_reporter/power.rpt",
+      "sdf_writer/stage0_chain.sdf",
+      "timing_reporter/qor_summary.json",
+      "timing_reporter/qor_summary.rpt",
+      "timing_reporter/timing_max.rpt",
+      "timing_reporter/timing_paths.json"
+    ],
+    "required_paths": [
+      "power_reporter/power.rpt",
+      "sdf_writer/stage0_chain.sdf",
+      "timing_reporter/qor_summary.json",
+      "timing_reporter/timing_paths.json"
+    ],
+    "structured": {
+      "timing_reporter/qor_summary.json": {
+        "design_statistics": {
+          "bufs": null,
+          "cap": 0,
+          "cella": 3,
+          "ctbuf": null,
+          "fanout": 0,
+          "leafs_k": 0,
+          "regs": null,
+          "tdrc": 0,
+          "tnets_k": null,
+          "tran": 0
+        },
+        "path_groups": [
+          {
+            "hold": {
+              "nvp": 0,
+              "tns": 0.0,
+              "wns": 0.078
+            },
+            "name": "vclk",
+            "setup": {
+              "frequency_mhz": 481,
+              "nvp": 0,
+              "tns": 0.0,
+              "wns": 7.921
+            }
+          }
+        ],
+        "summary": {
+          "hold": {
+            "nvp": 0,
+            "tns": 0.0,
+            "wns": 0.078
+          },
+          "setup": {
+            "frequency_mhz": 481,
+            "nvp": 0,
+            "tns": 0.0,
+            "wns": 7.921
+          }
+        }
+      },
+      "timing_reporter/timing_paths.json": {
+        "corner": "unknown",
+        "path_limit": 20,
+        "paths": [
+          {
+            "analysis_type": "setup",
+            "arrival_ns": 1.0790305393,
+            "capture_clock": "vclk",
+            "capture_clock_network_delay_ns": 0.0,
+            "check_type": "none",
+            "cppr_ns": 0.0,
+            "end_point": "data_out",
+            "launch_clock": "vclk",
+            "launch_clock_network_delay_ns": 0.0,
+            "path_group": "vclk",
+            "path_id": "timing_path_5040e8ac50cb301b",
+            "required_ns": 9.0,
+            "slack_ns": 7.9209694607,
+            "stages": [
+              {
+                "arrival_ns": 1.0,
+                "cell": "",
+                "incremental_delay_ns": 0.0,
+                "instance": "",
+                "kind": "point",
+                "pin": "data_in",
+                "transition": "fall"
+              },
+              {
+                "arrival_ns": 1.0,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0,
+                "instance": "u0",
+                "kind": "net_arc",
+                "pin": "u0:A",
+                "transition": "fall"
+              },
+              {
+                "arrival_ns": 1.0274152047,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0274152047,
+                "instance": "u0",
+                "kind": "cell_arc",
+                "pin": "u0:Y",
+                "transition": "fall"
+              },
+              {
+                "arrival_ns": 1.0274152047,
+                "cell": "INV_X1",
+                "incremental_delay_ns": 0.0,
+                "instance": "u1",
+                "kind": "net_arc",
+                "pin": "u1:A",
+                "transition": "fall"
+              },
+              {
+                "arrival_ns": 1.0524288499,
+                "cell": "INV_X1",
+                "incremental_delay_ns": 0.0250136452,
+                "instance": "u1",
+                "kind": "cell_arc",
+                "pin": "u1:Y",
+                "transition": "rise"
+              },
+              {
+                "arrival_ns": 1.0524288499,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0,
+                "instance": "u2",
+                "kind": "net_arc",
+                "pin": "u2:A",
+                "transition": "rise"
+              },
+              {
+                "arrival_ns": 1.0790305393,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0266016894,
+                "instance": "u2",
+                "kind": "cell_arc",
+                "pin": "u2:Y",
+                "transition": "rise"
+              },
+              {
+                "arrival_ns": 1.0790305393,
+                "cell": "",
+                "incremental_delay_ns": 0.0,
+                "instance": "",
+                "kind": "net_arc",
+                "pin": "data_out",
+                "transition": "rise"
+              }
+            ],
+            "start_point": "data_in"
+          },
+          {
+            "analysis_type": "hold",
+            "arrival_ns": 0.2780675763,
+            "capture_clock": "vclk",
+            "capture_clock_network_delay_ns": 0.0,
+            "check_type": "none",
+            "cppr_ns": 0.0,
+            "end_point": "data_out",
+            "launch_clock": "vclk",
+            "launch_clock_network_delay_ns": 0.0,
+            "path_group": "vclk",
+            "path_id": "timing_path_acaeb4190928681d",
+            "required_ns": 0.2,
+            "slack_ns": 0.0780675763,
+            "stages": [
+              {
+                "arrival_ns": 0.2,
+                "cell": "",
+                "incremental_delay_ns": 0.0,
+                "instance": "",
+                "kind": "point",
+                "pin": "data_in",
+                "transition": "rise"
+              },
+              {
+                "arrival_ns": 0.2,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0,
+                "instance": "u0",
+                "kind": "net_arc",
+                "pin": "u0:A",
+                "transition": "rise"
+              },
+              {
+                "arrival_ns": 0.2294152047,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0294152047,
+                "instance": "u0",
+                "kind": "cell_arc",
+                "pin": "u0:Y",
+                "transition": "rise"
+              },
+              {
+                "arrival_ns": 0.2294152047,
+                "cell": "INV_X1",
+                "incremental_delay_ns": 0.0,
+                "instance": "u1",
+                "kind": "net_arc",
+                "pin": "u1:A",
+                "transition": "rise"
+              },
+              {
+                "arrival_ns": 0.2536510721,
+                "cell": "INV_X1",
+                "incremental_delay_ns": 0.0242358674,
+                "instance": "u1",
+                "kind": "cell_arc",
+                "pin": "u1:Y",
+                "transition": "fall"
+              },
+              {
+                "arrival_ns": 0.2536510721,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0,
+                "instance": "u2",
+                "kind": "net_arc",
+                "pin": "u2:A",
+                "transition": "fall"
+              },
+              {
+                "arrival_ns": 0.2780675763,
+                "cell": "BUF_X1",
+                "incremental_delay_ns": 0.0244165042,
+                "instance": "u2",
+                "kind": "cell_arc",
+                "pin": "u2:Y",
+                "transition": "fall"
+              },
+              {
+                "arrival_ns": 0.2780675763,
+                "cell": "",
+                "incremental_delay_ns": 0.0,
+                "instance": "",
+                "kind": "net_arc",
+                "pin": "data_out",
+                "transition": "fall"
+              }
+            ],
+            "start_point": "data_in"
+          }
+        ],
+        "schema_version": 1
+      }
+    },
+    "text_tokens": {
+      "power_reporter/power.rpt": [
+        {
+          "kind": "text",
+          "value": "Design : stage0_chain\nOperating Conditions: typical\nAnalysis Effort : low\nWire Load Model : ZeroWireload\nGlobal Operating Voltage = "
+        },
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "text",
+          "value": "\n\nDynamic Power Units = 1mW\nLeakage Power Units = 1nW\n\nCell Internal Power  =    "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": " mW\nNet Switching Power  =   "
+        },
+        {
+          "kind": "float",
+          "value": 70.0
+        },
+        {
+          "kind": "text",
+          "value": " nW\nTotal Dynamic Power  =   "
+        },
+        {
+          "kind": "float",
+          "value": 70.0
+        },
+        {
+          "kind": "text",
+          "value": " nW\nCell Leakage Power   =    "
+        },
+        {
+          "kind": "float",
+          "value": 3.0
+        },
+        {
+          "kind": "text",
+          "value": " pW\n\n                 Internal         Switching           Leakage            Total\nPower Group      Power            Power               Power              Power   (   %    )  Attrs\n--------------------------------------------------------------------------------------------------\nio_pad             "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "  (   "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "%)\nmemory             "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "  (   "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "%)\nblack_box          "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "  (   "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "%)\nclock_network      "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "  (   "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "%)  i\nregister           "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "  (   "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "%)\nsequential         "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "            "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "  (   "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "%)\ncombinational      "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "        "
+        },
+        {
+          "kind": "float",
+          "value": 7e-05
+        },
+        {
+          "kind": "text",
+          "value": "        "
+        },
+        {
+          "kind": "float",
+          "value": 0.003
+        },
+        {
+          "kind": "text",
+          "value": "        "
+        },
+        {
+          "kind": "float",
+          "value": 7.0003e-05
+        },
+        {
+          "kind": "text",
+          "value": "  (   "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "%)\n--------------------------------------------------------------------------------------------------\nTotal              "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": " mW     "
+        },
+        {
+          "kind": "float",
+          "value": 7e-05
+        },
+        {
+          "kind": "text",
+          "value": " mW     "
+        },
+        {
+          "kind": "float",
+          "value": 0.003
+        },
+        {
+          "kind": "text",
+          "value": " nW     "
+        },
+        {
+          "kind": "float",
+          "value": 7.0003e-05
+        },
+        {
+          "kind": "text",
+          "value": " mW\n\ni - Including register clock pin internal power\n"
+        }
+      ],
+      "sdf_writer/stage0_chain.sdf": [
+        {
+          "kind": "text",
+          "value": "(DELAYFILE\n (SDFVERSION \""
+        },
+        {
+          "kind": "float",
+          "value": 3.0
+        },
+        {
+          "kind": "text",
+          "value": "\")\n (DESIGN \"stage0_chain\")\n (DATE \"<NORMALIZED>\")\n (VENDOR \"ECC\")\n (PROGRAM \"iSTA\")\n (VERSION \"iSTA\")\n (DIVIDER /)\n (VOLTAGE "
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "text",
+          "value": ")\n (PROCESS \""
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 1.0
+        },
+        {
+          "kind": "text",
+          "value": "\")\n (TEMPERATURE "
+        },
+        {
+          "kind": "float",
+          "value": 25.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 25.0
+        },
+        {
+          "kind": "text",
+          "value": ")\n (TIMESCALE 1ns)\n (CELL\n  (CELLTYPE \"stage0_chain\")\n  (INSTANCE)\n  (DELAY\n   (ABSOLUTE\n    (INTERCONNECT data_in u0/A ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": ") ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "))\n    (INTERCONNECT u2/Y data_out ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": ") ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "))\n    (INTERCONNECT u0/Y u1/A ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": ") ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "))\n    (INTERCONNECT u1/Y u2/A ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": ") ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "))\n   )\n  )\n )\n (CELL\n  (CELLTYPE \"BUF_X1\")\n  (INSTANCE u0)\n  (DELAY\n   (ABSOLUTE\n    (IOPATH A Y ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0294152047
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0294152047
+        },
+        {
+          "kind": "text",
+          "value": ") ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0274152047
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0274152047
+        },
+        {
+          "kind": "text",
+          "value": "))\n   )\n  )\n )\n (CELL\n  (CELLTYPE \"INV_X1\")\n  (INSTANCE u1)\n  (DELAY\n   (ABSOLUTE\n    (IOPATH A Y ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0250136452
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0250136452
+        },
+        {
+          "kind": "text",
+          "value": ") ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0242358674
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0242358674
+        },
+        {
+          "kind": "text",
+          "value": "))\n   )\n  )\n )\n (CELL\n  (CELLTYPE \"BUF_X1\")\n  (INSTANCE u2)\n  (DELAY\n   (ABSOLUTE\n    (IOPATH A Y ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0266016894
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0266016894
+        },
+        {
+          "kind": "text",
+          "value": ") ("
+        },
+        {
+          "kind": "float",
+          "value": 0.0244165042
+        },
+        {
+          "kind": "text",
+          "value": "::"
+        },
+        {
+          "kind": "float",
+          "value": 0.0244165042
+        },
+        {
+          "kind": "text",
+          "value": "))\n   )\n  )\n )\n)\n"
+        }
+      ],
+      "timing_reporter/qor_summary.rpt": [
+        {
+          "kind": "text",
+          "value": "Path Group                  WNS        TNS     NVP      FREQ      WNS(H)     TNS(H)  NVP(H)\n-------------------------------------------------------------------------------------------\nvclk                      "
+        },
+        {
+          "kind": "float",
+          "value": 7.921
+        },
+        {
+          "kind": "text",
+          "value": "        "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "       "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "     481MHz      "
+        },
+        {
+          "kind": "float",
+          "value": 0.078
+        },
+        {
+          "kind": "text",
+          "value": "        "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "       "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "\n-------------------------------------------------------------------------------------------\nSummary                   "
+        },
+        {
+          "kind": "float",
+          "value": 7.921
+        },
+        {
+          "kind": "text",
+          "value": "        "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "       "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "     481MHz      "
+        },
+        {
+          "kind": "float",
+          "value": 0.078
+        },
+        {
+          "kind": "text",
+          "value": "        "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "       "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "\n-------------------------------------------------------------------------------------------\n    CAP  FANOUT    TRAN    TDRC      CELLA    BUFS     LEAFS       TNETS      CTBUF    REGS\n-------------------------------------------------------------------------------------------\n      "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "       "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "       "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "       "
+        },
+        {
+          "kind": "integer",
+          "value": 0
+        },
+        {
+          "kind": "text",
+          "value": "          "
+        },
+        {
+          "kind": "integer",
+          "value": 3
+        },
+        {
+          "kind": "text",
+          "value": "      ~K        0K          ~K          ~       ~\n-------------------------------------------------------------------------------------------\n\nNVP    - No. of Violating Paths\nFREQ   - Estimated Frequency, not accurate in some cases, multi/half-cycle, etc\nWNS(H) - Hold WNS\nTNS(H) - Hold TNS\nNVP(H) - Hold NVP\n"
+        }
+      ],
+      "timing_reporter/timing_max.rpt": [
+        {
+          "kind": "text",
+          "value": "****************************************\nDesign : stage0_chain\nDelayType : max\nStartEndType : all\nSlackLesserThan : "
+        },
+        {
+          "kind": "float",
+          "value": 0.0
+        },
+        {
+          "kind": "text",
+          "value": "\nSlackGreaterThan : -infinity\nNworst : "
+        },
+        {
+          "kind": "integer",
+          "value": 20
+        },
+        {
+          "kind": "text",
+          "value": "\nMaxPaths : "
+        },
+        {
+          "kind": "integer",
+          "value": 20
+        },
+        {
+          "kind": "text",
+          "value": "\nSortBy : slack\n****************************************\n\nNo constrained paths.\n\n"
+        },
+        {
+          "kind": "integer",
+          "value": 1
+        },
+        {
+          "kind": "text",
+          "value": "\n"
+        }
+      ]
+    }
+  },
+  "case": "chain",
+  "config_hash": "dfbd8ca5e2445a785f012659c842d68b790ea55227c75ec08282b3b2d4dd9228",
+  "golden_schema_version": 1,
+  "provenance": {
+    "artifact_paths": [
+      "power_reporter/instance_power.bin",
+      "power_reporter/power.rpt",
+      "sdf_writer/stage0_chain.sdf",
+      "timing_reporter/qor_summary.json",
+      "timing_reporter/qor_summary.rpt",
+      "timing_reporter/timing_max.rpt",
+      "timing_reporter/timing_paths.json"
+    ],
+    "full_snapshot_sha256_diagnostic": "6dd7f0d6d15cd34c22d12a0aebcb43e705423503c8f4251c38337956b6727059",
+    "input_sha256": {
+      "fixtures/chain.sdc": "96b0c4d42f516c88ae8c8be05a8fb583f7f04afa5151e9d5d0980d06a6dff202",
+      "fixtures/chain.v": "1cb34cb28ce1fb00fd21c4590fe686ea434271d10259026bf246a133e62943de",
+      "fixtures/stage0.lib": "71484897dc56c62760be3dde8a57c3722634cbe4771385e8c2c1c5a6ddcb9577",
+      "fixtures/stage0_cells.lef": "9af8e5d7547cb8beb15386e0e2867a0778721df2f7b33917949dc11b651524d8",
+      "fixtures/stage0_tech.lef": "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc"
+    },
+    "source_baseline": {
+      "ecc_tools_base_commit": "31ebf6cae5ba8b4a472b97947acf54e1deb82daa",
+      "ecc_tools_branch": "IncreGPUSTA",
+      "parent_branch": "IncreGPUSTA",
+      "parent_commit": "f783db8d8c4d22559993d27ddeac314fa35a58ca"
+    },
+    "tolerances": {
+      "absolute": 1e-09,
+      "relative": 1e-09
+    }
+  },
+  "snapshot": {
+    "case": "chain",
+    "complete": true,
+    "config": {
+      "is_path_report_number_specified": true,
+      "max_paths": 20,
+      "nworst": 20,
+      "output_timing_features": 1,
+      "output_timing_reports": 1,
+      "slack_greater_than": {
+        "sentinel": "missing"
+      },
+      "slack_lesser_than": {
+        "sentinel": "missing"
+      },
+      "thread_number": 1,
+      "timing_corner": "",
+      "timing_path_limit": 20,
+      "timing_report_delay_type": "max",
+      "timing_report_start_end_type": "all"
+    },
+    "constraints": {
+      "case_analysis": {},
+      "clocks": [
+        {
+          "fall_edge": 5.0,
+          "is_propagated": false,
+          "name": "vclk",
+          "period": 10.0,
+          "rise_edge": 0.0,
+          "sources": [
+            "clk"
+          ]
+        }
+      ],
+      "ports": [
+        {
+          "clock": "vclk",
+          "input_delay_max": 1.0,
+          "input_delay_min": 0.2,
+          "input_transition": 0.05,
+          "load": {
+            "sentinel": "missing"
+          },
+          "output_delay_max": {
+            "sentinel": "missing"
+          },
+          "output_delay_min": {
+            "sentinel": "missing"
+          },
+          "port": "data_in"
+        },
+        {
+          "clock": "vclk",
+          "input_delay_max": {
+            "sentinel": "missing"
+          },
+          "input_delay_min": {
+            "sentinel": "missing"
+          },
+          "input_transition": {
+            "sentinel": "missing"
+          },
+          "load": 0.01,
+          "output_delay_max": 1.0,
+          "output_delay_min": 0.2,
+          "port": "data_out"
+        }
+      ]
+    },
+    "fixture": {
+      "case_name": "chain",
+      "inputs": {
+        "cell_lef": "stage0_cells.lef",
+        "liberty": "stage0.lib",
+        "sdc": "chain.sdc",
+        "tech_lef": "stage0_tech.lef",
+        "verilog": "chain.v"
+      },
+      "top": "stage0_chain"
+    },
+    "library_units": {
+      "source_capacitance": "pf",
+      "source_resistance": "kohm",
+      "source_time": "ns"
+    },
+    "power": {
+      "groups": {
+        "black_box": {
+          "internal": 0.0,
+          "leakage": 0.0,
+          "switching": 0.0,
+          "total": 0.0
+        },
+        "clock_network": {
+          "internal": 0.0,
+          "leakage": 0.0,
+          "switching": 0.0,
+          "total": 0.0
+        },
+        "combinational": {
+          "internal": 0.0,
+          "leakage": 3.0000000000000005e-12,
+          "switching": 7e-08,
+          "total": 7.000300000000001e-08
+        },
+        "io_pad": {
+          "internal": 0.0,
+          "leakage": 0.0,
+          "switching": 0.0,
+          "total": 0.0
+        },
+        "memory": {
+          "internal": 0.0,
+          "leakage": 0.0,
+          "switching": 0.0,
+          "total": 0.0
+        },
+        "register": {
+          "internal": 0.0,
+          "leakage": 0.0,
+          "switching": 0.0,
+          "total": 0.0
+        },
+        "sequential": {
+          "internal": 0.0,
+          "leakage": 0.0,
+          "switching": 0.0,
+          "total": 0.0
+        }
+      },
+      "instances": [
+        {
+          "group": "combinational",
+          "instance": "u0",
+          "value": {
+            "internal": 0.0,
+            "leakage": 1.0000000000000002e-12,
+            "switching": 1e-08,
+            "total": 1.0001e-08
+          },
+          "voltage": 1.0
+        },
+        {
+          "group": "combinational",
+          "instance": "u1",
+          "value": {
+            "internal": 0.0,
+            "leakage": 1.0000000000000002e-12,
+            "switching": 1e-08,
+            "total": 1.0001e-08
+          },
+          "voltage": 1.0
+        },
+        {
+          "group": "combinational",
+          "instance": "u2",
+          "value": {
+            "internal": 0.0,
+            "leakage": 1.0000000000000002e-12,
+            "switching": 5.0000000000000004e-08,
+            "total": 5.0001000000000005e-08
+          },
+          "voltage": 1.0
+        }
+      ],
+      "total": {
+        "internal": 0.0,
+        "leakage": 3.0000000000000005e-12,
+        "switching": 7e-08,
+        "total": 7.000300000000001e-08
+      }
+    },
+    "probe": "ista-stage0-full-baseline-v1",
+    "schema_version": 1,
+    "semantics": {
+      "arc_key": "[source,sink,type,owner,library_source,library_sink,clock,disabled,loop_disabled]+parallel_ordinal",
+      "canonical_time_unit": "ns",
+      "missing": {
+        "sentinel": "missing"
+      },
+      "nan": "invalid",
+      "negative_infinity": {
+        "sentinel": "neg_inf"
+      },
+      "node_key": "full_pin_name",
+      "positive_infinity": {
+        "sentinel": "pos_inf"
+      }
+    },
+    "timing": {
+      "arcs": [
+        {
+          "delay": 0.0,
+          "delay_max": 0.0,
+          "delay_min": 0.0,
+          "graph_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "input_output_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "key": "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "timing_arc_delay": [],
+          "transition_delay": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "transition_map": [
+            {
+              "input_transition": "rise",
+              "output_transition": "rise"
+            },
+            {
+              "input_transition": "fall",
+              "output_transition": "fall"
+            }
+          ]
+        },
+        {
+          "delay": 0.018304093567251465,
+          "delay_max": 0.018304093567251465,
+          "delay_min": 0.01630409356725146,
+          "graph_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.029415204678362582
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.027415204678362576
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.029415204678362582
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.027415204678362576
+            }
+          ],
+          "input_output_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.018304093567251465
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.01630409356725146
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.018304093567251465
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.01630409356725146
+            }
+          ],
+          "key": "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "timing_arc_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.027415204678362576
+            },
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.029415204678362582
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.027415204678362576
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.029415204678362582
+            }
+          ],
+          "transition_delay": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.018304093567251465
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.01630409356725146
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.018304093567251465
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.01630409356725146
+            }
+          ],
+          "transition_map": [
+            {
+              "input_transition": "rise",
+              "output_transition": "rise"
+            },
+            {
+              "input_transition": "fall",
+              "output_transition": "fall"
+            }
+          ]
+        },
+        {
+          "delay": 0.0,
+          "delay_max": 0.0,
+          "delay_min": 0.0,
+          "graph_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "input_output_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "key": "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "timing_arc_delay": [],
+          "transition_delay": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "transition_map": [
+            {
+              "input_transition": "rise",
+              "output_transition": "rise"
+            },
+            {
+              "input_transition": "fall",
+              "output_transition": "fall"
+            }
+          ]
+        },
+        {
+          "delay": 0.020304093567251463,
+          "delay_max": 0.020304093567251463,
+          "delay_min": 0.019304093567251466,
+          "graph_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "fall",
+              "value": 0.02423586744639377
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "rise",
+              "value": 0.025013645224171547
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "fall",
+              "value": 0.02423586744639377
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "rise",
+              "value": 0.025013645224171547
+            }
+          ],
+          "input_output_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "fall",
+              "value": 0.019304093567251466
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "rise",
+              "value": 0.020304093567251463
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "fall",
+              "value": 0.019304093567251466
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "rise",
+              "value": 0.020304093567251463
+            }
+          ],
+          "key": "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "timing_arc_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "rise",
+              "timing_arc": "[\"stage0_lib\",\"negative\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.025013645224171547
+            },
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "fall",
+              "timing_arc": "[\"stage0_lib\",\"negative\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.02423586744639377
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "rise",
+              "timing_arc": "[\"stage0_lib\",\"negative\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.025013645224171547
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "fall",
+              "timing_arc": "[\"stage0_lib\",\"negative\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.02423586744639377
+            }
+          ],
+          "transition_delay": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.019304093567251466
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.020304093567251463
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.019304093567251466
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.020304093567251463
+            }
+          ],
+          "transition_map": [
+            {
+              "input_transition": "rise",
+              "output_transition": "fall"
+            },
+            {
+              "input_transition": "fall",
+              "output_transition": "rise"
+            }
+          ]
+        },
+        {
+          "delay": 0.0,
+          "delay_max": 0.0,
+          "delay_min": 0.0,
+          "graph_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "input_output_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "key": "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "timing_arc_delay": [],
+          "transition_delay": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "transition_map": [
+            {
+              "input_transition": "rise",
+              "output_transition": "rise"
+            },
+            {
+              "input_transition": "fall",
+              "output_transition": "fall"
+            }
+          ]
+        },
+        {
+          "delay": 0.022514619883040935,
+          "delay_max": 0.022514619883040935,
+          "delay_min": 0.02051461988304094,
+          "graph_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.026601689408706955
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.02441650422352177
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.026601689408706955
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.02441650422352177
+            }
+          ],
+          "input_output_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.022514619883040935
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.02051461988304094
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.022514619883040935
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.02051461988304094
+            }
+          ],
+          "key": "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "timing_arc_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.02441650422352177
+            },
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.026601689408706955
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.02441650422352177
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "timing_arc": "[\"stage0_lib\",\"positive\",\"none\",\"rise\",\"\"]#parallel=00000000000000000000",
+              "value": 0.026601689408706955
+            }
+          ],
+          "transition_delay": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.022514619883040935
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.02051461988304094
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.022514619883040935
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.02051461988304094
+            }
+          ],
+          "transition_map": [
+            {
+              "input_transition": "rise",
+              "output_transition": "rise"
+            },
+            {
+              "input_transition": "fall",
+              "output_transition": "fall"
+            }
+          ]
+        },
+        {
+          "delay": 0.0,
+          "delay_max": 0.0,
+          "delay_min": 0.0,
+          "graph_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "input_output_delay": [
+            {
+              "analysis": "max",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "rise",
+              "output_transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "input_transition": "fall",
+              "output_transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "key": "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "timing_arc_delay": [],
+          "transition_delay": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "transition_map": [
+            {
+              "input_transition": "rise",
+              "output_transition": "rise"
+            },
+            {
+              "input_transition": "fall",
+              "output_transition": "fall"
+            }
+          ]
+        }
+      ],
+      "path_groups": [
+        {
+          "endpoint_count": 1,
+          "endpoints": [
+            {
+              "endpoint": "data_out",
+              "path_count": 2,
+              "paths": [
+                {
+                  "analysis": "max",
+                  "capture_clock_network_delay": 0.0,
+                  "capture_clock_pin": "",
+                  "capture_time": 10.0,
+                  "cell_delay": 0.07903053931124107,
+                  "check_time": 0.0,
+                  "check_type": "none",
+                  "clock_name": "vclk",
+                  "clock_reconvergence_pessimism": 0.0,
+                  "end_point": "data_out",
+                  "last_common_pin": "",
+                  "launch_clock_network_delay": 0.0,
+                  "launch_time": 0.0,
+                  "level": 8,
+                  "net_delay": 0.0,
+                  "path_delay": 1.079030539311242,
+                  "points": [
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "",
+                      "arc_sink": "",
+                      "arc_source": "",
+                      "arc_type": "none",
+                      "arrival": 1.0,
+                      "cell": "",
+                      "instance": "",
+                      "net": "data_in",
+                      "pin": "data_in",
+                      "required": 8.938877192982456,
+                      "slack": 7.938877192982456,
+                      "transition": "fall"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "data_in:data_in->u0:A",
+                      "arc_sink": "u0:A",
+                      "arc_source": "data_in",
+                      "arc_type": "net",
+                      "arrival": 1.0,
+                      "cell": "BUF_X1",
+                      "instance": "u0",
+                      "net": "data_in",
+                      "pin": "u0:A",
+                      "required": 8.938877192982456,
+                      "slack": 7.938877192982456,
+                      "transition": "fall"
+                    },
+                    {
+                      "arc_delay": 0.027415204678362576,
+                      "arc_name": "u0:u0:A->u0:Y",
+                      "arc_sink": "u0:Y",
+                      "arc_source": "u0:A",
+                      "arc_type": "cell",
+                      "arrival": 1.027415204678363,
+                      "cell": "BUF_X1",
+                      "instance": "u0",
+                      "net": "n0",
+                      "pin": "u0:Y",
+                      "required": 8.957181286549709,
+                      "slack": 7.938877192982457,
+                      "transition": "fall"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "n0:u0:Y->u1:A",
+                      "arc_sink": "u1:A",
+                      "arc_source": "u0:Y",
+                      "arc_type": "net",
+                      "arrival": 1.027415204678363,
+                      "cell": "INV_X1",
+                      "instance": "u1",
+                      "net": "n0",
+                      "pin": "u1:A",
+                      "required": 8.957181286549709,
+                      "slack": 7.938877192982457,
+                      "transition": "fall"
+                    },
+                    {
+                      "arc_delay": 0.025013645224171547,
+                      "arc_name": "u1:u1:A->u1:Y",
+                      "arc_sink": "u1:Y",
+                      "arc_source": "u1:A",
+                      "arc_type": "cell",
+                      "arrival": 1.052428849902535,
+                      "cell": "INV_X1",
+                      "instance": "u1",
+                      "net": "n1",
+                      "pin": "u1:Y",
+                      "required": 8.97748538011696,
+                      "slack": 7.938877192982457,
+                      "transition": "rise"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "n1:u1:Y->u2:A",
+                      "arc_sink": "u2:A",
+                      "arc_source": "u1:Y",
+                      "arc_type": "net",
+                      "arrival": 1.052428849902535,
+                      "cell": "BUF_X1",
+                      "instance": "u2",
+                      "net": "n1",
+                      "pin": "u2:A",
+                      "required": 8.97748538011696,
+                      "slack": 7.938877192982457,
+                      "transition": "rise"
+                    },
+                    {
+                      "arc_delay": 0.026601689408706955,
+                      "arc_name": "u2:u2:A->u2:Y",
+                      "arc_sink": "u2:Y",
+                      "arc_source": "u2:A",
+                      "arc_type": "cell",
+                      "arrival": 1.079030539311242,
+                      "cell": "BUF_X1",
+                      "instance": "u2",
+                      "net": "data_out",
+                      "pin": "u2:Y",
+                      "required": 9.0,
+                      "slack": 7.938877192982456,
+                      "transition": "rise"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "data_out:u2:Y->data_out",
+                      "arc_sink": "data_out",
+                      "arc_source": "u2:Y",
+                      "arc_type": "net",
+                      "arrival": 1.079030539311242,
+                      "cell": "",
+                      "instance": "",
+                      "net": "data_out",
+                      "pin": "data_out",
+                      "required": 9.0,
+                      "slack": 7.938877192982456,
+                      "transition": "rise"
+                    }
+                  ],
+                  "required_time": 9.0,
+                  "setup_time": 0.0,
+                  "slack": 7.920969460688758,
+                  "source_type": "input",
+                  "start_point": "data_in",
+                  "transition": "rise"
+                },
+                {
+                  "analysis": "min",
+                  "capture_clock_network_delay": 0.0,
+                  "capture_clock_pin": "",
+                  "capture_time": 0.0,
+                  "cell_delay": 0.07806757634827813,
+                  "check_time": 0.0,
+                  "check_type": "none",
+                  "clock_name": "vclk",
+                  "clock_reconvergence_pessimism": -0.0,
+                  "end_point": "data_out",
+                  "last_common_pin": "",
+                  "launch_clock_network_delay": 0.0,
+                  "launch_time": 0.0,
+                  "level": 8,
+                  "net_delay": 0.0,
+                  "path_delay": 0.278067576348279,
+                  "points": [
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "",
+                      "arc_sink": "",
+                      "arc_source": "",
+                      "arc_type": "none",
+                      "arrival": 0.2,
+                      "cell": "",
+                      "instance": "",
+                      "net": "data_in",
+                      "pin": "data_in",
+                      "required": 8.938877192982456,
+                      "slack": 7.938877192982456,
+                      "transition": "rise"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "data_in:data_in->u0:A",
+                      "arc_sink": "u0:A",
+                      "arc_source": "data_in",
+                      "arc_type": "net",
+                      "arrival": 0.2,
+                      "cell": "BUF_X1",
+                      "instance": "u0",
+                      "net": "data_in",
+                      "pin": "u0:A",
+                      "required": 8.938877192982456,
+                      "slack": 7.938877192982456,
+                      "transition": "rise"
+                    },
+                    {
+                      "arc_delay": 0.029415204678362582,
+                      "arc_name": "u0:u0:A->u0:Y",
+                      "arc_sink": "u0:Y",
+                      "arc_source": "u0:A",
+                      "arc_type": "cell",
+                      "arrival": 0.229415204678363,
+                      "cell": "BUF_X1",
+                      "instance": "u0",
+                      "net": "n0",
+                      "pin": "u0:Y",
+                      "required": 8.957181286549709,
+                      "slack": 7.938877192982457,
+                      "transition": "rise"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "n0:u0:Y->u1:A",
+                      "arc_sink": "u1:A",
+                      "arc_source": "u0:Y",
+                      "arc_type": "net",
+                      "arrival": 0.229415204678363,
+                      "cell": "INV_X1",
+                      "instance": "u1",
+                      "net": "n0",
+                      "pin": "u1:A",
+                      "required": 8.957181286549709,
+                      "slack": 7.938877192982457,
+                      "transition": "rise"
+                    },
+                    {
+                      "arc_delay": 0.02423586744639377,
+                      "arc_name": "u1:u1:A->u1:Y",
+                      "arc_sink": "u1:Y",
+                      "arc_source": "u1:A",
+                      "arc_type": "cell",
+                      "arrival": 0.253651072124757,
+                      "cell": "INV_X1",
+                      "instance": "u1",
+                      "net": "n1",
+                      "pin": "u1:Y",
+                      "required": 8.97748538011696,
+                      "slack": 7.938877192982457,
+                      "transition": "fall"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "n1:u1:Y->u2:A",
+                      "arc_sink": "u2:A",
+                      "arc_source": "u1:Y",
+                      "arc_type": "net",
+                      "arrival": 0.253651072124757,
+                      "cell": "BUF_X1",
+                      "instance": "u2",
+                      "net": "n1",
+                      "pin": "u2:A",
+                      "required": 8.97748538011696,
+                      "slack": 7.938877192982457,
+                      "transition": "fall"
+                    },
+                    {
+                      "arc_delay": 0.02441650422352177,
+                      "arc_name": "u2:u2:A->u2:Y",
+                      "arc_sink": "u2:Y",
+                      "arc_source": "u2:A",
+                      "arc_type": "cell",
+                      "arrival": 0.278067576348279,
+                      "cell": "BUF_X1",
+                      "instance": "u2",
+                      "net": "data_out",
+                      "pin": "u2:Y",
+                      "required": 9.0,
+                      "slack": 7.938877192982456,
+                      "transition": "fall"
+                    },
+                    {
+                      "arc_delay": 0.0,
+                      "arc_name": "data_out:u2:Y->data_out",
+                      "arc_sink": "data_out",
+                      "arc_source": "u2:Y",
+                      "arc_type": "net",
+                      "arrival": 0.278067576348279,
+                      "cell": "",
+                      "instance": "",
+                      "net": "data_out",
+                      "pin": "data_out",
+                      "required": 9.0,
+                      "slack": 7.938877192982456,
+                      "transition": "fall"
+                    }
+                  ],
+                  "required_time": 0.2,
+                  "setup_time": 0.0,
+                  "slack": 0.078067576348279,
+                  "source_type": "input",
+                  "start_point": "data_in",
+                  "transition": "fall"
+                }
+              ]
+            }
+          ],
+          "name": "vclk"
+        }
+      ],
+      "points": [
+        {
+          "arrival": 0.0,
+          "clock_effective": {
+            "arrival": [
+              {
+                "analysis": "max",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "max",
+                "transition": "fall",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "fall",
+                "value": 0.0
+              }
+            ],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": [
+              {
+                "analysis": "max",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "max",
+                "transition": "fall",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "fall",
+                "value": 0.0
+              }
+            ]
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [
+              {
+                "analysis": "max",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "max",
+                "transition": "fall",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "fall",
+                "value": 0.0
+              }
+            ],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": [
+              {
+                "analysis": "max",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "max",
+                "transition": "fall",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "rise",
+                "value": 0.0
+              },
+              {
+                "analysis": "min",
+                "transition": "fall",
+                "value": 0.0
+              }
+            ]
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.0
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.0
+            }
+          ],
+          "is_clock_point": true,
+          "launch_time": 0.0,
+          "level": 1,
+          "node": "clk",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 0.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.0,
+              "source_type": "input",
+              "start_point": "clk",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 5.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 5.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.0,
+              "source_type": "input",
+              "start_point": "clk",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.0,
+              "source_type": "input",
+              "start_point": "clk",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.0,
+              "source_type": "input",
+              "start_point": "clk",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "",
+          "predecessor_arc": {
+            "sentinel": "missing"
+          },
+          "required": {
+            "sentinel": "pos_inf"
+          },
+          "slack": 0.0
+        },
+        {
+          "arrival": 1.0,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.05
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.05
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.05
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.05
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 1,
+          "node": "data_in",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.2,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.2,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "",
+              "predecessor_arc": {
+                "sentinel": "missing"
+              },
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "none",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "",
+          "predecessor_arc": {
+            "sentinel": "missing"
+          },
+          "required": 8.938877192982456,
+          "slack": 7.938877192982456
+        },
+        {
+          "arrival": 1.0611228070175438,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.021135477582846007
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.019996588693957117
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.021135477582846007
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.019996588693957117
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 8,
+          "node": "data_out",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.079030539311242,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:Y",
+              "predecessor_arc": "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.021135477582846007,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.078067576348279,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:Y",
+              "predecessor_arc": "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.019996588693957117,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.279030539311242,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:Y",
+              "predecessor_arc": "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.021135477582846007,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.278067576348279,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:Y",
+              "predecessor_arc": "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.019996588693957117,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "u2:Y",
+          "predecessor_arc": "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "required": 9.0,
+          "slack": 7.938877192982456
+        },
+        {
+          "arrival": 1.0,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.05
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.05
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.05
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.05
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 2,
+          "node": "u0:A",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "data_in",
+              "predecessor_arc": "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.0,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "data_in",
+              "predecessor_arc": "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.2,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "data_in",
+              "predecessor_arc": "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.2,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "data_in",
+              "predecessor_arc": "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.05,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "data_in",
+          "predecessor_arc": "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "required": 8.938877192982456,
+          "slack": 7.938877192982456
+        },
+        {
+          "arrival": 1.0183040935672514,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.02219298245614035
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.021192982456140354
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.02219298245614035
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.021192982456140354
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 3,
+          "node": "u0:Y",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.029415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:A",
+              "predecessor_arc": "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.029415204678362582,
+              "predecessor_transition": "rise",
+              "slew": 0.02219298245614035,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.027415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:A",
+              "predecessor_arc": "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.027415204678362576,
+              "predecessor_transition": "fall",
+              "slew": 0.021192982456140354,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.229415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:A",
+              "predecessor_arc": "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.029415204678362582,
+              "predecessor_transition": "rise",
+              "slew": 0.02219298245614035,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.227415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:A",
+              "predecessor_arc": "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.027415204678362576,
+              "predecessor_transition": "fall",
+              "slew": 0.021192982456140354,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "u0:A",
+          "predecessor_arc": "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "required": 8.957181286549709,
+          "slack": 7.938877192982457
+        },
+        {
+          "arrival": 1.0183040935672514,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.02219298245614035
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.021192982456140354
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.02219298245614035
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.021192982456140354
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 4,
+          "node": "u1:A",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.029415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:Y",
+              "predecessor_arc": "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.02219298245614035,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.027415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:Y",
+              "predecessor_arc": "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.021192982456140354,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.229415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:Y",
+              "predecessor_arc": "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.02219298245614035,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.227415204678363,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u0:Y",
+              "predecessor_arc": "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.021192982456140354,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "u0:Y",
+          "predecessor_arc": "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "required": 8.957181286549709,
+          "slack": 7.938877192982457
+        },
+        {
+          "arrival": 1.0386081871345028,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.018391812865497077
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.017558479532163745
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.018391812865497077
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.017558479532163745
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 5,
+          "node": "u1:Y",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.052428849902535,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:A",
+              "predecessor_arc": "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.025013645224171547,
+              "predecessor_transition": "fall",
+              "slew": 0.018391812865497077,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.053651072124757,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:A",
+              "predecessor_arc": "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.02423586744639377,
+              "predecessor_transition": "rise",
+              "slew": 0.017558479532163745,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.252428849902535,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:A",
+              "predecessor_arc": "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.025013645224171547,
+              "predecessor_transition": "fall",
+              "slew": 0.018391812865497077,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.253651072124757,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:A",
+              "predecessor_arc": "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.02423586744639377,
+              "predecessor_transition": "rise",
+              "slew": 0.017558479532163745,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "u1:A",
+          "predecessor_arc": "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "required": 8.97748538011696,
+          "slack": 7.938877192982457
+        },
+        {
+          "arrival": 1.0386081871345028,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.018391812865497077
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.017558479532163745
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.018391812865497077
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.017558479532163745
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 6,
+          "node": "u2:A",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.052428849902535,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:Y",
+              "predecessor_arc": "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.018391812865497077,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.053651072124757,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:Y",
+              "predecessor_arc": "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.017558479532163745,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.252428849902535,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:Y",
+              "predecessor_arc": "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "rise",
+              "slew": 0.018391812865497077,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.253651072124757,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u1:Y",
+              "predecessor_arc": "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.0,
+              "predecessor_transition": "fall",
+              "slew": 0.017558479532163745,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "u1:Y",
+          "predecessor_arc": "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "required": 8.97748538011696,
+          "slack": 7.938877192982457
+        },
+        {
+          "arrival": 1.0611228070175438,
+          "clock_effective": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "clock_name": "vclk",
+          "clock_physical": {
+            "arrival": [],
+            "predecessor": [],
+            "predecessor_arc_delay": [],
+            "predecessor_transition": [],
+            "slew": []
+          },
+          "data_slew": [
+            {
+              "analysis": "max",
+              "transition": "rise",
+              "value": 0.021135477582846007
+            },
+            {
+              "analysis": "max",
+              "transition": "fall",
+              "value": 0.019996588693957117
+            },
+            {
+              "analysis": "min",
+              "transition": "rise",
+              "value": 0.021135477582846007
+            },
+            {
+              "analysis": "min",
+              "transition": "fall",
+              "value": 0.019996588693957117
+            }
+          ],
+          "is_clock_point": false,
+          "launch_time": 0.0,
+          "level": 7,
+          "node": "u2:Y",
+          "path_states": [
+            {
+              "analysis": "max",
+              "arrival": 1.079030539311242,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:A",
+              "predecessor_arc": "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.026601689408706955,
+              "predecessor_transition": "rise",
+              "slew": 0.021135477582846007,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "max",
+              "arrival": 1.078067576348279,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:A",
+              "predecessor_arc": "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.02441650422352177,
+              "predecessor_transition": "fall",
+              "slew": 0.019996588693957117,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.279030539311242,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:A",
+              "predecessor_arc": "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.026601689408706955,
+              "predecessor_transition": "rise",
+              "slew": 0.021135477582846007,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "rise",
+              "transition": "rise"
+            },
+            {
+              "analysis": "min",
+              "arrival": 0.278067576348279,
+              "clock_name": "vclk",
+              "crpr_clock_pin": "",
+              "crpr_clock_transition": "none",
+              "launch_clock": "vclk",
+              "launch_time": 0.0,
+              "predecessor": "u2:A",
+              "predecessor_arc": "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+              "predecessor_arc_delay": 0.02441650422352177,
+              "predecessor_transition": "fall",
+              "slew": 0.019996588693957117,
+              "source_type": "input",
+              "start_point": "data_in",
+              "state_transition": "fall",
+              "transition": "fall"
+            }
+          ],
+          "predecessor": "u2:A",
+          "predecessor_arc": "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "required": 9.0,
+          "slack": 7.938877192982456
+        }
+      ],
+      "summary": {
+        "checked_endpoint_count": 1,
+        "timing_path_count": 2,
+        "total_negative_slack": 0.0,
+        "unconstrained_endpoint_count": 0,
+        "violating_endpoint_count": 0,
+        "worst_endpoint": "data_out",
+        "worst_slack": 0.078067576348279
+      }
+    },
+    "topology": {
+      "arcs": [
+        {
+          "identity": [
+            "data_in",
+            "u0:A",
+            "net",
+            "data_in",
+            "",
+            "",
+            false,
+            false,
+            false
+          ],
+          "is_clock": false,
+          "is_disabled": false,
+          "is_loop_disabled": false,
+          "key": "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "library_sink_port": "",
+          "library_source_port": "",
+          "owner": "data_in",
+          "parallel_ordinal": 0,
+          "sink": "u0:A",
+          "source": "data_in",
+          "type": "net"
+        },
+        {
+          "identity": [
+            "u0:A",
+            "u0:Y",
+            "cell",
+            "u0",
+            "A",
+            "Y",
+            false,
+            false,
+            false
+          ],
+          "is_clock": false,
+          "is_disabled": false,
+          "is_loop_disabled": false,
+          "key": "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "library_sink_port": "Y",
+          "library_source_port": "A",
+          "owner": "u0",
+          "parallel_ordinal": 0,
+          "sink": "u0:Y",
+          "source": "u0:A",
+          "type": "cell"
+        },
+        {
+          "identity": [
+            "u0:Y",
+            "u1:A",
+            "net",
+            "n0",
+            "",
+            "",
+            false,
+            false,
+            false
+          ],
+          "is_clock": false,
+          "is_disabled": false,
+          "is_loop_disabled": false,
+          "key": "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "library_sink_port": "",
+          "library_source_port": "",
+          "owner": "n0",
+          "parallel_ordinal": 0,
+          "sink": "u1:A",
+          "source": "u0:Y",
+          "type": "net"
+        },
+        {
+          "identity": [
+            "u1:A",
+            "u1:Y",
+            "cell",
+            "u1",
+            "A",
+            "Y",
+            false,
+            false,
+            false
+          ],
+          "is_clock": false,
+          "is_disabled": false,
+          "is_loop_disabled": false,
+          "key": "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "library_sink_port": "Y",
+          "library_source_port": "A",
+          "owner": "u1",
+          "parallel_ordinal": 0,
+          "sink": "u1:Y",
+          "source": "u1:A",
+          "type": "cell"
+        },
+        {
+          "identity": [
+            "u1:Y",
+            "u2:A",
+            "net",
+            "n1",
+            "",
+            "",
+            false,
+            false,
+            false
+          ],
+          "is_clock": false,
+          "is_disabled": false,
+          "is_loop_disabled": false,
+          "key": "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "library_sink_port": "",
+          "library_source_port": "",
+          "owner": "n1",
+          "parallel_ordinal": 0,
+          "sink": "u2:A",
+          "source": "u1:Y",
+          "type": "net"
+        },
+        {
+          "identity": [
+            "u2:A",
+            "u2:Y",
+            "cell",
+            "u2",
+            "A",
+            "Y",
+            false,
+            false,
+            false
+          ],
+          "is_clock": false,
+          "is_disabled": false,
+          "is_loop_disabled": false,
+          "key": "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000",
+          "library_sink_port": "Y",
+          "library_source_port": "A",
+          "owner": "u2",
+          "parallel_ordinal": 0,
+          "sink": "u2:Y",
+          "source": "u2:A",
+          "type": "cell"
+        },
+        {
+          "identity": [
+            "u2:Y",
+            "data_out",
+            "net",
+            "data_out",
+            "",
+            "",
+            false,
+            false,
+            false
+          ],
+          "is_clock": false,
+          "is_disabled": false,
+          "is_loop_disabled": false,
+          "key": "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000",
+          "library_sink_port": "",
+          "library_source_port": "",
+          "owner": "data_out",
+          "parallel_ordinal": 0,
+          "sink": "data_out",
+          "source": "u2:Y",
+          "type": "net"
+        }
+      ],
+      "counts": {
+        "arcs": 7,
+        "instances": 3,
+        "nets": 5,
+        "path_groups": 1,
+        "pins": 9,
+        "timing_points": 9
+      },
+      "end_points": [
+        "data_out"
+      ],
+      "incoming": {
+        "clk": [],
+        "data_in": [],
+        "data_out": [
+          "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u0:A": [
+          "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u0:Y": [
+          "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u1:A": [
+          "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u1:Y": [
+          "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u2:A": [
+          "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u2:Y": [
+          "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000"
+        ]
+      },
+      "nodes": [
+        {
+          "cell": "",
+          "direction": "input",
+          "instance": "",
+          "is_port": true,
+          "key": "clk",
+          "level": 1,
+          "net": "clk"
+        },
+        {
+          "cell": "",
+          "direction": "input",
+          "instance": "",
+          "is_port": true,
+          "key": "data_in",
+          "level": 1,
+          "net": "data_in"
+        },
+        {
+          "cell": "",
+          "direction": "output",
+          "instance": "",
+          "is_port": true,
+          "key": "data_out",
+          "level": 8,
+          "net": "data_out"
+        },
+        {
+          "cell": "BUF_X1",
+          "direction": "input",
+          "instance": "u0",
+          "is_port": false,
+          "key": "u0:A",
+          "level": 2,
+          "net": "data_in"
+        },
+        {
+          "cell": "BUF_X1",
+          "direction": "output",
+          "instance": "u0",
+          "is_port": false,
+          "key": "u0:Y",
+          "level": 3,
+          "net": "n0"
+        },
+        {
+          "cell": "INV_X1",
+          "direction": "input",
+          "instance": "u1",
+          "is_port": false,
+          "key": "u1:A",
+          "level": 4,
+          "net": "n0"
+        },
+        {
+          "cell": "INV_X1",
+          "direction": "output",
+          "instance": "u1",
+          "is_port": false,
+          "key": "u1:Y",
+          "level": 5,
+          "net": "n1"
+        },
+        {
+          "cell": "BUF_X1",
+          "direction": "input",
+          "instance": "u2",
+          "is_port": false,
+          "key": "u2:A",
+          "level": 6,
+          "net": "n1"
+        },
+        {
+          "cell": "BUF_X1",
+          "direction": "output",
+          "instance": "u2",
+          "is_port": false,
+          "key": "u2:Y",
+          "level": 7,
+          "net": "data_out"
+        }
+      ],
+      "outgoing": {
+        "clk": [],
+        "data_in": [
+          "[\"data_in\",\"u0:A\",\"net\",\"data_in\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "data_out": [],
+        "u0:A": [
+          "[\"u0:A\",\"u0:Y\",\"cell\",\"u0\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u0:Y": [
+          "[\"u0:Y\",\"u1:A\",\"net\",\"n0\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u1:A": [
+          "[\"u1:A\",\"u1:Y\",\"cell\",\"u1\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u1:Y": [
+          "[\"u1:Y\",\"u2:A\",\"net\",\"n1\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u2:A": [
+          "[\"u2:A\",\"u2:Y\",\"cell\",\"u2\",\"A\",\"Y\",false,false,false]#parallel=00000000000000000000"
+        ],
+        "u2:Y": [
+          "[\"u2:Y\",\"data_out\",\"net\",\"data_out\",\"\",\"\",false,false,false]#parallel=00000000000000000000"
+        ]
+      },
+      "start_points": [
+        "clk",
+        "data_in"
+      ],
+      "timing_order": [
+        "clk",
+        "data_in",
+        "u0:A",
+        "u0:Y",
+        "u1:A",
+        "u1:Y",
+        "u2:A",
+        "u2:Y",
+        "data_out"
+      ]
+    }
+  },
+  "topology_hash": "94c0754e0583a40f7ee61e7d44d306f62845d5899bc7109e757ed4549a8b5aa0"
+}

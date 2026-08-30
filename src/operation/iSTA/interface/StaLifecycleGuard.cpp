@@ -18,6 +18,7 @@
 
 #include <cstdio>
 #include <exception>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -96,6 +97,27 @@ void emitStaLifecycleDiagnostic(std::string_view prefix, std::string_view messag
   std::fwrite(prefix.data(), sizeof(char), prefix.size(), stderr);
   std::fwrite(message.data(), sizeof(char), message.size(), stderr);
   std::fputc('\n', stderr);
+}
+
+StaSessionTokenAllocator::StaSessionTokenAllocator(std::uint64_t initial) noexcept : _next(initial)
+{
+}
+
+std::optional<std::uint64_t> StaSessionTokenAllocator::allocate() noexcept
+{
+  std::uint64_t current = _next.load(std::memory_order_relaxed);
+  while (current != 0) {
+    const std::uint64_t successor = current == std::numeric_limits<std::uint64_t>::max() ? 0 : current + 1;
+    if (_next.compare_exchange_weak(current, successor, std::memory_order_relaxed, std::memory_order_relaxed))
+      return current;
+  }
+  return std::nullopt;
+}
+
+StaSessionTokenAllocator& productionStaSessionTokenAllocator() noexcept
+{
+  static StaSessionTokenAllocator allocator;
+  return allocator;
 }
 
 StaLifecycleGuard::~StaLifecycleGuard() noexcept
@@ -270,6 +292,8 @@ StaLeaseResult StaOwnerLease::acquireLegacy()
 
 StaLeaseResult StaOwnerLease::acquireSession(uint64_t token)
 {
+  if (token == 0)
+    return denied(false, "STA session token must be nonzero");
   return acquire(StaOwner::session(token));
 }
 
@@ -280,6 +304,8 @@ StaLeaseResult StaOwnerLease::requireLegacyUse() const
 
 StaLeaseResult StaOwnerLease::requireSessionUse(uint64_t token) const
 {
+  if (token == 0)
+    return denied(false, "STA session token must be nonzero");
   return requireUse(StaOwner::session(token));
 }
 
@@ -290,6 +316,8 @@ StaLeaseResult StaOwnerLease::requireLegacyClose() const
 
 StaLeaseResult StaOwnerLease::requireSessionClose(uint64_t token) const
 {
+  if (token == 0)
+    return denied(false, "STA session token must be nonzero");
   return requireClose(StaOwner::session(token));
 }
 

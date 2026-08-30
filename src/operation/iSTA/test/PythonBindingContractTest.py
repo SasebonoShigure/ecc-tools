@@ -19,7 +19,6 @@ import itertools
 
 import ecc_py
 
-
 RECORD_FIELDS = {
     "requested_backend",
     "requested_update_strategy",
@@ -31,6 +30,12 @@ RECORD_FIELDS = {
     "incremental_batch_executed",
     "fallback_to_full",
     "fallback_reason",
+}
+
+VALID_CONTEXT = {
+    "liberty_corner": "slow",
+    "temperature": "25",
+    "rc_corner": "__no_rc_corner__",
 }
 
 
@@ -98,12 +103,38 @@ def check_matrix():
 def check_initialize_error():
     request = make_request("cuda", "full", "error")
     session = ecc_py.create_incremental_sta_session(request)
+    assert session.state == "created"
+    assert session.session_token is None
+    assert session.csr_snapshot_observation is None
+
+    invalid_context = dict(VALID_CONTEXT)
+    invalid_context["liberty_corner"] = ""
+    try:
+        session.initialize(
+            analysis_context=invalid_context,
+            config="/definitely/missing/step7-sta-config.json",
+            config_dict={},
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid analysis context accepted")
+    assert session.state == "created"
+    assert session.session_token is None
+    assert session.csr_snapshot_observation is None
+
     require_sta_error(
-        lambda: session.initialize(config="", config_dict={}),
+        lambda: session.initialize(
+            analysis_context=VALID_CONTEXT,
+            config="",
+            config_dict={},
+        ),
         request,
         "closed",
     )
     assert session.state == "closed"
+    assert session.session_token is None
+    assert session.csr_snapshot_observation is None
     session.close()
 
 

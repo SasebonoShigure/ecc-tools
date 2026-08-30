@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecos.org/schemas/reference_input_result_v1.schema.json",
+  "title": "Detached complete CSR reference-input poison probe, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "name",
+    "top",
+    "expected_clock",
+    "context",
+    "repeat_index",
+    "run_nonce",
+    "input_case_sha256",
+    "session_token",
+    "pre_candidate_wire_hex",
+    "post_candidate_wire_hex",
+    "pre_raw_projection_hex",
+    "post_raw_projection_hex",
+    "canaries",
+    "complete"
+  ],
+  "properties": {
+    "schema": {"const": "ista-csr-reference-input-probe/1"},
+    "name": {"type": "string", "minLength": 1},
+    "top": {"type": "string", "minLength": 1},
+    "expected_clock": {"type": "string", "minLength": 1},
+    "context": {"$ref": "#/$defs/context"},
+    "repeat_index": {"$ref": "#/$defs/u64"},
+    "run_nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "input_case_sha256": {"$ref": "#/$defs/sha256"},
+    "session_token": {"type": "integer", "const": 1, "minimum": 1, "maximum": 18446744073709551615},
+    "pre_candidate_wire_hex": {"$ref": "#/$defs/lowerHex"},
+    "post_candidate_wire_hex": {"$ref": "#/$defs/lowerHex"},
+    "pre_raw_projection_hex": {"$ref": "#/$defs/lowerHex"},
+    "post_raw_projection_hex": {"$ref": "#/$defs/lowerHex"},
+    "canaries": {
+      "type": "array",
+      "minItems": 17,
+      "maxItems": 17,
+      "items": {"$ref": "#/$defs/canary"}
+    },
+    "complete": {"const": true}
+  },
+  "$defs": {
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "lowerHex": {"type": "string", "pattern": "^(?:[0-9a-f]{2})+$"},
+    "family": {
+      "enum": [
+        "timing_point_level",
+        "timing_point_is_clock_point",
+        "timing_point_scalars",
+        "timing_point_clock_arrival_maps",
+        "timing_point_clock_slew_maps",
+        "timing_point_clock_predecessor_maps",
+        "timing_point_clock_predecessor_arc_delay_maps",
+        "timing_point_clock_predecessor_transition_maps",
+        "timing_point_data_slew_map",
+        "timing_point_path_state_map",
+        "arc_scalars",
+        "arc_transition_maps",
+        "arc_input_output_delay_map",
+        "arc_graph_delay_map",
+        "arc_timing_arc_delay_map",
+        "arc_timing_arc_fallback_provenance",
+        "database_timing_order"
+      ]
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["liberty_corner", "temperature", "rc_corner"],
+      "properties": {
+        "liberty_corner": {"type": "string", "minLength": 1},
+        "temperature": {"type": "string", "minLength": 1},
+        "rc_corner": {"type": "string", "minLength": 1}
+      }
+    },
+    "canary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "family",
+        "pristine_typed_bytes_hex",
+        "before_typed_bytes_hex",
+        "after_typed_bytes_hex"
+      ],
+      "properties": {
+        "family": {"$ref": "#/$defs/family"},
+        "pristine_typed_bytes_hex": {"$ref": "#/$defs/lowerHex"},
+        "before_typed_bytes_hex": {"$ref": "#/$defs/lowerHex"},
+        "after_typed_bytes_hex": {"$ref": "#/$defs/lowerHex"}
+      }
+    }
+  }
+}

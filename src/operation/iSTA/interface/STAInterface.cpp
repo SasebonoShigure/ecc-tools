@@ -16,6 +16,7 @@
 // ***************************************************************************************
 #include "STAInterface.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <exception>
 #include <set>
@@ -36,26 +37,7 @@
 namespace ista {
 namespace {
 
-std::string currentExceptionMessage()
-{
-  try {
-    throw;
-  } catch (const std::exception& error) {
-    return error.what();
-  } catch (...) {
-    return "unknown native exception";
-  }
-}
-
-template <typename Callable>
-StaOperationResult invokeLifecycleOperation(const char* operation, Callable&& callable)
-{
-  try {
-    return callable();
-  } catch (...) {
-    return StaOperationResult::cleanupFailure(std::string(operation) + " threw before cleanup could be confirmed: " + currentExceptionMessage());
-  }
-}
+std::atomic<std::uint64_t> sta_interface_constructor_count{0};
 
 }  // namespace
 
@@ -63,439 +45,35 @@ StaOperationResult invokeLifecycleOperation(const char* operation, Callable&& ca
 
 STAInterface::STAInterface() : _lifecycle_operations(&defaultStaProductionLifecycleOperations())
 {
+  sta_interface_constructor_count.fetch_add(1, std::memory_order_relaxed);
 }
 
 STAInterface& STAInterface::getInst()
 {
-  if (_sta_interface_instance == nullptr) {
-    _sta_interface_instance = new STAInterface();
-  }
-  return *_sta_interface_instance;
+  static STAInterface* const process_instance = new STAInterface();
+  return *process_instance;
+}
+
+std::uint64_t STAInterface::constructorCountForTesting() noexcept
+{
+  return sta_interface_constructor_count.load(std::memory_order_relaxed);
 }
 
 void STAInterface::destroyInst()
 {
-  if (_sta_interface_instance != nullptr) {
-    {
-      std::scoped_lock lock(_sta_interface_instance->_lifecycle_mutex);
-      if (!_sta_interface_instance->_lifecycle.isNone()) {
-        throw std::runtime_error("cannot destroy STAInterface while lifecycle is " + _sta_interface_instance->_lifecycle.describe());
-      }
-    }
-    delete _sta_interface_instance;
-    _sta_interface_instance = nullptr;
-  }
+  if (operationSentinelActive())
+    throw std::runtime_error("cannot destroy STAInterface recursively");
+
+  STAInterface& instance = getInst();
+  std::unique_lock operation_lock(instance._operation_mutex);
+  OperationGuard authority(&instance, std::move(operation_lock));
+  std::scoped_lock lifecycle_lock(instance._lifecycle_mutex);
+  if (!instance._lifecycle.isNone() || instance._close_pending.kind != StaOwnerKind::kNone)
+    throw std::runtime_error("cannot destroy STAInterface while lifecycle is " + instance._lifecycle.describe());
+  instance._is_initialized = false;
+  instance._is_timing_updated = false;
+  instance._lifecycle_operations = &defaultStaProductionLifecycleOperations();
 }
-
-#if 1  // 外部调用STA的API
-
-#if 1  // iSTA
-
-void STAInterface::initSTA(std::map<std::string, std::any> config_map)
-{
-  StaStatus status = initializeOwned(StaOwner::legacy(), config_map);
-  if (!status.ok())
-    throw std::runtime_error(status.message);
-}
-
-void STAInterface::runSTA()
-{
-  StaStatus status = runOwned(StaOwner::legacy());
-  if (!status.ok())
-    throw std::runtime_error(status.message);
-}
-
-void STAInterface::extractLib()
-{
-  requireLegacyOwner();
-  StaOperationResult result = invokeLifecycleOperation("STA extract", [this] { return _lifecycle_operations->extractLib(); });
-  if (!result.succeeded) {
-    if (result.cleanup_failed) {
-      std::scoped_lock lock(_lifecycle_mutex);
-      _lifecycle.quarantineCurrent();
-    }
-    throw std::runtime_error(result.message);
-  }
-}
-
-void STAInterface::destroySTA()
-{
-  {
-    std::scoped_lock lock(_lifecycle_mutex);
-    if (_lifecycle.isNone())
-      return;
-  }
-  StaStatus status = closeOwned(StaOwner::legacy());
-  if (!status.ok())
-    throw std::runtime_error(status.message);
-}
-
-bool STAInterface::updateTiming(std::string& error_message)
-{
-  if (!isSTAInitialized(error_message)) {
-    return false;
-  }
-  if (_is_timing_updated) {
-    error_message = "update_timing may only be called once after init_sta";
-    return false;
-  }
-
-  StaOperationResult result = invokeLifecycleOperation("STA timing update", [this] { return _lifecycle_operations->updateTiming(); });
-  if (!result.succeeded) {
-    error_message = result.message;
-    if (result.cleanup_failed) {
-      std::scoped_lock lock(_lifecycle_mutex);
-      _lifecycle.quarantineCurrent();
-    }
-    return false;
-  }
-  _is_timing_updated = true;
-  return true;
-}
-
-bool STAInterface::writeSDF(const std::string& file_path, std::string& error_message)
-{
-  if (!isSTAInitialized(error_message)) {
-    return false;
-  }
-  if (!_is_timing_updated) {
-    error_message = "update_timing must be called before write_sdf";
-    return false;
-  }
-  if (file_path.empty()) {
-    error_message = "write_sdf requires a non-empty output file path";
-    return false;
-  }
-
-  StaOperationResult result = invokeLifecycleOperation("STA SDF write", [this, &file_path] { return _lifecycle_operations->writeSdf(file_path); });
-  if (!result.succeeded) {
-    error_message = result.message;
-    if (result.cleanup_failed) {
-      std::scoped_lock lock(_lifecycle_mutex);
-      _lifecycle.quarantineCurrent();
-    }
-    return false;
-  }
-  return true;
-}
-
-bool STAInterface::reportTiming(std::string& error_message)
-{
-  if (!isSTAInitialized(error_message)) {
-    return false;
-  }
-  if (!_is_timing_updated) {
-    error_message = "update_timing must be called before report_timing";
-    return false;
-  }
-
-  StaOperationResult result = invokeLifecycleOperation("STA timing report", [this] { return _lifecycle_operations->reportTiming(); });
-  if (!result.succeeded) {
-    error_message = result.message;
-    if (result.cleanup_failed) {
-      std::scoped_lock lock(_lifecycle_mutex);
-      _lifecycle.quarantineCurrent();
-    }
-    return false;
-  }
-  return true;
-}
-
-bool STAInterface::createClock(const std::string& clock_name, const double period, const double rise_edge, const double fall_edge,
-                               const std::vector<std::string>& source_list, std::string& error_message)
-{
-  if (!isSTAInitialized(error_message)) {
-    return false;
-  }
-  if (clock_name.empty()) {
-    error_message = "create_clock requires a non-empty -name";
-    return false;
-  }
-  if (!std::isfinite(period) || period <= 0.0) {
-    error_message = "create_clock -period must be a positive finite value";
-    return false;
-  }
-  if (!std::isfinite(rise_edge) || !std::isfinite(fall_edge) || rise_edge < 0.0 || fall_edge < 0.0 || rise_edge >= fall_edge || fall_edge >= period) {
-    error_message = "create_clock -waveform must satisfy 0 <= rise < fall < period";
-    return false;
-  }
-  if (source_list.empty()) {
-    error_message = "create_clock requires at least one source port";
-    return false;
-  }
-
-  Database& database = STADM.getDatabase();
-  auto& clock_map = database.get_timing_constraint().get_clock_map();
-  if (clock_map.contains(clock_name)) {
-    STALOG.warn(Loc::current(), "clock '", clock_name, "' already exists and will be overwritten");
-  }
-
-  std::vector<std::string> unique_source_list;
-  std::set<std::string> source_set;
-  for (const auto& source_name : source_list) {
-    auto pin_it = database.get_pin_map().find(source_name);
-    if (pin_it == database.get_pin_map().end()) {
-      STALOG.warn(Loc::current(), "source '", source_name, "' not found");
-      error_message = "clock source is not a top-level port";
-      return false;
-    }
-    if (!pin_it->second.get_is_port()) {
-      STALOG.warn(Loc::current(), "clock source '", source_name, "' found but is not a top-level port");
-      error_message = "clock source is not a top-level port";
-      return false;
-    }
-    if (source_set.insert(source_name).second) {
-      unique_source_list.push_back(source_name);
-    }
-  }
-
-  TimingClock timing_clock;
-  timing_clock.set_clock_name(clock_name);
-  timing_clock.set_period(period);
-  timing_clock.set_rise_edge(rise_edge);
-  timing_clock.set_fall_edge(fall_edge);
-  timing_clock.set_source_list(unique_source_list);
-  timing_clock.set_is_propagated(false);
-  clock_map[clock_name] = timing_clock;
-  return true;
-}
-
-bool STAInterface::setPropagatedClock(const std::vector<std::string>& clock_name_list, std::string& error_message)
-{
-  if (!isSTAInitialized(error_message)) {
-    return false;
-  }
-  if (clock_name_list.empty()) {
-    error_message = "set_propagated_clock requires at least one clock";
-    return false;
-  }
-
-  auto& clock_map = STADM.getDatabase().get_timing_constraint().get_clock_map();
-  for (const std::string& clock_name : clock_name_list) {
-    if (!clock_map.contains(clock_name)) {
-      STALOG.warn(Loc::current(), "clock '", clock_name, "' does not exist");
-      error_message = "clock does not exist";
-      return false;
-    }
-  }
-  for (const auto& clock_name : clock_name_list) {
-    clock_map[clock_name].set_is_propagated(true);
-  }
-  return true;
-}
-
-bool STAInterface::getPorts(const std::vector<std::string>& port_name_list, std::vector<std::string>& resolved_port_list, std::string& error_message)
-{
-  if (!isSTAInitialized(error_message)) {
-    return false;
-  }
-  if (port_name_list.empty()) {
-    error_message = "get_ports requires at least one port name";
-    return false;
-  }
-
-  Database& database = STADM.getDatabase();
-  resolved_port_list.clear();
-  for (const std::string& port_name : port_name_list) {
-    auto pin_it = database.get_pin_map().find(port_name);
-    if (pin_it == database.get_pin_map().end()) {
-      STALOG.warn(Loc::current(), "source '", port_name, "' not found");
-      error_message = "clock source not found";
-      return false;
-    }
-    if (!pin_it->second.get_is_port()) {
-      STALOG.warn(Loc::current(), "clock source '", port_name, "' found but is not a top-level port");
-      error_message = "clock source is not a top-level port";
-      return false;
-    }
-    if (auto pin_it = database.get_pin_map().find(port_name); pin_it == database.get_pin_map().end() || !pin_it->second.get_is_port()) {
-      STALOG.warn(Loc::current(), "port '", port_name, "' does not exist");
-      error_message = "port does not exist";
-      return false;
-    }
-    resolved_port_list.push_back(port_name);
-  }
-  return true;
-}
-
-bool STAInterface::getClocks(const std::vector<std::string>& clock_name_list, std::vector<std::string>& resolved_clock_list, std::string& error_message)
-{
-  if (!isSTAInitialized(error_message)) {
-    return false;
-  }
-  if (clock_name_list.empty()) {
-    error_message = "get_clocks requires at least one clock name";
-    return false;
-  }
-
-  std::map<std::string, TimingClock>& clock_map = STADM.getDatabase().get_timing_constraint().get_clock_map();
-  resolved_clock_list.clear();
-  for (const std::string& clock_name : clock_name_list) {
-    if (!clock_map.contains(clock_name)) {
-      STALOG.error(Loc::current(), "clock '", clock_name, "' does not exist");
-      error_message = "clock does not exist";
-      return false;
-    }
-    resolved_clock_list.push_back(clock_name);
-  }
-  return true;
-}
-
-bool STAInterface::isSTAInitialized(std::string& error_message) const
-{
-  if (!isLegacyOwner(error_message))
-    return false;
-  if (_is_initialized)
-    return true;
-  error_message = "init_sta must be called before STA commands";
-  return false;
-}
-
-StaStatus STAInterface::initializeSession(uint64_t token, std::map<std::string, std::any>& config_map)
-{
-  return initializeOwned(StaOwner::session(token), config_map);
-}
-
-StaStatus STAInterface::runSessionBaseline(uint64_t token)
-{
-  return runOwned(StaOwner::session(token));
-}
-
-StaStatus STAInterface::closeSession(uint64_t token)
-{
-  return closeOwned(StaOwner::session(token));
-}
-
-StaStatus STAInterface::initializeOwned(StaOwner owner, std::map<std::string, std::any>& config_map)
-{
-  {
-    std::scoped_lock lock(_lifecycle_mutex);
-    StaLeaseResult lease = owner.kind == StaOwnerKind::kLegacy ? _lifecycle.acquireLegacy() : _lifecycle.acquireSession(owner.token);
-    if (!lease.succeeded) {
-      return StaStatus::failure(lease.quarantined ? StaSessionStatusCode::kQuarantined : StaSessionStatusCode::kOwnerConflict, StaSessionState::kCreated,
-                                lease.message);
-    }
-  }
-  StaOperationResult result;
-  try {
-    result = _lifecycle_operations->initialize(config_map);
-  } catch (...) {
-    const std::string primary_error = "STA initialization threw: " + currentExceptionMessage();
-    StaOperationResult rollback = invokeLifecycleOperation("STA initialization rollback", [this] { return _lifecycle_operations->close(); });
-    _is_initialized = false;
-    _is_timing_updated = false;
-    {
-      std::scoped_lock lock(_lifecycle_mutex);
-      if (rollback.succeeded)
-        _lifecycle.releaseAfterRollback();
-      else
-        _lifecycle.quarantineAfterRollback();
-    }
-    if (!rollback.succeeded) {
-      return StaStatus::failure(StaSessionStatusCode::kCleanupFailed, StaSessionState::kClosed,
-                                primary_error + "; rollback cleanup failed: " + rollback.message);
-    }
-    return StaStatus::failure(StaSessionStatusCode::kInitFailed, StaSessionState::kClosed, primary_error);
-  }
-  if (result.succeeded) {
-    _is_initialized = true;
-    _is_timing_updated = false;
-    return StaStatus::success(StaSessionState::kInitialized);
-  }
-  {
-    std::scoped_lock lock(_lifecycle_mutex);
-    if (result.cleanup_failed)
-      _lifecycle.quarantineAfterRollback();
-    else
-      _lifecycle.releaseAfterRollback();
-  }
-  return StaStatus::failure(result.cleanup_failed ? StaSessionStatusCode::kCleanupFailed : StaSessionStatusCode::kInitFailed, StaSessionState::kClosed,
-                            result.message);
-}
-
-StaStatus STAInterface::runOwned(StaOwner owner)
-{
-  {
-    std::scoped_lock lock(_lifecycle_mutex);
-    StaLeaseResult lease = owner.kind == StaOwnerKind::kLegacy ? _lifecycle.requireLegacyUse() : _lifecycle.requireSessionUse(owner.token);
-    if (!lease.succeeded) {
-      return StaStatus::failure(lease.quarantined ? StaSessionStatusCode::kQuarantined : StaSessionStatusCode::kOwnerConflict, StaSessionState::kInitialized,
-                                lease.message);
-    }
-  }
-  if (!_is_initialized) {
-    return StaStatus::failure(StaSessionStatusCode::kInvalidState, StaSessionState::kCreated, "init_sta must be called before STA commands");
-  }
-  StaOperationResult result = invokeLifecycleOperation("STA full baseline", [this] { return _lifecycle_operations->runFullBaseline(); });
-  if (result.succeeded)
-    return StaStatus::success(StaSessionState::kBaselineExecuted);
-  if (result.cleanup_failed) {
-    std::scoped_lock lock(_lifecycle_mutex);
-    _lifecycle.quarantineCurrent();
-  }
-  return StaStatus::failure(result.cleanup_failed ? StaSessionStatusCode::kCleanupFailed : StaSessionStatusCode::kRunFailed, StaSessionState::kPoisoned,
-                            result.message);
-}
-
-StaStatus STAInterface::closeOwned(StaOwner owner)
-{
-  {
-    std::scoped_lock lock(_lifecycle_mutex);
-    StaLeaseResult lease = owner.kind == StaOwnerKind::kLegacy ? _lifecycle.requireLegacyClose() : _lifecycle.requireSessionClose(owner.token);
-    if (!lease.succeeded) {
-      return StaStatus::failure(lease.quarantined ? StaSessionStatusCode::kQuarantined : StaSessionStatusCode::kOwnerConflict, StaSessionState::kClosed,
-                                lease.message);
-    }
-  }
-  StaOperationResult result = invokeLifecycleOperation("STA persistent close", [this] { return _lifecycle_operations->close(); });
-  _is_initialized = false;
-  _is_timing_updated = false;
-  {
-    std::scoped_lock lock(_lifecycle_mutex);
-    _lifecycle.completeClose(result.succeeded);
-  }
-  if (result.succeeded)
-    return StaStatus::success(StaSessionState::kClosed);
-  return StaStatus::failure(StaSessionStatusCode::kCleanupFailed, StaSessionState::kClosed, result.message);
-}
-
-bool STAInterface::isLegacyOwner(std::string& error_message) const
-{
-  std::scoped_lock lock(_lifecycle_mutex);
-  StaLeaseResult lease = _lifecycle.requireLegacyUse();
-  if (lease.succeeded)
-    return true;
-  error_message = lease.message;
-  return false;
-}
-
-void STAInterface::requireLegacyOwner() const
-{
-  std::string error_message;
-  if (!isLegacyOwner(error_message))
-    throw std::runtime_error(error_message);
-}
-
-std::string STAInterface::lifecycleStateForTesting() const
-{
-  std::scoped_lock lock(_lifecycle_mutex);
-  return _lifecycle.describe();
-}
-
-void STAInterface::setLifecycleOperationsForTesting(StaProductionLifecycleOperations* operations)
-{
-  if (operations == nullptr)
-    throw std::invalid_argument("STA lifecycle test operations must not be null");
-  std::scoped_lock lock(_lifecycle_mutex);
-  if (!_lifecycle.isNone()) {
-    throw std::logic_error("cannot replace STA lifecycle operations while lifecycle is " + _lifecycle.describe());
-  }
-  _lifecycle_operations = operations;
-}
-
-#endif
-
-#endif
 
 #if 1  // STA调用外部的API
 
@@ -1772,7 +1350,5 @@ std::unique_ptr<idb::LibTable> STAInterface::makeLibScalarTable(int32_t table_ty
 #endif
 
 // private
-
-STAInterface* STAInterface::_sta_interface_instance = nullptr;
 
 }  // namespace ista

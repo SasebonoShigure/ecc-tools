@@ -3,267 +3,28 @@
 
 import argparse
 import copy
-import json
-import math
-import re
 import sys
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
-from typing import NoReturn
+
+from json_schema_contract import (
+    ValidationError,
+    validate_schema,
+)
+from json_schema_contract import (
+    fail as _fail,
+)
+from json_schema_contract import (
+    load_json as _load_json,
+)
+from json_schema_contract import (
+    loads_json as _loads_json,
+)
+from json_schema_contract import (
+    resolve_ref as _resolve_ref,
+)
 
 SCHEMA_PATH = Path(__file__).with_name("incremental_sta_samples_v1.schema.json")
-
-
-class ValidationError(ValueError):
-    """Raised when input JSON or its schema contract is invalid."""
-
-
-def _fail(path: str, message: str) -> NoReturn:
-    raise ValidationError(f"{path}: {message}")
-
-
-def _reject_constant(token: str) -> NoReturn:
-    raise ValidationError(f"invalid JSON numeric constant {token!r}")
-
-
-def _object_without_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValidationError(f"duplicate JSON object key {key!r}")
-        result[key] = value
-    return result
-
-
-def _loads_json(text: str) -> object:
-    try:
-        return json.loads(
-            text,
-            parse_constant=_reject_constant,
-            object_pairs_hook=_object_without_duplicates,
-        )
-    except json.JSONDecodeError as error:
-        raise ValidationError(
-            f"invalid JSON at line {error.lineno}, column {error.colno}: {error.msg}"
-        ) from error
-
-
-def _load_json(path: Path) -> object:
-    try:
-        return _loads_json(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError) as error:
-        raise ValidationError(f"cannot read {path}: {error}") from error
-
-
-def _resolve_ref(root_schema: dict[str, object], reference: str) -> dict[str, object]:
-    if not reference.startswith("#/"):
-        raise ValidationError(f"unsupported non-local schema reference {reference!r}")
-
-    current: object = root_schema
-    for raw_part in reference[2:].split("/"):
-        part = raw_part.replace("~1", "/").replace("~0", "~")
-        if not isinstance(current, dict) or part not in current:
-            raise ValidationError(f"unresolvable schema reference {reference!r}")
-        current = current[part]
-
-    if not isinstance(current, dict):
-        raise ValidationError(f"schema reference {reference!r} is not an object")
-    return current
-
-
-def _is_number(value: object) -> bool:
-    return type(value) is int or type(value) is float and math.isfinite(value)
-
-
-def _matches_type(value: object, expected: str) -> bool:
-    match expected:
-        case "null":
-            return value is None
-        case "boolean":
-            return type(value) is bool
-        case "integer":
-            return type(value) is int
-        case "number":
-            return _is_number(value)
-        case "string":
-            return type(value) is str
-        case "array":
-            return type(value) is list
-        case "object":
-            return type(value) is dict
-        case _:
-            raise ValidationError(f"unsupported schema type {expected!r}")
-
-
-def _json_equal(left: object, right: object) -> bool:
-    if _is_number(left) and _is_number(right):
-        return left == right
-    return type(left) is type(right) and left == right
-
-
-def _validate_datetime(value: str, path: str) -> None:
-    if not re.fullmatch(
-        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
-        value,
-    ):
-        _fail(path, "must be an RFC 3339 timestamp with an explicit UTC offset")
-    try:
-        parsed = datetime.fromisoformat(
-            value.removesuffix("Z") + ("+00:00" if value.endswith("Z") else "")
-        )
-    except ValueError as error:
-        _fail(path, f"invalid date-time: {error}")
-    if parsed.tzinfo is None:
-        _fail(path, "date-time must include a timezone")
-
-
-def _schema_matches(
-    value: object, schema: dict[str, object], root_schema: dict[str, object], path: str
-) -> bool:
-    try:
-        _validate(value, schema, root_schema, path)
-    except ValidationError:
-        return False
-    return True
-
-
-def _validate(
-    value: object,
-    schema: dict[str, object],
-    root_schema: dict[str, object],
-    path: str = "$",
-) -> None:
-    reference = schema.get("$ref")
-    if reference is not None:
-        if not isinstance(reference, str):
-            raise ValidationError("schema $ref must be a string")
-        _validate(value, _resolve_ref(root_schema, reference), root_schema, path)
-        return
-
-    all_of = schema.get("allOf")
-    if all_of is not None:
-        if not isinstance(all_of, list) or not all(isinstance(item, dict) for item in all_of):
-            raise ValidationError("schema allOf must be an array of objects")
-        for item in all_of:
-            _validate(value, item, root_schema, path)
-
-    any_of = schema.get("anyOf")
-    if any_of is not None:
-        if not isinstance(any_of, list) or not all(isinstance(item, dict) for item in any_of):
-            raise ValidationError("schema anyOf must be an array of objects")
-        if not any(_schema_matches(value, item, root_schema, path) for item in any_of):
-            _fail(path, "must match at least one anyOf branch")
-
-    negated = schema.get("not")
-    if negated is not None:
-        if not isinstance(negated, dict):
-            raise ValidationError("schema not must be an object")
-        if _schema_matches(value, negated, root_schema, path):
-            _fail(path, "must not match the excluded schema")
-
-    condition = schema.get("if")
-    if condition is not None:
-        if not isinstance(condition, dict):
-            raise ValidationError("schema if must be an object")
-        branch_name = "then" if _schema_matches(value, condition, root_schema, path) else "else"
-        branch = schema.get(branch_name)
-        if branch is not None:
-            if not isinstance(branch, dict):
-                raise ValidationError(f"schema {branch_name} must be an object")
-            _validate(value, branch, root_schema, path)
-
-    if "const" in schema and not _json_equal(value, schema["const"]):
-        _fail(path, f"must equal {schema['const']!r}")
-
-    enum = schema.get("enum")
-    if enum is not None:
-        if not isinstance(enum, list):
-            raise ValidationError("schema enum must be an array")
-        if not any(_json_equal(value, candidate) for candidate in enum):
-            _fail(path, f"must be one of {enum!r}")
-
-    expected_types = schema.get("type")
-    if expected_types is not None:
-        if isinstance(expected_types, str):
-            expected = [expected_types]
-        elif isinstance(expected_types, list) and all(
-            isinstance(item, str) for item in expected_types
-        ):
-            expected = expected_types
-        else:
-            raise ValidationError("schema type must be a string or string array")
-        if not any(_matches_type(value, item) for item in expected):
-            _fail(path, f"expected {' or '.join(expected)}, got {type(value).__name__}")
-
-    if value is None:
-        return
-
-    if type(value) is dict:
-        properties = schema.get("properties", {})
-        required = schema.get("required", [])
-        if not isinstance(properties, dict) or not isinstance(required, list):
-            raise ValidationError("schema object properties/required have invalid types")
-
-        missing = [key for key in required if key not in value]
-        if missing:
-            _fail(path, f"missing required properties: {', '.join(missing)}")
-
-        if schema.get("additionalProperties") is False:
-            unexpected = sorted(set(value) - set(properties))
-            if unexpected:
-                _fail(path, f"unexpected properties: {', '.join(unexpected)}")
-
-        for key, child_schema in properties.items():
-            if key in value:
-                if not isinstance(child_schema, dict):
-                    raise ValidationError(f"schema for property {key!r} is not an object")
-                _validate(value[key], child_schema, root_schema, f"{path}.{key}")
-
-    if type(value) is list:
-        minimum_items = schema.get("minItems")
-        if minimum_items is not None and len(value) < minimum_items:
-            _fail(path, f"must contain at least {minimum_items} items")
-
-        if schema.get("uniqueItems") is True:
-            canonical_items = [
-                json.dumps(item, sort_keys=True, separators=(",", ":")) for item in value
-            ]
-            if len(set(canonical_items)) != len(canonical_items):
-                _fail(path, "array items must be unique")
-
-        item_schema = schema.get("items")
-        if item_schema is not None:
-            if not isinstance(item_schema, dict):
-                raise ValidationError("schema items must be an object")
-            for index, item in enumerate(value):
-                _validate(item, item_schema, root_schema, f"{path}[{index}]")
-
-    if type(value) is str:
-        minimum_length = schema.get("minLength")
-        if minimum_length is not None and len(value) < minimum_length:
-            _fail(path, f"must contain at least {minimum_length} characters")
-
-        pattern = schema.get("pattern")
-        if pattern is not None:
-            if not isinstance(pattern, str):
-                raise ValidationError("schema pattern must be a string")
-            if re.search(pattern, value) is None:
-                _fail(path, f"does not match {pattern!r}")
-
-        if schema.get("format") == "date-time":
-            _validate_datetime(value, path)
-
-    if _is_number(value):
-        minimum = schema.get("minimum")
-        maximum = schema.get("maximum")
-        exclusive_minimum = schema.get("exclusiveMinimum")
-        if minimum is not None and value < minimum:
-            _fail(path, f"must be >= {minimum}")
-        if maximum is not None and value > maximum:
-            _fail(path, f"must be <= {maximum}")
-        if exclusive_minimum is not None and value <= exclusive_minimum:
-            _fail(path, f"must be > {exclusive_minimum}")
 
 
 SUMMARY_STAT_FIELDS = ("min", "median", "p95", "max", "mad", "mean", "stddev")
@@ -407,7 +168,7 @@ def _validate_semantics(document: dict[str, object]) -> None:
 def validate_document(document: object, schema: object) -> None:
     if not isinstance(schema, dict):
         raise ValidationError("root schema must be an object")
-    _validate(document, schema, schema)
+    validate_schema(document, schema)
     if not isinstance(document, dict):
         raise ValidationError("root document must be an object")
     _validate_semantics(document)

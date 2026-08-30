@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecos.org/schemas/csr_snapshot_observation_v1.schema.json",
+  "title": "CSR snapshot observation, version 1",
+  "description": "Pure Stage 2 snapshot observation. Null means no committed snapshot.",
+  "anyOf": [
+    {"type": "null"},
+    {"$ref": "#/$defs/observation"}
+  ],
+  "$defs": {
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "positiveU64": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableSha256": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/sha256"}
+      ]
+    },
+    "duration": {"type": "number", "minimum": 0},
+    "nullableDuration": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/duration"}
+      ]
+    },
+    "identitySyntax": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fingerprint_schema_version",
+        "session_token",
+        "graph_generation",
+        "topology_fingerprint",
+        "clock_constraint_fingerprint",
+        "library_fingerprint",
+        "corner_fingerprint",
+        "parasitic_fingerprint",
+        "timing_input_fingerprint"
+      ],
+      "properties": {
+        "fingerprint_schema_version": {"const": "1.0.0"},
+        "session_token": {"$ref": "#/$defs/positiveU64"},
+        "graph_generation": {"$ref": "#/$defs/u64"},
+        "topology_fingerprint": {"$ref": "#/$defs/sha256"},
+        "clock_constraint_fingerprint": {"$ref": "#/$defs/sha256"},
+        "library_fingerprint": {"$ref": "#/$defs/sha256"},
+        "corner_fingerprint": {"$ref": "#/$defs/sha256"},
+        "parasitic_fingerprint": {"$ref": "#/$defs/sha256"},
+        "timing_input_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "committedIdentity": {
+      "allOf": [
+        {"$ref": "#/$defs/identitySyntax"},
+        {
+          "type": "object",
+          "properties": {
+            "graph_generation": {"type": "integer", "const": 0}
+          }
+        }
+      ]
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "arcs", "levels"],
+      "properties": {
+        "nodes": {"$ref": "#/$defs/u64"},
+        "arcs": {"$ref": "#/$defs/u64"},
+        "levels": {"$ref": "#/$defs/u64"}
+      }
+    },
+    "extent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical_size", "capacity"],
+      "properties": {
+        "logical_size": {"$ref": "#/$defs/u64"},
+        "capacity": {"$ref": "#/$defs/u64"}
+      }
+    },
+    "buffers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_keys",
+        "arc_keys",
+        "out_row_offsets",
+        "out_arc_ids",
+        "in_row_offsets",
+        "in_arc_ids",
+        "level_offsets",
+        "level_nodes",
+        "node_to_level"
+      ],
+      "properties": {
+        "node_keys": {"$ref": "#/$defs/extent"},
+        "arc_keys": {"$ref": "#/$defs/extent"},
+        "out_row_offsets": {"$ref": "#/$defs/extent"},
+        "out_arc_ids": {"$ref": "#/$defs/extent"},
+        "in_row_offsets": {"$ref": "#/$defs/extent"},
+        "in_arc_ids": {"$ref": "#/$defs/extent"},
+        "level_offsets": {"$ref": "#/$defs/extent"},
+        "level_nodes": {"$ref": "#/$defs/extent"},
+        "node_to_level": {"$ref": "#/$defs/extent"}
+      }
+    },
+    "capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["last_action", "event_count"],
+      "properties": {
+        "last_action": {"const": "initial_allocate"},
+        "event_count": {"type": "integer", "const": 1, "minimum": 0, "maximum": 18446744073709551615}
+      }
+    },
+    "support": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference_supported", "unsupported_reasons"],
+      "properties": {
+        "reference_supported": {"type": "boolean"},
+        "unsupported_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "parasitic_net",
+              "sequential_instance",
+              "sequential_launch",
+              "timing_check",
+              "crpr",
+              "propagated_clock",
+              "clock_tree_fanout",
+              "clock_gating_or_divider",
+              "conditional_timing_arc",
+              "case_analysis"
+            ]
+          }
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["export", "reference", "scatter"],
+      "properties": {
+        "export": {"$ref": "#/$defs/duration"},
+        "reference": {"$ref": "#/$defs/nullableDuration"},
+        "scatter": {"$ref": "#/$defs/nullableDuration"}
+      }
+    },
+    "hostBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical", "capacity"],
+      "properties": {
+        "logical": {"$ref": "#/$defs/positiveU64"},
+        "capacity": {"$ref": "#/$defs/positiveU64"}
+      }
+    },
+    "currentFingerprints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topology_fingerprint",
+        "clock_constraint_fingerprint",
+        "library_fingerprint",
+        "corner_fingerprint",
+        "parasitic_fingerprint",
+        "timing_input_fingerprint"
+      ],
+      "properties": {
+        "topology_fingerprint": {"$ref": "#/$defs/nullableSha256"},
+        "clock_constraint_fingerprint": {"$ref": "#/$defs/nullableSha256"},
+        "library_fingerprint": {"$ref": "#/$defs/nullableSha256"},
+        "corner_fingerprint": {"$ref": "#/$defs/nullableSha256"},
+        "parasitic_fingerprint": {"$ref": "#/$defs/nullableSha256"},
+        "timing_input_fingerprint": {"$ref": "#/$defs/nullableSha256"}
+      }
+    },
+    "rejection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "writes_applied", "source", "current"],
+      "properties": {
+        "reason": {
+          "enum": [
+            "schema_mismatch",
+            "session_mismatch",
+            "generation_mismatch",
+            "source_identity_mismatch",
+            "shape_mismatch",
+            "result_numeric_invalid",
+            "id_mapping_mismatch",
+            "predecessor_mismatch"
+          ]
+        },
+        "writes_applied": {"type": "integer", "const": 0, "minimum": 0, "maximum": 18446744073709551615},
+        "source": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/identitySyntax"}
+          ]
+        },
+        "current": {"$ref": "#/$defs/committedIdentity"}
+      }
+    },
+    "nullableRejection": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/rejection"}
+      ]
+    },
+    "invalidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "writes_applied", "previous_identity", "current_fingerprints"],
+      "properties": {
+        "reason": {
+          "enum": [
+            "topology_changed",
+            "clock_constraint_changed",
+            "library_changed",
+            "corner_changed",
+            "parasitic_changed",
+            "timing_input_changed"
+          ]
+        },
+        "writes_applied": {"type": "integer", "const": 0, "minimum": 0, "maximum": 18446744073709551615},
+        "previous_identity": {"$ref": "#/$defs/committedIdentity"},
+        "current_fingerprints": {"$ref": "#/$defs/currentFingerprints"}
+      }
+    },
+    "nullableInvalidation": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/invalidation"}
+      ]
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "state",
+        "identity",
+        "counts",
+        "buffers",
+        "capacity",
+        "support",
+        "timing_ms",
+        "host_bytes",
+        "last_rejection",
+        "last_invalidation"
+      ],
+      "properties": {
+        "schema_version": {"const": "1.0.0"},
+        "state": {"enum": ["ready", "invalidated", "released"]},
+        "identity": {"$ref": "#/$defs/committedIdentity"},
+        "counts": {"$ref": "#/$defs/counts"},
+        "buffers": {"$ref": "#/$defs/buffers"},
+        "capacity": {"$ref": "#/$defs/capacity"},
+        "support": {"$ref": "#/$defs/support"},
+        "timing_ms": {"$ref": "#/$defs/timing"},
+        "host_bytes": {"$ref": "#/$defs/hostBytes"},
+        "last_rejection": {"$ref": "#/$defs/nullableRejection"},
+        "last_invalidation": {"$ref": "#/$defs/nullableInvalidation"}
+      }
+    }
+  }
+}

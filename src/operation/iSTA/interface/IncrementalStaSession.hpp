@@ -17,23 +17,39 @@
 #pragma once
 
 #include <any>
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 
 #include "StaExecutionContract.hpp"
 
+namespace ista::csr {
+struct CsrSnapshotObservation;
+struct CsrTimingResult;
+struct StaAnalysisContext;
+}  // namespace ista::csr
+
 namespace ista {
+
+class StaCsrSessionContext;
+struct StaCsrReferenceAttempt;
+struct StaCsrScatterAttempt;
 
 class StaSessionOperations
 {
  public:
   virtual ~StaSessionOperations() = default;
-  virtual StaStatus initialize(uint64_t token, std::map<std::string, std::any>& config_map) = 0;
-  virtual StaStatus runFullBaseline(uint64_t token) = 0;
-  virtual StaStatus close(uint64_t token) = 0;
+  virtual StaStatus initialize(std::uint64_t token, std::map<std::string, std::any>& config_map) = 0;
+  virtual StaStatus runFullBaseline(std::uint64_t token, StaCsrSessionContext* capture_or_null) = 0;
+  virtual StaStatus close(std::uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* released_out) = 0;
+  virtual StaStatus copyObservation(std::uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) = 0;
+  virtual StaCsrReferenceAttempt computeCsrReferenceForTesting(std::uint64_t token, StaCsrSessionContext* context) = 0;
+  virtual StaCsrScatterAttempt scatterCsrTimingResultForTesting(std::uint64_t token, StaCsrSessionContext* context, const csr::CsrTimingResult& result) = 0;
 };
 
 class IncrementalStaSession
@@ -47,21 +63,32 @@ class IncrementalStaSession
   IncrementalStaSession& operator=(const IncrementalStaSession&) = delete;
   IncrementalStaSession& operator=(IncrementalStaSession&&) = delete;
 
-  StaStatus initialize(std::map<std::string, std::any> config_map);
+  StaStatus initialize(const csr::StaAnalysisContext& analysis_context, std::map<std::string, std::any> config_map);
   StaExecutionResult runFullBaseline();
   StaStatus close();
+  StaCsrReferenceAttempt computeCsrReferenceForTesting();
+  StaCsrScatterAttempt scatterCsrTimingResultForTesting(const csr::CsrTimingResult& result);
+  std::unique_ptr<csr::CsrSnapshotObservation> snapshotObservation();
 
-  [[nodiscard]] StaSessionState state() const { return _state; }
-  [[nodiscard]] const StaExecutionRequest& request() const { return _request; }
+  [[nodiscard]] StaSessionState state() const noexcept { return _state.load(std::memory_order_acquire); }
+  [[nodiscard]] std::optional<std::uint64_t> sessionToken() const noexcept;
+  [[nodiscard]] const StaExecutionRequest& request() const noexcept { return _request; }
 
  private:
-  StaStatus withCurrentState(StaStatus status) const;
+  [[nodiscard]] StaStatus withCurrentState(StaStatus status) const;
+  [[nodiscard]] StaStatus invalidState(std::string message) const;
+  [[nodiscard]] bool isIncrementalRequest() const noexcept;
+  [[nodiscard]] std::optional<std::string> observationOwnershipError(const csr::CsrSnapshotObservation& observation) const;
 
   StaExecutionRequest _request;
   std::unique_ptr<StaSessionOperations> _operations;
-  uint64_t _token;
-  StaSessionState _state = StaSessionState::kCreated;
+  std::atomic<std::uint64_t> _token{0};
+  std::atomic<StaSessionState> _state{StaSessionState::kCreated};
+  std::mutex _api_mutex;
+  std::unique_ptr<StaCsrSessionContext> _context;
+  std::unique_ptr<csr::CsrSnapshotObservation> _released_observation;
   std::optional<StaExecutionRecord> _resolved_record;
+  bool _baseline_executed{false};
 };
 
 class StaSessionException : public std::runtime_error

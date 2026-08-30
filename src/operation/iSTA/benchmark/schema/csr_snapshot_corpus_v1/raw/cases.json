@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0.0",
+  "cases": [
+    {"case_id":"raw_valid_null","lane":"raw_loader","asset":"valid_null.json","baseline":"raw.null","recipe":{"op":"replace_value","target":"$","operand":"null"},"expected":{"validity":"valid","field":"-","category":"-","message":"-"}},
+    {"case_id":"raw_duplicate_state","lane":"raw_loader","asset":"duplicate_state.json","baseline":"raw.ready","recipe":{"op":"duplicate_key","target":"$.state","operand":"ready"},"expected":{"validity":"invalid","field":"$","category":"duplicate_key","message":"duplicate JSON object key 'state'"}},
+    {"case_id":"raw_nan_duration","lane":"raw_loader","asset":"nan_duration.json","baseline":"raw.duration","recipe":{"op":"nan","target":"$.timing_ms.export","operand":"NaN"},"expected":{"validity":"invalid","field":"$","category":"non_finite","message":"invalid JSON numeric constant 'NaN'"}},
+    {"case_id":"raw_positive_infinity","lane":"raw_loader","asset":"positive_infinity.json","baseline":"raw.duration","recipe":{"op":"positive_infinity","target":"$.timing_ms.export","operand":"Infinity"},"expected":{"validity":"invalid","field":"$","category":"non_finite","message":"invalid JSON numeric constant 'Infinity'"}},
+    {"case_id":"raw_negative_infinity","lane":"raw_loader","asset":"negative_infinity.json","baseline":"raw.duration","recipe":{"op":"negative_infinity","target":"$.timing_ms.export","operand":"-Infinity"},"expected":{"validity":"invalid","field":"$","category":"non_finite","message":"invalid JSON numeric constant '-Infinity'"}},
+    {"case_id":"raw_syntax_missing_value","lane":"raw_loader","asset":"syntax_missing_value.json","baseline":"raw.object","recipe":{"op":"delete_key","target":"$.value","operand":"-"},"expected":{"validity":"invalid","field":"$","category":"json_syntax","message_prefix":"invalid JSON at line"}},
+    {"case_id":"raw_trailing_document","lane":"raw_loader","asset":"trailing_document.json","baseline":"raw.null","recipe":{"op":"add_key","target":"$","operand":"null"},"expected":{"validity":"invalid","field":"$","category":"json_syntax","message_prefix":"invalid JSON at line"}}
+  ]
+}

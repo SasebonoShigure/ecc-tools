@@ -30,11 +30,34 @@ runs:
         version: latest
         enable-cache: true
 
+    - name: Check Step 8 Python style
+      shell: bash
+      run: |
+        uvx --from ruff==0.14.13 ruff check \
+          --isolated --no-cache --line-length 100 --target-version py311 \
+          --select B,E,F,FBT,I,SIM,UP \
+          src/operation/iSTA/test/real_differential/real_differential_model.py \
+          src/operation/iSTA/test/real_differential/real_differential_wire_contract.py \
+          src/operation/iSTA/test/real_differential/real_differential_contract.py \
+          src/operation/iSTA/test/real_differential/real_differential_controller.py \
+          src/operation/iSTA/test/real_differential/real_differential_controller_selftest.py \
+          src/operation/iSTA/test/reference_input/reference_input_candidate_wire.py \
+          src/operation/iSTA/test/reference_input/reference_input_recompute_transfer.py
+        uvx --from ruff==0.14.13 ruff format --check \
+          --isolated --no-cache --line-length 100 --target-version py311 \
+          src/operation/iSTA/test/real_differential/real_differential_model.py \
+          src/operation/iSTA/test/real_differential/real_differential_wire_contract.py \
+          src/operation/iSTA/test/real_differential/real_differential_contract.py \
+          src/operation/iSTA/test/real_differential/real_differential_controller.py \
+          src/operation/iSTA/test/real_differential/real_differential_controller_selftest.py \
+          src/operation/iSTA/test/reference_input/reference_input_candidate_wire.py \
+          src/operation/iSTA/test/reference_input/reference_input_recompute_transfer.py
+
     - name: Restore CMake build cache
       uses: actions/cache@v4
       with:
         path: build
-        key: cmake-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+        key: cmake-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'src/**/*.cmake') }}
         restore-keys: |
           cmake-${{ runner.os }}-
 
@@ -42,6 +65,7 @@ runs:
       shell: bash
       env:
         SCCACHE_GHA_ENABLED: "true"
+        CMAKE_GENERATOR: Ninja
       run: |
         export CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache -DCMD_BUILD=ON -DBUILD_TESTING=ON"
         uv sync --no-install-project
@@ -53,11 +77,68 @@ runs:
           ista_incremental_session_test \
           ista_production_lifecycle_test \
           ista_graph_builder_state_test \
-          ista_full_baseline_probe
+          ista_csr_core_contract_test \
+          ista_csr_fingerprint_contract_test \
+          ista_csr_fingerprint_mutation_test \
+          ista_csr_fingerprint_deep_mutation_test \
+          ista_csr_metadata_isolation_test \
+          ista_csr_snapshot_identity_contract_test \
+          ista_csr_fifo_levelization_contract_test \
+          ista_csr_snapshot_storage_contract_test \
+          ista_csr_snapshot_observation_contract_test \
+          ista_csr_snapshot_transition_contract_test \
+          ista_csr_validator_contract_test \
+          ista_csr_timing_result_validator_test \
+          ista_csr_outcome_validator_test \
+          ista_csr_unsupported_reason_validator_test \
+          ista_csr_graph_export_contract_test \
+          ista_csr_graph_export_failure_test \
+          ista_csr_graph_encoding_contract_test \
+          ista_csr_graph_property_test \
+          ista_full_baseline_probe \
+          ista_csr_projection_probe \
+          ista_csr_session_snapshot_adapter_contract_test \
+          ista_csr_session_context_test \
+          ista_csr_session_lifecycle_test \
+          ista_csr_snapshot_binding_contract_test \
+          py_ista \
+          ecc_py \
+          ista_csr_reference_public_headers_test \
+          ista_csr_reference_input_export_contract_test \
+          ista_csr_reference_input_failure_test \
+          ista_csr_reference_transfer_contract_test \
+          ista_csr_reference_support_contract_test \
+          ista_csr_reference_fingerprint_components_test \
+          ista_csr_reference_poison_isolation_test \
+          ista_csr_reference_input_property_test \
+          ista_csr_table_lookup_contract_test \
+          ista_csr_cpu_reference_contract_test \
+          ista_csr_cpu_reference_property_test \
+          ista_csr_cpu_reference_public_headers_test \
+          ista_csr_native_timing_oracle_contract_test \
+          ista_csr_timing_scatter_contract_test \
+          ista_csr_timing_scatter_atomicity_test \
+          ista_csr_timing_scatter_property_test \
+          ista_csr_timing_scatter_public_headers_test \
+          ista_csr_timing_scatter_rerun_probe \
+          ista_csr_reference_input_probe \
+          ista_csr_real_oracle_probe \
+          ista_csr_real_reference_probe \
+          ista_csr_real_differential_wire_contract_test
         ctest --test-dir build --no-tests=error --output-on-failure \
           -L '^ista_unit$'
         ctest --test-dir build --no-tests=error --output-on-failure \
+          -L '^ista_property$'
+        ctest --test-dir build --no-tests=error --output-on-failure \
           -L '^ista_smoke$'
+        if [[ -d src/operation/iSTA/test/projection/__pycache__ || \
+              -d src/operation/iSTA/test/csr_session/__pycache__ || \
+              -d src/operation/iSTA/test/reference_input/__pycache__ || \
+              -d src/operation/iSTA/test/baseline/__pycache__ || \
+              -d src/operation/iSTA/test/timing_scatter/__pycache__ || \
+              -d src/operation/iSTA/test/real_differential/__pycache__ ]]; then
+          exit 1
+        fi
         mkdir -p dist/wheel/repaired
         uv run --no-sync -m auditwheel show dist/*.whl
         uv run --no-sync -m auditwheel repair dist/*.whl -w dist/wheel/repaired

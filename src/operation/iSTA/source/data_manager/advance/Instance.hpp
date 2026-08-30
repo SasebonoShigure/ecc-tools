@@ -30,14 +30,22 @@ class Instance
   // getter
   uint64_t get_instance_id() const { return _instance_id; }
   std::string& get_instance_name() { return _instance_name; }
+  const std::string& get_instance_name() const { return _instance_name; }
   std::string& get_cell_name() { return _cell_name; }
+  const std::string& get_cell_name() const { return _cell_name; }
   std::vector<std::string>& get_pin_name_list() { return _pin_name_list; }
+  const std::vector<std::string>& get_pin_name_list() const { return _pin_name_list; }
   std::vector<TimingCheckArc>& get_check_arc_list() { return _check_arc_list; }
+  const std::vector<TimingCheckArc>& get_check_arc_list() const { return _check_arc_list; }
   std::string& get_clock_pin_name() { return _clock_pin_name; }
+  const std::string& get_clock_pin_name() const { return _clock_pin_name; }
   std::string& get_output_pin_name() { return _output_pin_name; }
+  const std::string& get_output_pin_name() const { return _output_pin_name; }
   std::string& get_data_pin_name() { return _data_pin_name; }
+  const std::string& get_data_pin_name() const { return _data_pin_name; }
   double get_clock_to_q_delay() const { return _clock_to_q_delay; }
   TimingCellArc& get_clock_to_q_arc() { return _clock_to_q_arc; }
+  const TimingCellArc& get_clock_to_q_arc() const { return _clock_to_q_arc; }
   bool get_is_sequential() const { return _is_sequential; }
   bool get_is_clock_gating() const { return _is_clock_gating; }
   bool get_has_clear_arc() const { return _has_clear_arc; }

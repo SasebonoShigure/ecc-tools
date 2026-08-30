@@ -27,7 +27,9 @@ class TimingClock
   ~TimingClock() = default;
   // getter
   std::string& get_clock_name() { return _clock_name; }
+  const std::string& get_clock_name() const { return _clock_name; }
   std::vector<std::string>& get_source_list() { return _source_list; }
+  const std::vector<std::string>& get_source_list() const { return _source_list; }
   double get_period() const { return _period; }
   double get_rise_edge() const { return _rise_edge; }
   double get_fall_edge() const { return _fall_edge; }

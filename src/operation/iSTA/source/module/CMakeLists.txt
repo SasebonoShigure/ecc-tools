@@ -1,3 +1,5 @@
+add_subdirectory(${ISTA_MODULE}/timing_csr)
+add_subdirectory(${ISTA_MODULE}/timing_csr_snapshot)
 add_subdirectory(${ISTA_MODULE}/delay_calculator)
 add_subdirectory(${ISTA_MODULE}/graph_builder)
 add_subdirectory(${ISTA_MODULE}/clock_propagator)
@@ -14,6 +16,7 @@ add_library(ista_module INTERFACE)
 
 target_link_libraries(ista_module
     INTERFACE
+    ista_timing_csr_core
     ista_graph_builder
     ista_delay_calculator
     ista_clock_propagator

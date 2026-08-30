@@ -22,6 +22,7 @@
 #include <string_view>
 #include <vector>
 
+#include "CsrReferenceTypes.hpp"
 #include "IncrementalStaSession.hpp"
 #include "STAInterface.hpp"
 #include "StaProductionLifecycle.hpp"
@@ -48,6 +49,11 @@ void requireThrows(Callable callable, const char* message)
 ista::StaExecutionRequest cpuFullRequest()
 {
   return {.backend = ista::StaBackend::kCpu, .update_strategy = ista::StaUpdateStrategy::kFull, .fallback_policy = ista::StaFallbackPolicy::kError};
+}
+
+ista::csr::StaAnalysisContext testAnalysisContext()
+{
+  return {"slow", "25", "__no_rc_corner__"};
 }
 
 enum class ThrowKind
@@ -273,11 +279,11 @@ void ownerInterop()
   FakeProductionOperations operations;
   ista::STAInterface& interface = install(operations);
   ista::IncrementalStaSession owner(cpuFullRequest());
-  require(owner.initialize({}).ok(), "session initialize");
+  require(owner.initialize(testAnalysisContext(), {}).ok(), "session initialize");
   require(operations.initialize_calls == 1, "session init callback count");
 
   ista::IncrementalStaSession overlap(cpuFullRequest());
-  ista::StaStatus overlap_status = overlap.initialize({});
+  ista::StaStatus overlap_status = overlap.initialize(testAnalysisContext(), {});
   require(overlap_status.code == ista::StaSessionStatusCode::kOwnerConflict, "second session not blocked");
   requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init not blocked by session");
   requireThrows<std::logic_error>([&] { interface.setLifecycleOperationsForTesting(&operations); }, "active setter accepted");
@@ -301,13 +307,13 @@ void ownerInterop()
   require(owner.runFullBaseline().ok(), "owner session damaged by blocked calls");
   require(owner.close().ok(), "owner session close");
   ista::IncrementalStaSession next(cpuFullRequest());
-  require(next.initialize({}).ok(), "next session after close");
+  require(next.initialize(testAnalysisContext(), {}).ok(), "next session after close");
   require(next.close().ok(), "next session close");
 
   interface.initSTA({});
   const int before_conflicts = operations.initialize_calls;
   ista::IncrementalStaSession blocked(cpuFullRequest());
-  require(blocked.initialize({}).code == ista::StaSessionStatusCode::kOwnerConflict, "typed init not blocked by legacy");
+  require(blocked.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kOwnerConflict, "typed init not blocked by legacy");
   requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "second legacy init not blocked");
   require(operations.initialize_calls == before_conflicts, "owner conflicts reached init callback");
   interface.destroySTA();
@@ -320,12 +326,12 @@ void initializationWorkFailure()
   ista::STAInterface& interface = install(operations);
   operations.initialize_result = ista::StaOperationResult::workFailure("injected init failure");
   ista::IncrementalStaSession failed(cpuFullRequest());
-  require(failed.initialize({}).code == ista::StaSessionStatusCode::kInitFailed, "typed init work status");
+  require(failed.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kInitFailed, "typed init work status");
   require(interface.lifecycleStateForTesting() == "none", "typed init work rollback did not release owner");
   require(failed.close().ok() && operations.close_calls == 0, "failed typed init performed persistent close");
   operations.resetResults();
   ista::IncrementalStaSession next(cpuFullRequest());
-  require(next.initialize({}).ok() && next.close().ok(), "typed re-init after work rollback");
+  require(next.initialize(testAnalysisContext(), {}).ok() && next.close().ok(), "typed re-init after work rollback");
 
   operations.initialize_result = ista::StaOperationResult::workFailure("injected legacy init failure");
   requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init work failure not reported");
@@ -347,14 +353,14 @@ void initializationCleanupFailure(bool legacy)
     requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init cleanup failure not reported");
   } else {
     ista::IncrementalStaSession failed(cpuFullRequest());
-    require(failed.initialize({}).code == ista::StaSessionStatusCode::kCleanupFailed, "typed init cleanup status");
+    require(failed.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kCleanupFailed, "typed init cleanup status");
     require(failed.close().ok(), "closed failed typed handle is not idempotent");
   }
   require(interface.lifecycleStateForTesting() == "quarantined(none)", "init cleanup failure not sticky");
   const int init_before = operations.initialize_calls;
   const int close_before = operations.close_calls;
   ista::IncrementalStaSession next(cpuFullRequest());
-  require(next.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed rollback quarantine");
+  require(next.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed rollback quarantine");
   requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init bypassed rollback quarantine");
   requireThrows<std::runtime_error>([&] { interface.destroySTA(); }, "legacy destroy bypassed rollback quarantine");
   requireThrows<std::runtime_error>([] { ista::STAInterface::destroyInst(); }, "destroyInst bypassed rollback quarantine");
@@ -366,7 +372,7 @@ void typedRunFailure(bool cleanup_failure)
   FakeProductionOperations operations;
   ista::STAInterface& interface = install(operations);
   ista::IncrementalStaSession session(cpuFullRequest());
-  require(session.initialize({}).ok(), "typed run setup");
+  require(session.initialize(testAnalysisContext(), {}).ok(), "typed run setup");
   operations.full_result = cleanup_failure ? ista::StaOperationResult::cleanupFailure("injected run cleanup failure")
                                            : ista::StaOperationResult::workFailure("injected run work failure");
   ista::StaExecutionResult result = session.runFullBaseline();
@@ -377,7 +383,7 @@ void typedRunFailure(bool cleanup_failure)
     require(session.close().ok(), "typed run work failure close");
     operations.resetResults();
     ista::IncrementalStaSession next(cpuFullRequest());
-    require(next.initialize({}).ok() && next.close().ok(), "typed re-init after run work failure");
+    require(next.initialize(testAnalysisContext(), {}).ok() && next.close().ok(), "typed re-init after run work failure");
     ista::STAInterface::destroyInst();
     return;
   }
@@ -385,7 +391,7 @@ void typedRunFailure(bool cleanup_failure)
   require(interface.lifecycleStateForTesting().starts_with("quarantined(session("), "typed cleanup failure lost cleanup token");
   const int init_before = operations.initialize_calls;
   ista::IncrementalStaSession blocked(cpuFullRequest());
-  require(blocked.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "new typed init bypassed current quarantine");
+  require(blocked.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "new typed init bypassed current quarantine");
   requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init bypassed current quarantine");
   require(operations.initialize_calls == init_before, "quarantined init reached callback");
   require(session.close().ok(), "cleanup owner persistent close");
@@ -394,7 +400,7 @@ void typedRunFailure(bool cleanup_failure)
   require(session.close().ok() && operations.close_calls == close_after, "typed close repeated persistent cleanup");
   require(blocked.close().ok() && operations.close_calls == close_after, "non-owner handle performed cleanup");
   ista::IncrementalStaSession final_attempt(cpuFullRequest());
-  require(final_attempt.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "sticky quarantine accepted typed init");
+  require(final_attempt.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "sticky quarantine accepted typed init");
   requireThrows<std::runtime_error>([&] { interface.destroySTA(); }, "sticky quarantine accepted legacy destroy");
   require(operations.initialize_calls == init_before && operations.close_calls == close_after, "sticky quarantine called native operations");
 }
@@ -431,7 +437,7 @@ void legacyCleanupFailure(LegacyPipeline pipeline)
   require(interface.lifecycleStateForTesting() == "quarantined(legacy)", "legacy cleanup failure lost cleanup owner");
   const int init_before = operations.initialize_calls;
   ista::IncrementalStaSession typed(cpuFullRequest());
-  require(typed.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed legacy quarantine");
+  require(typed.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed legacy quarantine");
   requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init bypassed current quarantine");
   require(operations.initialize_calls == init_before, "legacy quarantine init reached callback");
   interface.destroySTA();
@@ -452,7 +458,7 @@ void closeCleanupFailure(bool legacy)
     requireThrows<std::runtime_error>([&] { interface.destroySTA(); }, "legacy close cleanup failure not reported");
   } else {
     ista::IncrementalStaSession session(cpuFullRequest());
-    require(session.initialize({}).ok(), "typed close setup");
+    require(session.initialize(testAnalysisContext(), {}).ok(), "typed close setup");
     require(session.close().code == ista::StaSessionStatusCode::kCleanupFailed, "typed close cleanup status");
     const int close_after = operations.close_calls;
     require(session.close().ok() && operations.close_calls == close_after, "typed persistent close repeated");
@@ -461,7 +467,7 @@ void closeCleanupFailure(bool legacy)
   const int init_before = operations.initialize_calls;
   const int close_before = operations.close_calls;
   ista::IncrementalStaSession next(cpuFullRequest());
-  require(next.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed close quarantine");
+  require(next.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed close quarantine");
   requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init bypassed close quarantine");
   requireThrows<std::runtime_error>([&] { interface.destroySTA(); }, "legacy destroy repeated close cleanup");
   require(operations.initialize_calls == init_before && operations.close_calls == close_before, "close quarantine triggered callbacks");
@@ -479,7 +485,7 @@ void initializationThrow(bool legacy, bool cleanup_throws)
       interface.destroySTA();
   } else {
     ista::IncrementalStaSession failed(cpuFullRequest());
-    ista::StaStatus status = failed.initialize({});
+    ista::StaStatus status = failed.initialize(testAnalysisContext(), {});
     require(status.code == (cleanup_throws ? ista::StaSessionStatusCode::kCleanupFailed : ista::StaSessionStatusCode::kInitFailed),
             "typed initialize throw status");
     require(failed.close().ok(), "typed failed initialize close is idempotent");
@@ -490,7 +496,7 @@ void initializationThrow(bool legacy, bool cleanup_throws)
     const int initialize_before = operations.initialize_calls;
     const int close_before = operations.close_calls;
     ista::IncrementalStaSession blocked(cpuFullRequest());
-    require(blocked.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed throw rollback quarantine");
+    require(blocked.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed throw rollback quarantine");
     requireThrows<std::runtime_error>([&] { interface.initSTA({}); }, "legacy init bypassed throw rollback quarantine");
     require(operations.initialize_calls == initialize_before && operations.close_calls == close_before, "throw rollback quarantine reached native callbacks");
     return;
@@ -502,7 +508,7 @@ void initializationThrow(bool legacy, bool cleanup_throws)
     interface.destroySTA();
   } else {
     ista::IncrementalStaSession next(cpuFullRequest());
-    require(next.initialize({}).ok() && next.close().ok(), "typed re-init after thrown initialize rollback");
+    require(next.initialize(testAnalysisContext(), {}).ok() && next.close().ok(), "typed re-init after thrown initialize rollback");
   }
   ista::STAInterface::destroyInst();
 }
@@ -512,7 +518,7 @@ void typedRunThrow()
   FakeProductionOperations operations;
   ista::STAInterface& interface = install(operations);
   ista::IncrementalStaSession session(cpuFullRequest());
-  require(session.initialize({}).ok(), "typed run throw setup");
+  require(session.initialize(testAnalysisContext(), {}).ok(), "typed run throw setup");
   operations.full_throw = ThrowKind::kUnknown;
   ista::StaExecutionResult result = session.runFullBaseline();
   require(result.status.code == ista::StaSessionStatusCode::kCleanupFailed && session.state() == ista::StaSessionState::kPoisoned,
@@ -520,13 +526,13 @@ void typedRunThrow()
   require(interface.lifecycleStateForTesting().starts_with("quarantined(session("), "typed run throw did not retain cleanup owner");
   const int initialize_before = operations.initialize_calls;
   ista::IncrementalStaSession blocked(cpuFullRequest());
-  require(blocked.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed run throw quarantine");
+  require(blocked.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed run throw quarantine");
   require(session.close().ok(), "typed run throw owner close");
   require(interface.lifecycleStateForTesting() == "quarantined(none)", "typed run throw close downgraded quarantine");
   const int close_after = operations.close_calls;
   require(session.close().ok() && operations.close_calls == close_after, "typed run throw repeated persistent close");
   ista::IncrementalStaSession final_attempt(cpuFullRequest());
-  require(final_attempt.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "sticky run throw quarantine accepted init");
+  require(final_attempt.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "sticky run throw quarantine accepted init");
   require(operations.initialize_calls == initialize_before, "run throw quarantine reached initialize callback");
 }
 
@@ -543,7 +549,7 @@ void legacyPipelineThrow(LegacyPipeline pipeline)
   require(interface.lifecycleStateForTesting() == "quarantined(legacy)", "legacy pipeline throw did not retain cleanup owner");
   const int initialize_before = operations.initialize_calls;
   ista::IncrementalStaSession blocked(cpuFullRequest());
-  require(blocked.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed legacy throw quarantine");
+  require(blocked.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed legacy throw quarantine");
   interface.destroySTA();
   require(interface.lifecycleStateForTesting() == "quarantined(none)", "legacy throw close downgraded quarantine");
   const int close_after = operations.close_calls;
@@ -562,7 +568,7 @@ void closeThrow(bool legacy)
     requireThrows<std::runtime_error>([&] { interface.destroySTA(); }, "legacy close throw was not converted");
   } else {
     ista::IncrementalStaSession session(cpuFullRequest());
-    require(session.initialize({}).ok(), "typed close throw setup");
+    require(session.initialize(testAnalysisContext(), {}).ok(), "typed close throw setup");
     require(session.close().code == ista::StaSessionStatusCode::kCleanupFailed, "typed close throw status");
     const int close_after = operations.close_calls;
     require(session.close().ok() && operations.close_calls == close_after, "typed close throw repeated cleanup");
@@ -571,7 +577,7 @@ void closeThrow(bool legacy)
   const int initialize_before = operations.initialize_calls;
   const int close_before = operations.close_calls;
   ista::IncrementalStaSession blocked(cpuFullRequest());
-  require(blocked.initialize({}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed close throw quarantine");
+  require(blocked.initialize(testAnalysisContext(), {}).code == ista::StaSessionStatusCode::kQuarantined, "typed init bypassed close throw quarantine");
   requireThrows<std::runtime_error>([&] { interface.destroySTA(); }, "sticky close throw repeated cleanup");
   require(operations.initialize_calls == initialize_before && operations.close_calls == close_before, "close throw quarantine reached callbacks");
 }

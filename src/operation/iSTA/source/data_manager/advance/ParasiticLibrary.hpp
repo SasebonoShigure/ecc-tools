@@ -28,9 +28,13 @@ class ParasiticLibrary
   ~ParasiticLibrary() = default;
   // getter
   std::string& get_spef_file_path() { return _spef_file_path; }
+  const std::string& get_spef_file_path() const { return _spef_file_path; }
   std::string& get_capacitive_unit() { return _capacitive_unit; }
+  const std::string& get_capacitive_unit() const { return _capacitive_unit; }
   std::string& get_resistance_unit() { return _resistance_unit; }
+  const std::string& get_resistance_unit() const { return _resistance_unit; }
   std::map<std::string, ParasiticNet>& get_net_map() { return _net_map; }
+  const std::map<std::string, ParasiticNet>& get_net_map() const { return _net_map; }
   // setter
   void set_spef_file_path(const std::string& spef_file_path) { _spef_file_path = spef_file_path; }
   void set_capacitive_unit(const std::string& capacitive_unit) { _capacitive_unit = capacitive_unit; }

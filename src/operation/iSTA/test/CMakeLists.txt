@@ -7,6 +7,40 @@ if(BUILD_TESTING)
     set(ISTA_TEST_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
   endif()
 
+  function(ista_get_target_property_or_empty OUTPUT TARGET_NAME PROPERTY_NAME)
+    get_target_property(PROPERTY_VALUE "${TARGET_NAME}" "${PROPERTY_NAME}")
+    if("${PROPERTY_VALUE}" MATCHES "-NOTFOUND$")
+      set(PROPERTY_VALUE)
+    endif()
+    set("${OUTPUT}" "${PROPERTY_VALUE}" PARENT_SCOPE)
+  endfunction()
+
+  function(ista_assert_unique_list LIST_VARIABLE DESCRIPTION)
+    set(SEEN_ITEMS)
+    foreach(ITEM IN LISTS ${LIST_VARIABLE})
+      list(FIND SEEN_ITEMS "${ITEM}" SEEN_INDEX)
+      if(NOT SEEN_INDEX EQUAL -1)
+        message(FATAL_ERROR "duplicate ${DESCRIPTION}: ${ITEM}")
+      endif()
+      list(APPEND SEEN_ITEMS "${ITEM}")
+    endforeach()
+  endfunction()
+
+  function(ista_assert_same_inventory ACTUAL_VARIABLE EXPECTED_VARIABLE DESCRIPTION)
+    ista_assert_unique_list(${ACTUAL_VARIABLE} "actual ${DESCRIPTION}")
+    ista_assert_unique_list(${EXPECTED_VARIABLE} "expected ${DESCRIPTION}")
+    set(ACTUAL_SORTED ${${ACTUAL_VARIABLE}})
+    set(EXPECTED_SORTED ${${EXPECTED_VARIABLE}})
+    list(SORT ACTUAL_SORTED)
+    list(SORT EXPECTED_SORTED)
+    if(NOT "${ACTUAL_SORTED}" STREQUAL "${EXPECTED_SORTED}")
+      message(
+          FATAL_ERROR
+          "${DESCRIPTION} mismatch; actual=[${ACTUAL_SORTED}] expected=[${EXPECTED_SORTED}]"
+      )
+    endif()
+  endfunction()
+
   add_executable(ista_arc_timing_arc_delay_test
       ArcTimingArcDelayTest.cpp
   )
@@ -25,7 +59,25 @@ if(BUILD_TESTING)
       --self-test
   )
   set_tests_properties(
-      ista_incremental_samples_schema_validation PROPERTIES LABELS "ista_unit"
+      ista_incremental_samples_schema_validation
+      PROPERTIES LABELS "ista_unit"
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+  )
+
+  add_test(
+      NAME ista_csr_snapshot_schema_validation
+      COMMAND
+      "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/schema/validate_csr_snapshot_observation.py"
+      --schema "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/schema/csr_snapshot_observation_v1.schema.json"
+      --manifest "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/schema/csr_snapshot_contract_manifest_v1.json"
+      --self-test
+  )
+  set_tests_properties(
+      ista_csr_snapshot_schema_validation
+      PROPERTIES
+      LABELS "ista_unit"
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
   )
 
   add_test(
@@ -38,7 +90,23 @@ if(BUILD_TESTING)
   )
   set_tests_properties(
       ista_full_baseline_controller_validation
-      PROPERTIES LABELS "ista_unit"
+      PROPERTIES
+      LABELS "ista_unit"
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+  )
+
+  add_test(
+      NAME ista_csr_projection_controller_validation
+      COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "PYTHONDONTWRITEBYTECODE=1"
+      "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/projection/projection_controller.py"
+      --manifest "${CMAKE_CURRENT_SOURCE_DIR}/baseline/manifest.json"
+      --self-test
+  )
+  set_tests_properties(
+      ista_csr_projection_controller_validation PROPERTIES LABELS "ista_unit"
   )
 
   add_executable(ista_execution_contract_test
@@ -58,14 +126,14 @@ if(BUILD_TESTING)
   add_executable(ista_incremental_session_test
       IncrementalStaSessionTest.cpp
   )
-  target_link_libraries(ista_incremental_session_test PRIVATE ista_interface)
+  target_link_libraries(ista_incremental_session_test PRIVATE ista_interface ista_timing_graph_csr_adapter)
   add_test(NAME ista_incremental_session_test COMMAND ista_incremental_session_test)
   set_tests_properties(ista_incremental_session_test PROPERTIES LABELS "ista_unit")
 
   add_executable(ista_production_lifecycle_test
       StaProductionLifecycleTest.cpp
   )
-  target_link_libraries(ista_production_lifecycle_test PRIVATE ista_interface)
+  target_link_libraries(ista_production_lifecycle_test PRIVATE ista_interface ista_timing_graph_csr_adapter)
   set(ISTA_PRODUCTION_LIFECYCLE_SCENARIOS
       owner_interop
       init_work_failure
@@ -114,15 +182,45 @@ if(BUILD_TESTING)
   add_test(NAME ista_graph_builder_state_test COMMAND ista_graph_builder_state_test)
   set_tests_properties(ista_graph_builder_state_test PROPERTIES LABELS "ista_unit")
 
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceInputTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceInputIsolationTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrTimingScatterTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrIsolationTests.cmake")
+
   add_executable(ista_full_baseline_probe
       baseline/StaFullBaselineProbe.cpp
   )
   target_link_libraries(ista_full_baseline_probe
       PRIVATE
+      ista_timing_graph_csr_adapter
       ista_interface
       ista_source
       idm
   )
+
+  add_executable(ista_csr_projection_probe
+      projection/StaCsrProjectionProbe.cpp
+      CsrNativeSemanticKeyTestSupport.hpp
+      CsrNativeGraphRawProjector.cpp
+      CsrNativeGraphOracleReader.cpp
+      CsrNativeGraphIndependentEncoding.cpp
+  )
+  target_include_directories(ista_csr_projection_probe
+      PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  target_link_libraries(ista_csr_projection_probe
+      PRIVATE
+      ista_timing_graph_csr_adapter
+      ista_interface
+      ista_source
+      idm
+  )
+
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrSessionTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrRealDifferentialTests.cmake")
 
   if(TARGET ecc_py)
     add_test(
@@ -154,5 +252,26 @@ if(BUILD_TESTING)
       PROPERTIES
       LABELS "ista_integration;ista_cpu;ista_smoke"
       TIMEOUT 300
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+  )
+
+  add_test(
+      NAME ista_csr_projection_fresh_process
+      COMMAND
+      "${CMAKE_COMMAND}" -E env
+      "PYTHONDONTWRITEBYTECODE=1"
+      "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/projection/projection_controller.py"
+      --probe "$<TARGET_FILE:ista_csr_projection_probe>"
+      --manifest "${CMAKE_CURRENT_SOURCE_DIR}/baseline/manifest.json"
+      --run-root "${CMAKE_CURRENT_BINARY_DIR}/projection-runs"
+      --repeats 3
+      --timeout-seconds 300
+  )
+  set_tests_properties(
+      ista_csr_projection_fresh_process
+      PROPERTIES
+      LABELS "ista_integration;ista_cpu;ista_smoke"
+      TIMEOUT 600
   )
 endif()

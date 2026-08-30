@@ -1,0 +1,171 @@
+{
+  "schema": "ista-csr-real-differential-manifest/1.0.0",
+  "domain": "ista-csr-real-differential-input-case/1.0.0",
+  "baseline_manifest": "../baseline/manifest.json",
+  "baseline_manifest_sha256": "c2cf7aac05719ba7b437b45918cc11ade5fec68f2727135facaa46b7b4f4b47b",
+  "tolerances": {
+    "absolute": 1e-09,
+    "relative": 1e-09
+  },
+  "extended_cases": [
+    {
+      "name": "supported_branches",
+      "top": "supported_branches",
+      "expected_clocks": [
+        "vclk_a",
+        "vclk_b"
+      ],
+      "inputs": {
+        "tech_lef": {
+          "path": "../baseline/fixtures/stage0_tech.lef",
+          "sha256": "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc"
+        },
+        "cell_lef": {
+          "path": "fixtures/supported_branches_cells.lef",
+          "sha256": "92f47819602d45d264a5b1f460e24cbb4f69bd62bed8742ea64d2b825f5f4ad5"
+        },
+        "liberty": {
+          "path": "fixtures/supported_branches.lib",
+          "sha256": "9b2abaa48fde582a01e9eac7a09bf6fff63122e143299e3f8cee19a313577447"
+        },
+        "verilog": {
+          "path": "fixtures/supported_branches.v",
+          "sha256": "fea8a5c73637a15664d76b8afe5bffb6cd03ed09ca91a445a6cf54a37a71785f"
+        },
+        "sdc": {
+          "path": "fixtures/supported_branches.sdc",
+          "sha256": "f56f83b6b823c76feb1772a93340e31302aaf799c02c4aecc7a7af0907ea4005"
+        }
+      },
+      "non_unate_anchor": {
+        "instance": "u_nonunate",
+        "cell": "NONUNATE2_X1",
+        "source_pin": "A",
+        "sink_pin": "Y",
+        "owner_name": "u_nonunate",
+        "library_source_port": "A",
+        "library_sink_port": "Y"
+      },
+      "disabled_anchor": {
+        "instance": "u_disabled",
+        "cell": "DISABLE_X1",
+        "source_pin": "A",
+        "sink_pin": "Y",
+        "owner_name": "u_disabled",
+        "library_source_port": "A",
+        "library_sink_port": "Y"
+      },
+      "parallel_anchor": {
+        "instance": "u_parallel",
+        "cell": "PARALLEL_X1",
+        "source_pin": "A",
+        "sink_pin": "Y",
+        "owner_name": "u_parallel",
+        "library_source_port": "A",
+        "library_sink_port": "Y"
+      },
+      "loop_disabled_witness": {
+        "source": "u_loop_b:Y",
+        "sink": "u_loop_a:A",
+        "owner_name": "loop_b",
+        "minimum_count": 1
+      },
+      "data_roots": [
+        {
+          "kind": "port",
+          "full_name": "data_a",
+          "instance_name": "",
+          "pin_name": ""
+        },
+        {
+          "kind": "port",
+          "full_name": "data_b",
+          "instance_name": "",
+          "pin_name": ""
+        }
+      ],
+      "clock_tags": [
+        "vclk_a",
+        "vclk_b"
+      ],
+      "near_tie": {
+        "join_node": {
+          "kind": "instance_pin",
+          "full_name": "u_join:Y",
+          "instance_name": "u_join",
+          "pin_name": "Y"
+        },
+        "row_first_arc": {
+          "instance": "u_join",
+          "cell": "JOIN2_X1",
+          "source_pin": "A",
+          "sink_pin": "Y",
+          "owner_name": "u_join",
+          "library_source_port": "A",
+          "library_sink_port": "Y"
+        },
+        "row_second_arc": {
+          "instance": "u_join",
+          "cell": "JOIN2_X1",
+          "source_pin": "B",
+          "sink_pin": "Y",
+          "owner_name": "u_join",
+          "library_source_port": "B",
+          "library_sink_port": "Y"
+        },
+        "analysis": "max",
+        "path_source": "input",
+        "transition": "rise",
+        "clock_tag": "vclk_a",
+        "secondary_root": {
+          "kind": "port",
+          "full_name": "data_b",
+          "instance_name": "",
+          "pin_name": ""
+        },
+        "secondary_clock_tag": "vclk_b",
+        "lower_exclusive": 1e-09,
+        "upper_exclusive": 1e-06
+      }
+    }
+  ],
+  "coverage_claims": {
+    "native_backed": [
+      "chain",
+      "diamond",
+      "non_unate",
+      "parallel",
+      "disabled",
+      "loop_disabled",
+      "multi_root",
+      "clock_tag",
+      "near_tie",
+      "post_scatter_rerun"
+    ],
+    "synthetic_only": [
+      "parasitic_net",
+      "sequential_instance",
+      "sequential_launch",
+      "timing_check",
+      "crpr",
+      "propagated_clock",
+      "clock_tree_fanout",
+      "clock_gating_or_divider",
+      "conditional_timing_arc",
+      "case_analysis"
+    ],
+    "native_fatal": [
+      "clock_tree_overlap",
+      "multi_driver"
+    ],
+    "not_claimed": [
+      "sequential_native_parity",
+      "crpr_native_parity",
+      "mutation",
+      "generation_gt_zero",
+      "cuda",
+      "dual_csr",
+      "speedup"
+    ]
+  }
+}

@@ -28,11 +28,14 @@ class TimingCellArc
   ~TimingCellArc() = default;
   // getter
   std::string& get_source_port() { return _source_port; }
+  const std::string& get_source_port() const { return _source_port; }
   std::string& get_sink_port() { return _sink_port; }
+  const std::string& get_sink_port() const { return _sink_port; }
   double get_delay() const { return _delay; }
   double get_delay_max() const { return _delay_max; }
   double get_delay_min() const { return _delay_min; }
   std::vector<TimingArc>& get_timing_arc_list() { return _timing_arc_list; }
+  const std::vector<TimingArc>& get_timing_arc_list() const { return _timing_arc_list; }
   bool get_is_timing_graph_arc() const { return _is_timing_graph_arc; }
   bool get_is_clock_arc() const { return _is_clock_arc; }
   bool get_is_disable_arc() const { return _is_disable_arc; }

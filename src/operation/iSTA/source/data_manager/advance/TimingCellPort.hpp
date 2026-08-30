@@ -30,9 +30,11 @@ class TimingCellPort
   ~TimingCellPort() = default;
   // getter
   std::string& get_port_name() { return _port_name; }
+  const std::string& get_port_name() const { return _port_name; }
   double get_capacitance() const { return _capacitance; }
   double get_drive_resistance() const { return _drive_resistance; }
   std::map<AnalysisType, std::map<TransType, double>>& get_trans_capacitance_map() { return _trans_capacitance_map; }
+  const std::map<AnalysisType, std::map<TransType, double>>& get_trans_capacitance_map() const { return _trans_capacitance_map; }
   LogicExpression& get_function_expression() { return _function_expression; }
   bool get_is_input() const { return _is_input; }
   bool get_is_output() const { return _is_output; }

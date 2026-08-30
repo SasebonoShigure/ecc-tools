@@ -1,0 +1,198 @@
+# Copyright (c) 2023-2025 Peng Cheng Laboratory
+# Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
+# Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
+# Licensed under Mulan PSL v2.
+
+set(ISTA_STEP6_STRICT_OPTIONS
+    -Wall
+    -Wextra
+    -Werror
+    -pedantic
+    -ffp-contract=off
+)
+set(ISTA_STEP6_FUNCTIONAL_LINKS
+    ista_timing_graph_csr_adapter
+    ista_timing_database_headers
+)
+set(ISTA_STEP6_RERUN_LINKS
+    ista_timing_graph_csr_adapter
+    ista_timing_database_headers
+    ista_source
+    idm
+)
+
+function(ista_add_step6_target TARGET_NAME SOURCES_VARIABLE LINKS_VARIABLE)
+  add_executable("${TARGET_NAME}" ${${SOURCES_VARIABLE}})
+  target_include_directories("${TARGET_NAME}" PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
+  target_link_libraries("${TARGET_NAME}" PRIVATE ${${LINKS_VARIABLE}})
+  target_compile_options("${TARGET_NAME}" PRIVATE ${ISTA_STEP6_STRICT_OPTIONS})
+
+  get_target_property(ACTUAL_SOURCES "${TARGET_NAME}" SOURCES)
+  ista_assert_same_inventory(
+      ACTUAL_SOURCES ${SOURCES_VARIABLE} "${TARGET_NAME} source inventory"
+  )
+  ista_get_target_property_or_empty(ACTUAL_LINKS "${TARGET_NAME}" LINK_LIBRARIES)
+  ista_assert_same_inventory(
+      ACTUAL_LINKS ${LINKS_VARIABLE} "${TARGET_NAME} direct links"
+  )
+  ista_get_target_property_or_empty(ACTUAL_OPTIONS "${TARGET_NAME}" COMPILE_OPTIONS)
+  ista_assert_same_inventory(
+      ACTUAL_OPTIONS ISTA_STEP6_STRICT_OPTIONS "${TARGET_NAME} compile options"
+  )
+endfunction()
+
+set(ISTA_STEP6_COMMON_SOURCES
+    CsrNativeSemanticKeyTestSupport.hpp
+    CsrNativeTimingOracleTestSupport.hpp
+    CsrTimingScatterTestFixture.hpp
+    CsrReferenceInputTestFixture.cpp
+    CsrReferenceInputNativeFixture.cpp
+    CsrNativeTimingOracleReader.cpp
+    CsrNativeTimingOracleNodeReader.cpp
+    CsrNativeTimingOracleArcReader.cpp
+    CsrNativeTimingOracleIndependentEncoding.cpp
+    CsrTimingScatterTestFixture.cpp
+)
+
+set(ISTA_STEP6_NATIVE_ORACLE_SOURCES
+    ${ISTA_STEP6_COMMON_SOURCES}
+    CsrNativeTimingOracleContractTest.cpp
+    CsrNativeGraphRawProjector.cpp
+)
+ista_add_step6_target(
+    ista_csr_native_timing_oracle_contract_test
+    ISTA_STEP6_NATIVE_ORACLE_SOURCES
+    ISTA_STEP6_FUNCTIONAL_LINKS
+)
+
+set(ISTA_STEP6_SCATTER_CONTRACT_SOURCES
+    ${ISTA_STEP6_COMMON_SOURCES}
+    CsrTimingResultFromNativeOracle.cpp
+    CsrTimingScatterContractTest.cpp
+    CsrTimingScatterStaleContract.cpp
+)
+ista_add_step6_target(
+    ista_csr_timing_scatter_contract_test
+    ISTA_STEP6_SCATTER_CONTRACT_SOURCES
+    ISTA_STEP6_FUNCTIONAL_LINKS
+)
+
+set(ISTA_STEP6_SCATTER_ATOMICITY_SOURCES
+    ${ISTA_STEP6_COMMON_SOURCES}
+    CsrTimingResultFromNativeOracle.cpp
+    CsrTimingScatterAtomicityContract.cpp
+)
+ista_add_step6_target(
+    ista_csr_timing_scatter_atomicity_test
+    ISTA_STEP6_SCATTER_ATOMICITY_SOURCES
+    ISTA_STEP6_FUNCTIONAL_LINKS
+)
+
+set(ISTA_STEP6_SCATTER_PROPERTY_SOURCES
+    ${ISTA_STEP6_COMMON_SOURCES}
+    CsrTimingResultFromNativeOracle.cpp
+    CsrTimingScatterPropertyTest.cpp
+)
+ista_add_step6_target(
+    ista_csr_timing_scatter_property_test
+    ISTA_STEP6_SCATTER_PROPERTY_SOURCES
+    ISTA_STEP6_FUNCTIONAL_LINKS
+)
+
+set(ISTA_STEP6_PUBLIC_HEADER_SOURCES
+    CsrTimingScatterPublicHeadersMain.cpp
+    CsrTimingScatterHeaderIncludeOrderTest.cpp
+    CsrTimingScatterHeaderReverseIncludeOrderTest.cpp
+    public_header/CsrNativeTimingOracleHeaderTest.cpp
+    public_header/TimingResultScatterHeaderTest.cpp
+)
+ista_add_step6_target(
+    ista_csr_timing_scatter_public_headers_test
+    ISTA_STEP6_PUBLIC_HEADER_SOURCES
+    ISTA_STEP6_FUNCTIONAL_LINKS
+)
+
+set(ISTA_STEP6_RERUN_SOURCES
+    ${ISTA_STEP6_COMMON_SOURCES}
+    CsrTimingResultFromNativeOracle.cpp
+    timing_scatter/StaCsrTimingScatterRerunProbe.cpp
+)
+ista_add_step6_target(
+    ista_csr_timing_scatter_rerun_probe
+    ISTA_STEP6_RERUN_SOURCES
+    ISTA_STEP6_RERUN_LINKS
+)
+
+foreach(STEP6_UNIT_TARGET IN ITEMS
+        ista_csr_native_timing_oracle_contract_test
+        ista_csr_timing_scatter_contract_test
+        ista_csr_timing_scatter_atomicity_test
+        ista_csr_timing_scatter_public_headers_test)
+  add_test(NAME "${STEP6_UNIT_TARGET}" COMMAND "${STEP6_UNIT_TARGET}")
+  set_tests_properties(
+      "${STEP6_UNIT_TARGET}" PROPERTIES LABELS "ista_unit" TIMEOUT 60
+  )
+endforeach()
+
+set(ISTA_STEP6_PROPERTY_SEEDS 1 7 42 20260820 0xdeadbeef)
+foreach(PROPERTY_SEED IN LISTS ISTA_STEP6_PROPERTY_SEEDS)
+  add_test(
+      NAME "ista_csr_timing_scatter_property_seed_${PROPERTY_SEED}"
+      COMMAND ista_csr_timing_scatter_property_test --seed "${PROPERTY_SEED}"
+  )
+  set_tests_properties(
+      "ista_csr_timing_scatter_property_seed_${PROPERTY_SEED}"
+      PROPERTIES LABELS "ista_property" TIMEOUT 60
+  )
+endforeach()
+
+add_test(
+    NAME ista_csr_timing_scatter_rerun
+    COMMAND
+    "${CMAKE_COMMAND}" -E env
+    "PYTHONDONTWRITEBYTECODE=1"
+    "${ISTA_TEST_PYTHON_EXECUTABLE}"
+    "${CMAKE_CURRENT_LIST_DIR}/timing_scatter/timing_scatter_controller.py"
+    --probe "$<TARGET_FILE:ista_csr_timing_scatter_rerun_probe>"
+)
+set_tests_properties(
+    ista_csr_timing_scatter_rerun
+    PROPERTIES LABELS "ista_smoke" TIMEOUT 300
+)
+
+foreach(STEP6_SOURCE_GROUP IN ITEMS
+        NATIVE_ORACLE
+        SCATTER_CONTRACT
+        SCATTER_ATOMICITY
+        SCATTER_PROPERTY
+        PUBLIC_HEADER
+        RERUN)
+  string(
+      JOIN "|"
+      ISTA_STEP6_${STEP6_SOURCE_GROUP}_SOURCES_PACKED
+      ${ISTA_STEP6_${STEP6_SOURCE_GROUP}_SOURCES}
+  )
+endforeach()
+add_test(
+    NAME ista_csr_step6_source_inventory
+    COMMAND
+    "${CMAKE_COMMAND}"
+    "-DISTA_SOURCE_ROOT=${HOME_ISTA}"
+    "-DCSR_TEST_ROOT=${CMAKE_CURRENT_LIST_DIR}"
+    "-DCSR_BUILD_DIR=${CMAKE_BINARY_DIR}"
+    "-DNINJA_EXECUTABLE=${CMAKE_MAKE_PROGRAM}"
+    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DNM_EXECUTABLE=${CMAKE_NM}"
+    "-DCSR_GENERATOR=${CMAKE_GENERATOR}"
+    "-DCSR_NATIVE_ORACLE_SOURCES_PACKED=${ISTA_STEP6_NATIVE_ORACLE_SOURCES_PACKED}"
+    "-DCSR_SCATTER_CONTRACT_SOURCES_PACKED=${ISTA_STEP6_SCATTER_CONTRACT_SOURCES_PACKED}"
+    "-DCSR_SCATTER_ATOMICITY_SOURCES_PACKED=${ISTA_STEP6_SCATTER_ATOMICITY_SOURCES_PACKED}"
+    "-DCSR_SCATTER_PROPERTY_SOURCES_PACKED=${ISTA_STEP6_SCATTER_PROPERTY_SOURCES_PACKED}"
+    "-DCSR_PUBLIC_HEADER_SOURCES_PACKED=${ISTA_STEP6_PUBLIC_HEADER_SOURCES_PACKED}"
+    "-DCSR_RERUN_SOURCES_PACKED=${ISTA_STEP6_RERUN_SOURCES_PACKED}"
+    -P "${CMAKE_CURRENT_LIST_DIR}/CheckCsrStep6SourceInventory.cmake"
+)
+set_tests_properties(
+    ista_csr_step6_source_inventory
+    PROPERTIES LABELS "ista_unit" TIMEOUT 60
+)

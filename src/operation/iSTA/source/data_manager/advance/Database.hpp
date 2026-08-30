@@ -18,6 +18,7 @@
 
 #include "Arc.hpp"
 #include "Instance.hpp"
+#include "InstancePower.hpp"
 #include "Net.hpp"
 #include "ParasiticLibrary.hpp"
 #include "Pin.hpp"
@@ -29,7 +30,6 @@
 #include "TimingLibrary.hpp"
 #include "TimingPathGroup.hpp"
 #include "TimingPoint.hpp"
-#include "InstancePower.hpp"
 
 namespace ista {
 
@@ -41,23 +41,36 @@ class Database
   // getter
   std::string& get_design_name() { return _design_name; }
   std::map<std::string, Instance>& get_instance_map() { return _instance_map; }
+  const std::map<std::string, Instance>& get_instance_map() const { return _instance_map; }
   std::map<std::string, Pin>& get_pin_map() { return _pin_map; }
+  const std::map<std::string, Pin>& get_pin_map() const { return _pin_map; }
   std::map<std::string, Net>& get_net_map() { return _net_map; }
+  const std::map<std::string, Net>& get_net_map() const { return _net_map; }
   std::vector<Arc>& get_arc_list() { return _arc_list; }
+  const std::vector<Arc>& get_arc_list() const { return _arc_list; }
   std::map<std::string, std::vector<std::size_t>>& get_outgoing_arc_list_map() { return _outgoing_arc_list_map; }
+  const std::map<std::string, std::vector<std::size_t>>& get_outgoing_arc_list_map() const { return _outgoing_arc_list_map; }
   std::map<std::string, std::vector<std::size_t>>& get_incoming_arc_list_map() { return _incoming_arc_list_map; }
+  const std::map<std::string, std::vector<std::size_t>>& get_incoming_arc_list_map() const { return _incoming_arc_list_map; }
   std::vector<std::string>& get_start_point_list() { return _start_point_list; }
+  const std::vector<std::string>& get_start_point_list() const { return _start_point_list; }
   std::vector<std::string>& get_end_point_list() { return _end_point_list; }
-  std::vector<std::string>& get_timing_order_list() { return _timing_order_list; }
+  const std::vector<std::string>& get_end_point_list() const { return _end_point_list; }
+  [[nodiscard]] std::vector<std::string>& get_timing_order_list() noexcept { return _timing_order_list; }
+  [[nodiscard]] const std::vector<std::string>& get_timing_order_list() const noexcept { return _timing_order_list; }
   std::map<std::string, TimingPoint>& get_timing_point_map() { return _timing_point_map; }
+  const std::map<std::string, TimingPoint>& get_timing_point_map() const { return _timing_point_map; }
   std::vector<TimingPathGroup>& get_timing_path_group_list() { return _timing_path_group_list; }
   std::map<std::string, PowerActivity>& get_vcd_activity_map() { return _vcd_activity_map; }
   std::map<std::string, PowerActivity>& get_power_activity_map() { return _power_activity_map; }
   std::map<std::string, InstancePower>& get_instance_power_map() { return _instance_power_map; }
   PowerSummary& get_power_summary() { return _power_summary; }
   TimingLibrary& get_timing_library() { return _timing_library; }
+  const TimingLibrary& get_timing_library() const { return _timing_library; }
   ParasiticLibrary& get_parasitic_library() { return _parasitic_library; }
+  const ParasiticLibrary& get_parasitic_library() const { return _parasitic_library; }
   TimingConstraint& get_timing_constraint() { return _timing_constraint; }
+  const TimingConstraint& get_timing_constraint() const { return _timing_constraint; }
   Summary& get_summary() { return _summary; }
   // setter
   void set_design_name(const std::string& design_name) { _design_name = design_name; }

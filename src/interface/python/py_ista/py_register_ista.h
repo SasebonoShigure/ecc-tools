@@ -68,11 +68,13 @@ void register_ista(py::module& m)
   m.def("destroy_sta", destroySTA);
   m.def("resolve_sta_execution", resolveStaExecution, py::arg("request"));
   py::class_<ista::IncrementalStaSession>(m, "IncrementalStaSession")
-      .def("initialize", initializeIncrementalStaSession, py::arg("config") = "",
+      .def("initialize", initializeIncrementalStaSession, py::arg("analysis_context"), py::arg("config") = "",
            py::arg("config_dict") = std::map<std::string, std::string>{})
       .def("run_full_baseline", runIncrementalStaBaseline)
       .def("close", closeIncrementalStaSession)
-      .def_property_readonly("state", [](const ista::IncrementalStaSession& session) { return ista::toString(session.state()); });
+      .def_property_readonly("state", [](const ista::IncrementalStaSession& session) { return ista::toString(session.state()); })
+      .def_property_readonly("session_token", incrementalStaSessionToken)
+      .def_property_readonly("csr_snapshot_observation", incrementalStaSnapshotObservation);
   m.def("create_incremental_sta_session", createIncrementalStaSession, py::arg("request"));
 }
 

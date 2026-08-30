@@ -1,3 +1,12 @@
+add_library(ista_timing_database_headers INTERFACE)
+
+target_include_directories(ista_timing_database_headers
+    INTERFACE
+    ${ISTA_DATA_MANAGER}/advance
+    ${ISTA_DATA_MANAGER}/basic
+    ${ISTA_TOOLKIT}/logger
+)
+
 add_library(ista_data_manager
     ${ISTA_DATA_MANAGER}/DataManager.cpp
 )

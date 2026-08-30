@@ -29,8 +29,11 @@ class ParasiticNet
   ~ParasiticNet() = default;
   // getter
   std::string& get_net_name() { return _net_name; }
+  const std::string& get_net_name() const { return _net_name; }
   std::map<std::string, ParasiticNode>& get_node_map() { return _node_map; }
+  const std::map<std::string, ParasiticNode>& get_node_map() const { return _node_map; }
   std::vector<ParasiticResistor>& get_resistor_list() { return _resistor_list; }
+  const std::vector<ParasiticResistor>& get_resistor_list() const { return _resistor_list; }
   double get_lumped_capacitance() const { return _lumped_capacitance; }
   // setter
   void set_net_name(const std::string& net_name) { _net_name = net_name; }

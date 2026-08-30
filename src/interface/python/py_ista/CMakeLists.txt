@@ -1,6 +1,9 @@
-aux_source_directory(. PY_ISTA_SRC)
+set(HOME_ISTA ${HOME_OPERATION}/iSTA)
 
-add_library(py_ista ${PY_ISTA_SRC})
+add_library(py_ista
+    ${CMAKE_CURRENT_SOURCE_DIR}/py_ista.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/py_ista_utils.cpp
+)
 
 target_link_libraries(py_ista
     PUBLIC
@@ -13,6 +16,9 @@ target_link_libraries(py_ista
 
 target_include_directories(py_ista
     PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${HOME_UTILITY}/json
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${HOME_UTILITY}/json
+    PRIVATE
+        ${HOME_ISTA}/source/data_manager/adapter/csr
+        ${HOME_ISTA}/source/module/timing_csr_snapshot
 )

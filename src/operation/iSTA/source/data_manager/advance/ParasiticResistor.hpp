@@ -27,7 +27,9 @@ class ParasiticResistor
   ~ParasiticResistor() = default;
   // getter
   std::string& get_source_node() { return _source_node; }
+  const std::string& get_source_node() const { return _source_node; }
   std::string& get_sink_node() { return _sink_node; }
+  const std::string& get_sink_node() const { return _sink_node; }
   double get_resistance() const { return _resistance; }
   // setter
   void set_source_node(const std::string& source_node) { _source_node = source_node; }

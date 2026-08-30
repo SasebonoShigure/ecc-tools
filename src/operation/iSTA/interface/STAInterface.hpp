@@ -18,9 +18,11 @@
 
 #include <any>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -61,6 +63,20 @@ struct ResCap;
 struct LibertyExpr;
 
 namespace ista {
+class Database;
+class DataManager;
+class StaCsrSessionContext;
+struct StaCsrReferenceAttempt;
+struct StaCsrScatterAttempt;
+class StaCsrSessionProbeAccess;
+class StaInterfaceLifecycleTestAccess;
+class TimingCharacterizer;
+
+namespace csr {
+struct CsrSnapshotObservation;
+struct CsrTimingResult;
+}  // namespace csr
+
 class LogicExpression;
 class ParasiticNet;
 class ParasiticNode;
@@ -118,14 +134,18 @@ class STAInterface
   bool getPorts(const std::vector<std::string>& port_name_list, std::vector<std::string>& resolved_port_list, std::string& error_message);
   bool getClocks(const std::vector<std::string>& clock_name_list, std::vector<std::string>& resolved_clock_list, std::string& error_message);
   StaStatus initializeSession(uint64_t token, std::map<std::string, std::any>& config_map);
-  StaStatus runSessionBaseline(uint64_t token);
-  StaStatus closeSession(uint64_t token);
+  StaStatus runSessionBaseline(uint64_t token, StaCsrSessionContext* capture_or_null);
+  StaStatus closeSession(uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* released_out);
+  StaStatus copySessionCsrSnapshotObservation(uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* detached_out);
+  StaCsrReferenceAttempt computeSessionCsrReferenceForTesting(uint64_t token, StaCsrSessionContext* context);
+  StaCsrScatterAttempt scatterSessionCsrTimingResultForTesting(uint64_t token, StaCsrSessionContext* context, const csr::CsrTimingResult& result);
   std::string lifecycleStateForTesting() const;
   void setLifecycleOperationsForTesting(StaProductionLifecycleOperations* operations);
 #endif
 
 #endif
 
+ private:
 #if 1  // STA调用外部的API
 
 #if 1  // TopData
@@ -230,18 +250,61 @@ class STAInterface
 #endif
 
  private:
-  static STAInterface* _sta_interface_instance;
+  friend class DataManager;
+  friend class TimingCharacterizer;
+  friend class StaCsrSessionProbeAccess;
+  friend class StaInterfaceLifecycleTestAccess;
+
+  class OperationGuard
+  {
+   public:
+    OperationGuard(STAInterface* interface, std::unique_lock<std::mutex> lock) noexcept;
+    OperationGuard(const OperationGuard&) = delete;
+    OperationGuard(OperationGuard&& other) noexcept;
+    ~OperationGuard() noexcept;
+    OperationGuard& operator=(const OperationGuard&) = delete;
+    OperationGuard& operator=(OperationGuard&&) = delete;
+
+   private:
+    STAInterface* _interface;
+    std::unique_lock<std::mutex> _lock;
+    bool _owns_sentinel{true};
+  };
+
+  class ClosePendingReservation
+  {
+   public:
+    ClosePendingReservation(STAInterface* interface, StaOwner owner) noexcept;
+    ClosePendingReservation(const ClosePendingReservation&) = delete;
+    ClosePendingReservation(ClosePendingReservation&& other) noexcept;
+    ~ClosePendingReservation() noexcept;
+    ClosePendingReservation& operator=(const ClosePendingReservation&) = delete;
+    ClosePendingReservation& operator=(ClosePendingReservation&&) = delete;
+    void commit() noexcept;
+
+   private:
+    STAInterface* _interface;
+    StaOwner _owner;
+    bool _active{true};
+  };
+
+  std::mutex _operation_mutex;
   mutable std::mutex _lifecycle_mutex;
   StaOwnerLease _lifecycle;
+  StaOwner _close_pending;
   bool _is_initialized = false;
   bool _is_timing_updated = false;
   StaProductionLifecycleOperations* _lifecycle_operations = nullptr;
 
+  [[nodiscard]] std::optional<OperationGuard> acquireUse(StaOwner owner, const StaCsrSessionContext* context, bool context_required,
+                                                         StaSessionState failure_state, StaStatus* failure);
+  [[nodiscard]] StaStatus leaseFailure(const StaLeaseResult& lease, StaSessionState state) const;
+  [[nodiscard]] static bool operationSentinelActive() noexcept;
+  [[nodiscard]] static std::uint64_t constructorCountForTesting() noexcept;
   StaStatus initializeOwned(StaOwner owner, std::map<std::string, std::any>& config_map);
-  StaStatus runOwned(StaOwner owner);
-  StaStatus closeOwned(StaOwner owner);
-  bool isLegacyOwner(std::string& error_message) const;
-  void requireLegacyOwner() const;
+  StaStatus runOwned(StaOwner owner, StaCsrSessionContext* capture_or_null);
+  StaStatus closeOwned(StaOwner owner, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* released_out);
+  void inspectSessionDatabaseForTesting(uint64_t token, const std::function<void(const Database&)>& callback);
 
   STAInterface();
   STAInterface(const STAInterface& other) = delete;
@@ -249,7 +312,7 @@ class STAInterface
   ~STAInterface() = default;
   STAInterface& operator=(const STAInterface& other) = delete;
   STAInterface& operator=(STAInterface&& other) = delete;
-  // function
+
   bool isSTAInitialized(std::string& error_message) const;
 };
 

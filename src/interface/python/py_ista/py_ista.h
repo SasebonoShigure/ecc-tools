@@ -32,9 +32,11 @@ bool destroySTA();
 ista::StaExecutionRequest parseStaExecutionRequest(const std::map<std::string, std::string>& request);
 pybind11::dict resolveStaExecution(const std::map<std::string, std::string>& request);
 std::unique_ptr<ista::IncrementalStaSession> createIncrementalStaSession(const std::map<std::string, std::string>& request);
-void initializeIncrementalStaSession(ista::IncrementalStaSession& session, const std::string& config,
+void initializeIncrementalStaSession(ista::IncrementalStaSession& session, pybind11::handle analysis_context, const std::string& config,
                                      std::map<std::string, std::string> config_dict);
 pybind11::dict runIncrementalStaBaseline(ista::IncrementalStaSession& session);
 void closeIncrementalStaSession(ista::IncrementalStaSession& session);
+pybind11::object incrementalStaSessionToken(const ista::IncrementalStaSession& session);
+pybind11::object incrementalStaSnapshotObservation(ista::IncrementalStaSession& session);
 
 }  // namespace python_interface

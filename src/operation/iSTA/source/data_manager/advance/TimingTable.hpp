@@ -30,7 +30,9 @@ class TimingTable
   TimingTableVariableType get_variable_type1() const { return _variable_type1; }
   TimingTableVariableType get_variable_type2() const { return _variable_type2; }
   std::vector<std::vector<double>>& get_axis_list() { return _axis_list; }
+  const std::vector<std::vector<double>>& get_axis_list() const { return _axis_list; }
   std::vector<double>& get_value_list() { return _value_list; }
+  const std::vector<double>& get_value_list() const { return _value_list; }
   // setter
   void set_variable_type1(const TimingTableVariableType& variable_type1) { _variable_type1 = variable_type1; }
   void set_variable_type2(const TimingTableVariableType& variable_type2) { _variable_type2 = variable_type2; }

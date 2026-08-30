@@ -31,9 +31,13 @@ class TimingPathState
   double get_slew() const { return _slew; }
   double get_launch_time() const { return _launch_time; }
   std::string& get_start_point() { return _start_point; }
+  [[nodiscard]] const std::string& get_start_point() const noexcept { return _start_point; }
   std::string& get_predecessor() { return _predecessor; }
+  [[nodiscard]] const std::string& get_predecessor() const noexcept { return _predecessor; }
   std::string& get_clock_name() { return _clock_name; }
+  [[nodiscard]] const std::string& get_clock_name() const noexcept { return _clock_name; }
   std::string& get_crpr_clock_pin() { return _crpr_clock_pin; }
+  [[nodiscard]] const std::string& get_crpr_clock_pin() const noexcept { return _crpr_clock_pin; }
   std::size_t get_predecessor_arc_idx() const { return _predecessor_arc_idx; }
   double get_predecessor_arc_delay() const { return _predecessor_arc_delay; }
   TransType get_trans_type() const { return _trans_type; }

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ista:csr-real-differential-controller:1.0.0",
+  "title": "iSTA CSR real differential controller result",
+  "type": "object",
+  "properties": {
+    "schema": {"const": "ista-csr-real-differential-controller/1.0.0"},
+    "controller_pid": {"type": "integer", "minimum": 1, "maximum": 18446744073709551615},
+    "controller_run_nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "requested_repeats": {"type": "integer", "minimum": 3, "maximum": 18446744073709551615},
+    "case_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "case": {"type": "string"},
+          "input_case_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "repeats": {
+            "type": "array",
+            "minItems": 3,
+            "items": {
+              "type": "object",
+              "properties": {
+                "repeat_index": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+                "oracle": {"$ref": "urn:ista:csr-real-differential-probe:1.0.0#/$defs/oracleProbe"},
+                "reference": {"$ref": "urn:ista:csr-real-differential-probe:1.0.0#/$defs/referenceProbe"}
+              },
+              "required": ["repeat_index", "oracle", "reference"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["case", "input_case_sha256", "repeats"],
+        "additionalProperties": false
+      }
+    },
+    "complete": {"const": true}
+  },
+  "required": [
+    "schema", "controller_pid", "controller_run_nonce",
+    "requested_repeats", "case_results", "complete"
+  ],
+  "additionalProperties": false
+}

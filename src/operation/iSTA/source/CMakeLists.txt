@@ -6,6 +6,7 @@ set(ISTA_TOOLKIT ${ISTA_SOURCE}/toolkit)
 ## build
 add_subdirectory(${ISTA_DATA_MANAGER})
 add_subdirectory(${ISTA_MODULE})
+add_subdirectory(${ISTA_DATA_MANAGER}/adapter/csr)
 add_subdirectory(${ISTA_TOOLKIT})
 
 add_library(ista_source INTERFACE)

@@ -1,0 +1,33 @@
+{
+  "schema_version": "1.0.0",
+  "state": "ready",
+  "identity": {
+    "fingerprint_schema_version": "1.0.0",
+    "session_token": 1,
+    "graph_generation": 0,
+    "topology_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+    "clock_constraint_fingerprint": "2222222222222222222222222222222222222222222222222222222222222222",
+    "library_fingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+    "corner_fingerprint": "4444444444444444444444444444444444444444444444444444444444444444",
+    "parasitic_fingerprint": "5555555555555555555555555555555555555555555555555555555555555555",
+    "timing_input_fingerprint": "6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "counts": {"nodes": 0, "arcs": 0, "levels": 0},
+  "buffers": {
+    "node_keys": {"logical_size": 0, "capacity": 0},
+    "arc_keys": {"logical_size": 0, "capacity": 0},
+    "out_row_offsets": {"logical_size": 1, "capacity": 1},
+    "out_arc_ids": {"logical_size": 0, "capacity": 0},
+    "in_row_offsets": {"logical_size": 1, "capacity": 1},
+    "in_arc_ids": {"logical_size": 0, "capacity": 0},
+    "level_offsets": {"logical_size": 1, "capacity": 1},
+    "level_nodes": {"logical_size": 0, "capacity": 0},
+    "node_to_level": {"logical_size": 0, "capacity": 0}
+  },
+  "capacity": {"last_action": "initial_allocate", "event_count": 1},
+  "support": {"reference_supported": true, "unsupported_reasons": []},
+  "timing_ms": {"export": 0.0, "reference": null, "scatter": null},
+  "host_bytes": {"logical": 256, "capacity": 512},
+  "last_rejection": null,
+  "last_invalidation": null
+}

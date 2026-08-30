@@ -16,6 +16,7 @@
 // ***************************************************************************************
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -68,6 +69,23 @@ class StaLifecycleGuard
 };
 
 void emitStaLifecycleDiagnostic(std::string_view prefix, std::string_view message) noexcept;
+
+class StaSessionTokenAllocator
+{
+ public:
+  explicit StaSessionTokenAllocator(std::uint64_t initial = 1) noexcept;
+  StaSessionTokenAllocator(const StaSessionTokenAllocator&) = delete;
+  StaSessionTokenAllocator(StaSessionTokenAllocator&&) = delete;
+  StaSessionTokenAllocator& operator=(const StaSessionTokenAllocator&) = delete;
+  StaSessionTokenAllocator& operator=(StaSessionTokenAllocator&&) = delete;
+
+  [[nodiscard]] std::optional<std::uint64_t> allocate() noexcept;
+
+ private:
+  std::atomic<std::uint64_t> _next;
+};
+
+[[nodiscard]] StaSessionTokenAllocator& productionStaSessionTokenAllocator() noexcept;
 
 StaOperationResult executeStaLifecycleStage(const std::string& name, const std::function<void()>& initialize, const std::function<void()>& work,
                                             const std::function<void()>& cleanup);

@@ -27,6 +27,7 @@ class ParasiticNode
   ~ParasiticNode() = default;
   // getter
   std::string& get_node_name() { return _node_name; }
+  const std::string& get_node_name() const { return _node_name; }
   double get_capacitance() const { return _capacitance; }
   double get_x() const { return _x; }
   double get_y() const { return _y; }

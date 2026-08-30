@@ -27,7 +27,9 @@ class TimingPortConstraint
   ~TimingPortConstraint() = default;
   // getter
   std::string& get_port_name() { return _port_name; }
+  const std::string& get_port_name() const { return _port_name; }
   std::string& get_clock_name() { return _clock_name; }
+  const std::string& get_clock_name() const { return _clock_name; }
   double get_input_delay_max() const { return _input_delay_max; }
   double get_input_delay_min() const { return _input_delay_min; }
   double get_output_delay_max() const { return _output_delay_max; }

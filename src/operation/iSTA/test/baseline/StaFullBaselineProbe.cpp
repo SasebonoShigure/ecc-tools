@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "CsrReferenceTypes.hpp"
 #include "DataManager.hpp"
 #include "IncrementalStaSession.hpp"
 #include "STAInterface.hpp"
@@ -100,15 +101,15 @@ Json arcReference(std::size_t index, const ArcKeys& keys)
   return keys.keys[index];
 }
 
-std::map<int32_t, std::string> makeTimingArcKeys(ista::Arc& arc)
+std::map<int32_t, std::string> makeTimingArcKeys(const ista::Arc& arc)
 {
   std::map<int32_t, std::string> result;
   std::map<std::string, std::size_t> next_ordinal;
-  ista::TimingCellArc* cell_arc = arc.get_timing_cell_arc();
+  const ista::TimingCellArc* cell_arc = arc.get_timing_cell_arc();
   if (cell_arc == nullptr) {
     return result;
   }
-  for (ista::TimingArc& timing_arc : cell_arc->get_timing_arc_list()) {
+  for (const ista::TimingArc& timing_arc : cell_arc->get_timing_arc_list()) {
     Json identity = Json::array({timing_arc.get_library_name(), arcSenseName(timing_arc.get_sense()), transName(timing_arc.get_trigger_trans_type()),
                                  transName(timing_arc.get_check_trans_type()), timing_arc.get_sdf_cond()});
     std::string base = identity.dump();
@@ -287,14 +288,14 @@ Json encodeArcTiming(ista::Database& database, const ArcKeys& keys)
   Json result = Json::array();
   auto encode_numeric = [](double value) { return encodeNumber(value); };
   for (std::size_t index = 0; index < database.get_arc_list().size(); ++index) {
-    ista::Arc& arc = database.get_arc_list()[index];
+    const ista::Arc& arc = database.get_arc_list()[index];
     Json trans_map = Json::array();
-    for (auto& [input, output] : arc.get_trans_type_map()) {
+    for (const auto& [input, output] : arc.get_trans_type_map()) {
       trans_map.push_back({{"input_transition", transName(input)}, {"output_transition", transName(output)}});
     }
     std::map<int32_t, std::string> timing_arc_keys = makeTimingArcKeys(arc);
     Json timing_arc_delays = Json::array();
-    for (auto& [timing_arc_index, analyses] : arc.get_timing_arc_delay_map()) {
+    for (const auto& [timing_arc_index, analyses] : arc.get_timing_arc_delay_map()) {
       Json semantic_timing_arc = sentinel("missing");
       if (auto key_it = timing_arc_keys.find(timing_arc_index); key_it != timing_arc_keys.end()) {
         semantic_timing_arc = key_it->second;
@@ -312,13 +313,16 @@ Json encodeArcTiming(ista::Database& database, const ArcKeys& keys)
       }
     }
     std::sort(timing_arc_delays.begin(), timing_arc_delays.end(), [](const Json& lhs, const Json& rhs) { return lhs.dump() < rhs.dump(); });
+    auto transition_delay = arc.get_trans_delay_map();
+    auto input_output_delay = arc.get_input_output_delay_map();
+    auto graph_delay = arc.get_graph_delay_map();
     result.push_back({{"key", keys.keys[index]},
                       {"delay", encodeNumber(arc.get_delay())},
                       {"delay_max", encodeNumber(arc.get_delay_max())},
                       {"delay_min", encodeNumber(arc.get_delay_min())},
-                      {"transition_delay", encodeAnalysisTrans(arc.get_trans_delay_map(), encode_numeric)},
-                      {"input_output_delay", encodeAnalysisInputOutput(arc.get_input_output_delay_map(), encode_numeric)},
-                      {"graph_delay", encodeAnalysisInputOutput(arc.get_graph_delay_map(), encode_numeric)},
+                      {"transition_delay", encodeAnalysisTrans(transition_delay, encode_numeric)},
+                      {"input_output_delay", encodeAnalysisInputOutput(input_output_delay, encode_numeric)},
+                      {"graph_delay", encodeAnalysisInputOutput(graph_delay, encode_numeric)},
                       {"timing_arc_delay", timing_arc_delays},
                       {"transition_map", trans_map}});
   }
@@ -617,10 +621,10 @@ int main(int argc, char* argv[])
       }
       const ista::StaUpdateStrategy strategy = run == 0 ? ista::StaUpdateStrategy::kFull : ista::StaUpdateStrategy::kIncremental;
       ista::IncrementalStaSession session({ista::StaBackend::kCpu, strategy, ista::StaFallbackPolicy::kError});
-      ista::throwOnStaFailure(session.initialize(config), session.request());
+      ista::throwOnStaFailure(session.initialize(ista::csr::StaAnalysisContext{"slow", "25", "__no_rc_corner__"}, config), session.request());
       if (run == 0) {
         ista::IncrementalStaSession overlap({ista::StaBackend::kCpu, ista::StaUpdateStrategy::kFull, ista::StaFallbackPolicy::kError});
-        if (overlap.initialize(config).code != ista::StaSessionStatusCode::kOwnerConflict) {
+        if (overlap.initialize(ista::csr::StaAnalysisContext{"slow", "25", "__no_rc_corner__"}, config).code != ista::StaSessionStatusCode::kOwnerConflict) {
           throw std::runtime_error("active session did not reject a second session");
         }
         for (void (*blocked)() : std::array<void (*)(), 2>{+[] { STAI.destroySTA(); }, +[] { ista::STAInterface::destroyInst(); }}) {

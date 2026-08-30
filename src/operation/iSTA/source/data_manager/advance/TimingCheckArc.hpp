@@ -29,10 +29,13 @@ class TimingCheckArc
   ~TimingCheckArc() = default;
   // getter
   std::string& get_clock_port() { return _clock_port; }
+  const std::string& get_clock_port() const { return _clock_port; }
   std::string& get_data_port() { return _data_port; }
+  const std::string& get_data_port() const { return _data_port; }
   TimingCheckType get_check_type() const { return _check_type; }
   double get_check_time() const { return _check_time; }
   std::vector<TimingArc>& get_timing_arc_list() { return _timing_arc_list; }
+  const std::vector<TimingArc>& get_timing_arc_list() const { return _timing_arc_list; }
   TransType get_clock_trans_type() const { return _clock_trans_type; }
   // setter
   void set_clock_port(const std::string& clock_port) { _clock_port = clock_port; }

@@ -30,8 +30,11 @@ class TimingConstraint
   // getter
   std::string& get_sdc_file_path() { return _sdc_file_path; }
   std::map<std::string, TimingClock>& get_clock_map() { return _clock_map; }
+  const std::map<std::string, TimingClock>& get_clock_map() const { return _clock_map; }
   std::map<std::string, TimingPortConstraint>& get_port_constraint_map() { return _port_constraint_map; }
+  const std::map<std::string, TimingPortConstraint>& get_port_constraint_map() const { return _port_constraint_map; }
   std::map<std::string, bool>& get_case_analysis_map() { return _case_analysis_map; }
+  const std::map<std::string, bool>& get_case_analysis_map() const { return _case_analysis_map; }
   // setter
   void set_sdc_file_path(const std::string& sdc_file_path) { _sdc_file_path = sdc_file_path; }
   void set_clock_map(const std::map<std::string, TimingClock>& clock_map) { _clock_map = clock_map; }

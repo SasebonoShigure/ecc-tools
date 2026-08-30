@@ -28,9 +28,13 @@ class Pin
   ~Pin() = default;
   // getter
   std::string& get_pin_name() { return _pin_name; }
+  const std::string& get_pin_name() const { return _pin_name; }
   std::string& get_full_name() { return _full_name; }
+  const std::string& get_full_name() const { return _full_name; }
   std::string& get_instance_name() { return _instance_name; }
+  const std::string& get_instance_name() const { return _instance_name; }
   std::string& get_net_name() { return _net_name; }
+  const std::string& get_net_name() const { return _net_name; }
   PinDirection get_direction() const { return _direction; }
   double get_x() const { return _x; }
   double get_y() const { return _y; }

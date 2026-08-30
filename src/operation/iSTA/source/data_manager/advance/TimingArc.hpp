@@ -34,7 +34,9 @@ class TimingArc
   TransType get_trigger_trans_type() const { return _trigger_trans_type; }
   TransType get_check_trans_type() const { return _check_trans_type; }
   std::string& get_library_name() { return _library_name; }
+  const std::string& get_library_name() const { return _library_name; }
   std::string& get_sdf_cond() { return _sdf_cond; }
+  const std::string& get_sdf_cond() const { return _sdf_cond; }
   double get_time_unit_scale() const { return _time_unit_scale; }
   double get_cap_unit_scale() const { return _cap_unit_scale; }
   double get_slew_derate() const { return _slew_derate; }
@@ -47,8 +49,11 @@ class TimingArc
   double get_input_threshold_pct_fall() const { return _input_threshold_pct_fall; }
   double get_output_threshold_pct_fall() const { return _output_threshold_pct_fall; }
   std::map<TransType, TimingTable>& get_delay_table_map() { return _delay_table_map; }
+  const std::map<TransType, TimingTable>& get_delay_table_map() const { return _delay_table_map; }
   std::map<TransType, TimingTable>& get_slew_table_map() { return _slew_table_map; }
+  const std::map<TransType, TimingTable>& get_slew_table_map() const { return _slew_table_map; }
   std::map<TransType, TimingTable>& get_check_table_map() { return _check_table_map; }
+  const std::map<TransType, TimingTable>& get_check_table_map() const { return _check_table_map; }
   // setter
   void set_sense(const TimingArcSense& sense) { _sense = sense; }
   void set_arc_idx(const int32_t arc_idx) { _arc_idx = arc_idx; }
@@ -59,22 +64,10 @@ class TimingArc
   void set_time_unit_scale(const double time_unit_scale) { _time_unit_scale = time_unit_scale; }
   void set_cap_unit_scale(const double cap_unit_scale) { _cap_unit_scale = cap_unit_scale; }
   void set_slew_derate(const double slew_derate) { _slew_derate = slew_derate; }
-  void set_slew_lower_threshold_pct_rise(const double slew_lower_threshold_pct_rise)
-  {
-    _slew_lower_threshold_pct_rise = slew_lower_threshold_pct_rise;
-  }
-  void set_slew_upper_threshold_pct_rise(const double slew_upper_threshold_pct_rise)
-  {
-    _slew_upper_threshold_pct_rise = slew_upper_threshold_pct_rise;
-  }
-  void set_slew_lower_threshold_pct_fall(const double slew_lower_threshold_pct_fall)
-  {
-    _slew_lower_threshold_pct_fall = slew_lower_threshold_pct_fall;
-  }
-  void set_slew_upper_threshold_pct_fall(const double slew_upper_threshold_pct_fall)
-  {
-    _slew_upper_threshold_pct_fall = slew_upper_threshold_pct_fall;
-  }
+  void set_slew_lower_threshold_pct_rise(const double slew_lower_threshold_pct_rise) { _slew_lower_threshold_pct_rise = slew_lower_threshold_pct_rise; }
+  void set_slew_upper_threshold_pct_rise(const double slew_upper_threshold_pct_rise) { _slew_upper_threshold_pct_rise = slew_upper_threshold_pct_rise; }
+  void set_slew_lower_threshold_pct_fall(const double slew_lower_threshold_pct_fall) { _slew_lower_threshold_pct_fall = slew_lower_threshold_pct_fall; }
+  void set_slew_upper_threshold_pct_fall(const double slew_upper_threshold_pct_fall) { _slew_upper_threshold_pct_fall = slew_upper_threshold_pct_fall; }
   void set_input_threshold_pct_rise(const double input_threshold_pct_rise) { _input_threshold_pct_rise = input_threshold_pct_rise; }
   void set_output_threshold_pct_rise(const double output_threshold_pct_rise) { _output_threshold_pct_rise = output_threshold_pct_rise; }
   void set_input_threshold_pct_fall(const double input_threshold_pct_fall) { _input_threshold_pct_fall = input_threshold_pct_fall; }

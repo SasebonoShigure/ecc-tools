@@ -32,15 +32,20 @@ class TimingCell
   ~TimingCell() = default;
   // getter
   std::string& get_cell_name() { return _cell_name; }
+  const std::string& get_cell_name() const { return _cell_name; }
   std::string& get_library_name() { return _library_name; }
+  const std::string& get_library_name() const { return _library_name; }
   double get_area() const { return _area; }
   double get_nom_voltage() const { return _nom_voltage; }
   double get_cell_leakage_power() const { return _cell_leakage_power; }
   std::map<std::string, TimingCellPort>& get_port_map() { return _port_map; }
+  const std::map<std::string, TimingCellPort>& get_port_map() const { return _port_map; }
   std::vector<TimingCellArc>& get_cell_arc_list() { return _cell_arc_list; }
+  const std::vector<TimingCellArc>& get_cell_arc_list() const { return _cell_arc_list; }
   std::vector<TimingPowerArc>& get_power_arc_list() { return _power_arc_list; }
   std::vector<TimingLeakagePower>& get_leakage_power_list() { return _leakage_power_list; }
   std::vector<TimingCheckArc>& get_check_arc_list() { return _check_arc_list; }
+  const std::vector<TimingCheckArc>& get_check_arc_list() const { return _check_arc_list; }
   std::vector<TimingCheckArc>& get_sdf_check_arc_list() { return _sdf_check_arc_list; }
   bool get_is_sequential() const { return _is_sequential; }
   bool get_is_clock_gating() const { return _is_clock_gating; }
@@ -73,22 +78,10 @@ class TimingCell
   void set_is_macro(const bool is_macro) { _is_macro = is_macro; }
   void set_has_clear_arc(const bool has_clear_arc) { _has_clear_arc = has_clear_arc; }
   void set_has_preset_arc(const bool has_preset_arc) { _has_preset_arc = has_preset_arc; }
-  void set_slew_lower_threshold_pct_rise(const double slew_lower_threshold_pct_rise)
-  {
-    _slew_lower_threshold_pct_rise = slew_lower_threshold_pct_rise;
-  }
-  void set_slew_upper_threshold_pct_rise(const double slew_upper_threshold_pct_rise)
-  {
-    _slew_upper_threshold_pct_rise = slew_upper_threshold_pct_rise;
-  }
-  void set_slew_lower_threshold_pct_fall(const double slew_lower_threshold_pct_fall)
-  {
-    _slew_lower_threshold_pct_fall = slew_lower_threshold_pct_fall;
-  }
-  void set_slew_upper_threshold_pct_fall(const double slew_upper_threshold_pct_fall)
-  {
-    _slew_upper_threshold_pct_fall = slew_upper_threshold_pct_fall;
-  }
+  void set_slew_lower_threshold_pct_rise(const double slew_lower_threshold_pct_rise) { _slew_lower_threshold_pct_rise = slew_lower_threshold_pct_rise; }
+  void set_slew_upper_threshold_pct_rise(const double slew_upper_threshold_pct_rise) { _slew_upper_threshold_pct_rise = slew_upper_threshold_pct_rise; }
+  void set_slew_lower_threshold_pct_fall(const double slew_lower_threshold_pct_fall) { _slew_lower_threshold_pct_fall = slew_lower_threshold_pct_fall; }
+  void set_slew_upper_threshold_pct_fall(const double slew_upper_threshold_pct_fall) { _slew_upper_threshold_pct_fall = slew_upper_threshold_pct_fall; }
   void set_input_threshold_pct_rise(const double input_threshold_pct_rise) { _input_threshold_pct_rise = input_threshold_pct_rise; }
   void set_output_threshold_pct_rise(const double output_threshold_pct_rise) { _output_threshold_pct_rise = output_threshold_pct_rise; }
   void set_input_threshold_pct_fall(const double input_threshold_pct_fall) { _input_threshold_pct_fall = input_threshold_pct_fall; }

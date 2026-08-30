@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecos.org/schemas/reference_input_controller_v1.schema.json",
+  "title": "Detached complete CSR reference-input controller summary, version 1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "requested_repeats", "case_results", "complete"],
+  "properties": {
+    "schema": {"const": "ista-csr-reference-input-controller/1"},
+    "requested_repeats": {"type": "integer", "minimum": 3, "maximum": 18446744073709551615},
+    "case_results": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/caseResult"}
+    },
+    "complete": {"const": true}
+  },
+  "$defs": {
+    "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "family": {
+      "enum": [
+        "timing_point_level",
+        "timing_point_is_clock_point",
+        "timing_point_scalars",
+        "timing_point_clock_arrival_maps",
+        "timing_point_clock_slew_maps",
+        "timing_point_clock_predecessor_maps",
+        "timing_point_clock_predecessor_arc_delay_maps",
+        "timing_point_clock_predecessor_transition_maps",
+        "timing_point_data_slew_map",
+        "timing_point_path_state_map",
+        "arc_scalars",
+        "arc_transition_maps",
+        "arc_input_output_delay_map",
+        "arc_graph_delay_map",
+        "arc_timing_arc_delay_map",
+        "arc_timing_arc_fallback_provenance",
+        "database_timing_order"
+      ]
+    },
+    "repeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repeat_index",
+        "input_case_sha256",
+        "session_token",
+        "candidate_wire_sha256",
+        "raw_projection_sha256",
+        "touched_families"
+      ],
+      "properties": {
+        "repeat_index": {"$ref": "#/$defs/u64"},
+        "input_case_sha256": {"$ref": "#/$defs/sha256"},
+        "session_token": {"type": "integer", "const": 1, "minimum": 1, "maximum": 18446744073709551615},
+        "candidate_wire_sha256": {"$ref": "#/$defs/sha256"},
+        "raw_projection_sha256": {"$ref": "#/$defs/sha256"},
+        "touched_families": {
+          "type": "array",
+          "minItems": 17,
+          "maxItems": 17,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/family"}
+        }
+      }
+    },
+    "caseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case", "repeats"],
+      "properties": {
+        "case": {"enum": ["chain", "diamond"]},
+        "repeats": {
+          "type": "array",
+          "minItems": 3,
+          "items": {"$ref": "#/$defs/repeat"}
+        }
+      }
+    }
+  }
+}

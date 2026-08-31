@@ -1,0 +1,77 @@
+{
+  "schema_version": "buffer-trace-contract-manifest/1.0.0",
+  "trace_schema": "buffer-fixed-trace/1.0.0",
+  "stage3_contract_schema": "timing-edit-trace/1.0.0",
+  "selection_mode": "fixed_trace",
+  "source_artifact_roles": [
+    "tech_lef",
+    "cell_lef",
+    "liberty",
+    "verilog",
+    "sdc"
+  ],
+  "profiles": [
+    {
+      "id": "paper_protocol_top1000_x1",
+      "top_k": 1000,
+      "rounds": 1,
+      "max_total_insertions": 1000,
+      "analysis": "cpu_full",
+      "operating_point": {
+        "input_slew_ns": 0.05,
+        "output_load_pf": 0.01
+      },
+      "rc_profile": {
+        "id": "engineering_rc_v1",
+        "upstream_resistance_kohm": 64.0,
+        "buffer_resistance_kohm": 1.0
+      },
+      "comparability_status": "protocol_only"
+    },
+    {
+      "id": "paper_protocol_top100_x10",
+      "top_k": 100,
+      "rounds": 10,
+      "max_total_insertions": 1000,
+      "analysis": "cpu_full",
+      "operating_point": {
+        "input_slew_ns": 0.05,
+        "output_load_pf": 0.01
+      },
+      "rc_profile": {
+        "id": "engineering_rc_v1",
+        "upstream_resistance_kohm": 64.0,
+        "buffer_resistance_kohm": 1.0
+      },
+      "comparability_status": "protocol_only"
+    },
+    {
+      "id": "engineering_smoke",
+      "top_k": 4,
+      "rounds": 2,
+      "max_total_insertions": 4,
+      "analysis": "cpu_full",
+      "operating_point": {
+        "input_slew_ns": 0.05,
+        "output_load_pf": 0.01
+      },
+      "rc_profile": {
+        "id": "engineering_rc_v1",
+        "upstream_resistance_kohm": 64.0,
+        "buffer_resistance_kohm": 1.0
+      },
+      "comparability_status": "non_comparable",
+      "comparability_reason": "engineering_rc_no_physical"
+    }
+  ],
+  "replay_projection_excludes": [
+    "generation_only",
+    "integrity",
+    "arrival_ns",
+    "required_ns",
+    "slack_ns",
+    "candidate_load_pf",
+    "gain_ns"
+  ],
+  "integrity_usage": "artifact_identity_only"
+}

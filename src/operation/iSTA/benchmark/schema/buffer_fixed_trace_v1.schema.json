@@ -1,0 +1,337 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecos.org/schemas/buffer_fixed_trace_v1.schema.json",
+  "title": "iSTA fixed buffer semantic trace, version 1",
+  "description": "Closed-world Stage 4 artifact. Functional replay equality is authoritative; integrity SHA-256 is only an artifact identity aid.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["replay", "generation_only", "integrity"],
+  "properties": {
+    "replay": {"$ref": "#/$defs/replayProgram"},
+    "generation_only": {"$ref": "#/$defs/generationReceipt"},
+    "integrity": {"$ref": "#/$defs/integrityReceipt"}
+  },
+  "$defs": {
+    "u64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "positiveU64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\u0000]+$"
+    },
+    "safeLeafText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!\\.{1,2}$)[^/\\u0000]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "selection_mode",
+        "semantic_workload_kind",
+        "profile_id",
+        "comparability_status"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "selection_mode": {"const": "fixed_trace"},
+        "semantic_workload_kind": {"enum": ["synthetic", "real_design"]},
+        "profile_id": {
+          "enum": [
+            "paper_protocol_top1000_x1",
+            "paper_protocol_top100_x10",
+            "engineering_smoke"
+          ]
+        },
+        "comparability_status": {
+          "enum": ["exact", "protocol_only", "non_comparable"]
+        },
+        "comparability_reason": {"const": "engineering_rc_no_physical"}
+      }
+    },
+    "sourceRecipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logical_name", "source_text"],
+      "properties": {
+        "logical_name": {"$ref": "#/$defs/safeLeafText"},
+        "source_text": {"$ref": "#/$defs/nonEmptyText"}
+      }
+    },
+    "syntheticArtifactRecipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tech_lef", "cell_lef", "liberty", "verilog", "sdc", "top"],
+      "properties": {
+        "tech_lef": {"$ref": "#/$defs/sourceRecipe"},
+        "cell_lef": {"$ref": "#/$defs/sourceRecipe"},
+        "liberty": {"$ref": "#/$defs/sourceRecipe"},
+        "verilog": {"$ref": "#/$defs/sourceRecipe"},
+        "sdc": {"$ref": "#/$defs/sourceRecipe"},
+        "top": {"$ref": "#/$defs/nonEmptyText"}
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {"path": {"$ref": "#/$defs/nonEmptyText"}}
+    },
+    "sourceArtifactRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tech_lef", "cell_lef", "liberty", "verilog", "sdc", "top"],
+      "properties": {
+        "tech_lef": {"$ref": "#/$defs/sourceRef"},
+        "cell_lef": {"$ref": "#/$defs/sourceRef"},
+        "liberty": {"$ref": "#/$defs/sourceRef"},
+        "verilog": {"$ref": "#/$defs/sourceRef"},
+        "sdc": {"$ref": "#/$defs/sourceRef"},
+        "top": {"$ref": "#/$defs/nonEmptyText"}
+      }
+    },
+    "designEditPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "baseline", "expected_generation", "edits"],
+      "properties": {
+        "schema_version": {"const": "timing-edit-plan/1.0.0"},
+        "baseline": {
+          "$ref": "timing_edit_trace_v1.schema.json#/$defs/baselineIdentity"
+        },
+        "expected_generation": {"$ref": "#/$defs/u64"},
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "timing_edit_trace_v1.schema.json#/$defs/bufferInsertion"
+          }
+        }
+      }
+    },
+    "syntheticPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "source_recipe", "batches"],
+      "properties": {
+        "kind": {"const": "synthetic"},
+        "source_recipe": {"$ref": "#/$defs/syntheticArtifactRecipe"},
+        "batches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/designEditPlan"}
+        }
+      }
+    },
+    "realPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "artifacts", "baseline", "batches"],
+      "properties": {
+        "kind": {"const": "real_design"},
+        "artifacts": {"$ref": "#/$defs/sourceArtifactRefs"},
+        "baseline": {
+          "$ref": "timing_edit_trace_v1.schema.json#/$defs/baselineIdentity"
+        },
+        "batches": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/designEditPlan"}
+        }
+      }
+    },
+    "replayProgram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["header", "workload"],
+      "properties": {
+        "header": {"$ref": "#/$defs/header"},
+        "workload": {
+          "oneOf": [
+            {"$ref": "#/$defs/syntheticPayload"},
+            {"$ref": "#/$defs/realPayload"}
+          ]
+        }
+      }
+    },
+    "operatingPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_slew_ns", "output_load_pf"],
+      "properties": {
+        "input_slew_ns": {"type": "number", "minimum": 0},
+        "output_load_pf": {"type": "number", "minimum": 0}
+      }
+    },
+    "rcProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "upstream_resistance_kohm", "buffer_resistance_kohm"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nonEmptyText"},
+        "upstream_resistance_kohm": {"type": "number", "minimum": 0},
+        "buffer_resistance_kohm": {"type": "number", "minimum": 0}
+      }
+    },
+    "selectionProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "top_k",
+        "rounds",
+        "max_total_insertions",
+        "analysis",
+        "operating_point",
+        "rc_profile"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "paper_protocol_top1000_x1",
+            "paper_protocol_top100_x10",
+            "engineering_smoke"
+          ]
+        },
+        "top_k": {"$ref": "#/$defs/positiveU64"},
+        "rounds": {"$ref": "#/$defs/positiveU64"},
+        "max_total_insertions": {"$ref": "#/$defs/positiveU64"},
+        "analysis": {"const": "cpu_full"},
+        "operating_point": {"$ref": "#/$defs/operatingPoint"},
+        "rc_profile": {"$ref": "#/$defs/rcProfile"}
+      }
+    },
+    "gainReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "arrival_ns",
+        "required_ns",
+        "slack_ns",
+        "upstream_resistance_kohm",
+        "candidate_load_pf",
+        "buffer_capacitance_pf",
+        "delta_capacitance_pf",
+        "benefit_ns",
+        "buffer_resistance_kohm",
+        "penalty_ns",
+        "benefit_minus_penalty_ns",
+        "buffer_delay_ns",
+        "gain_ns"
+      ],
+      "properties": {
+        "arrival_ns": {"type": "number"},
+        "required_ns": {"type": "number"},
+        "slack_ns": {"type": "number"},
+        "upstream_resistance_kohm": {"type": "number", "minimum": 0},
+        "candidate_load_pf": {"type": "number", "minimum": 0},
+        "buffer_capacitance_pf": {"type": "number", "minimum": 0},
+        "delta_capacitance_pf": {"type": "number"},
+        "benefit_ns": {"type": "number"},
+        "buffer_resistance_kohm": {"type": "number", "minimum": 0},
+        "penalty_ns": {"type": "number"},
+        "benefit_minus_penalty_ns": {"type": "number"},
+        "buffer_delay_ns": {"type": "number", "minimum": 0},
+        "gain_ns": {"type": "number"}
+      }
+    },
+    "candidateEvaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["net", "driver", "candidate_pin", "buffer", "decision"],
+      "properties": {
+        "net": {
+          "$ref": "timing_edit_trace_v1.schema.json#/$defs/stableNetRef"
+        },
+        "driver": {
+          "$ref": "timing_edit_trace_v1.schema.json#/$defs/stableNodeRef"
+        },
+        "candidate_pin": {
+          "$ref": "timing_edit_trace_v1.schema.json#/$defs/stableNodeRef"
+        },
+        "buffer": {
+          "$ref": "timing_edit_trace_v1.schema.json#/$defs/libraryCell"
+        },
+        "numeric": {"$ref": "#/$defs/gainReceipt"},
+        "decision": {
+          "enum": ["accepted", "non_critical_net", "lower_ranked_candidate", "rejected"]
+        },
+        "rejection_reason": {
+          "enum": [
+            "invalid_semantic_reference",
+            "invalid_moved_sink_set",
+            "invalid_buffer_cell",
+            "invalid_environment_inputs",
+            "timing_not_materialized",
+            "non_finite_timing",
+            "slack_mismatch",
+            "negative_operand",
+            "non_finite_intermediate",
+            "non_positive_gain"
+          ]
+        },
+        "accepted_creation_token": {
+          "$ref": "timing_edit_trace_v1.schema.json#/$defs/creationToken"
+        }
+      }
+    },
+    "generationRound": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["batch_ordinal", "evaluations", "accepted_tokens"],
+      "properties": {
+        "batch_ordinal": {"$ref": "#/$defs/positiveU64"},
+        "evaluations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/candidateEvaluation"}
+        },
+        "accepted_tokens": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "timing_edit_trace_v1.schema.json#/$defs/creationToken"
+          }
+        }
+      }
+    },
+    "generationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "rounds", "stop_reason"],
+      "properties": {
+        "profile": {"$ref": "#/$defs/selectionProfile"},
+        "rounds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/generationRound"}
+        },
+        "stop_reason": {
+          "enum": ["empty_accepted_batch", "rounds_reached", "max_total_insertions_reached"]
+        }
+      }
+    },
+    "integrityReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "frozen_artifact_digest"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "frozen_artifact_digest": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

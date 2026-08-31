@@ -1,0 +1,7 @@
+create_clock -name vclk -period 10.0 [get_ports clk]
+set_input_delay -clock vclk -max 1.0 [get_ports {data_in aux0 aux1 aux2 aux3}]
+set_input_delay -clock vclk -min 0.2 [get_ports {data_in aux0 aux1 aux2 aux3}]
+set_input_transition 0.05 [get_ports {data_in aux0 aux1 aux2 aux3}]
+set_output_delay -clock vclk -max 1.0 [get_ports data_out]
+set_output_delay -clock vclk -min 0.2 [get_ports data_out]
+set_load 0.01 [get_ports data_out]

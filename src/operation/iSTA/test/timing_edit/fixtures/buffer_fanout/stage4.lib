@@ -1,0 +1,107 @@
+library (stage4_buffer_lib) {
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  pulling_resistance_unit : "1kohm";
+  capacitive_load_unit (1, pf);
+  leakage_power_unit : "1nW";
+  nom_process : 1.0;
+  nom_temperature : 25.0;
+  nom_voltage : 1.0;
+  slew_lower_threshold_pct_rise : 30.0;
+  slew_upper_threshold_pct_rise : 70.0;
+  slew_lower_threshold_pct_fall : 30.0;
+  slew_upper_threshold_pct_fall : 70.0;
+  input_threshold_pct_rise : 50.0;
+  output_threshold_pct_rise : 50.0;
+  input_threshold_pct_fall : 50.0;
+  output_threshold_pct_fall : 50.0;
+  slew_derate_from_library : 1.0;
+
+  operating_conditions (typical) {
+    process : 1.0;
+    temperature : 25.0;
+    voltage : 1.0;
+  }
+  default_operating_conditions : typical;
+
+  lu_table_template (delay_template) {
+    variable_1 : input_net_transition;
+    variable_2 : total_output_net_capacitance;
+    index_1 ("0.01, 0.10");
+    index_2 ("0.001, 0.020");
+  }
+
+  cell (BUF_X1) {
+    area : 1.0;
+    cell_leakage_power : 0.001;
+    pin (A) {
+      direction : input;
+      capacitance : 0.001;
+      rise_capacitance : 0.001;
+      fall_capacitance : 0.001;
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      max_capacitance : 0.100;
+      timing () {
+        related_pin : "A";
+        timing_sense : positive_unate;
+        timing_type : combinational;
+        cell_rise (delay_template) {
+          values ("0.004, 0.006", "0.006, 0.008");
+        }
+        cell_fall (delay_template) {
+          values ("0.003, 0.005", "0.005, 0.007");
+        }
+        rise_transition (delay_template) {
+          values ("0.006, 0.008", "0.008, 0.010");
+        }
+        fall_transition (delay_template) {
+          values ("0.005, 0.007", "0.007, 0.009");
+        }
+      }
+    }
+  }
+
+  cell (OR2_X1) {
+    area : 1.2;
+    cell_leakage_power : 0.002;
+    pin (A) {
+      direction : input;
+      capacitance : 0.010;
+      rise_capacitance : 0.010;
+      fall_capacitance : 0.010;
+    }
+    pin (B) {
+      direction : input;
+      capacitance : 0.010;
+      rise_capacitance : 0.010;
+      fall_capacitance : 0.010;
+    }
+    pin (Y) {
+      direction : output;
+      function : "A | B";
+      max_capacitance : 0.100;
+      timing () {
+        related_pin : "A";
+        timing_sense : positive_unate;
+        timing_type : combinational;
+        cell_rise (delay_template) { values ("0.012, 0.016", "0.016, 0.020"); }
+        cell_fall (delay_template) { values ("0.011, 0.015", "0.015, 0.019"); }
+        rise_transition (delay_template) { values ("0.010, 0.014", "0.014, 0.018"); }
+        fall_transition (delay_template) { values ("0.009, 0.013", "0.013, 0.017"); }
+      }
+      timing () {
+        related_pin : "B";
+        timing_sense : positive_unate;
+        timing_type : combinational;
+        cell_rise (delay_template) { values ("0.012, 0.016", "0.016, 0.020"); }
+        cell_fall (delay_template) { values ("0.011, 0.015", "0.015, 0.019"); }
+        rise_transition (delay_template) { values ("0.010, 0.014", "0.014, 0.018"); }
+        fall_transition (delay_template) { values ("0.009, 0.013", "0.013, 0.017"); }
+      }
+    }
+  }
+}

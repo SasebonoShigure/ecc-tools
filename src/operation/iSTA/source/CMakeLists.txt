@@ -7,6 +7,8 @@ set(ISTA_TOOLKIT ${ISTA_SOURCE}/toolkit)
 add_subdirectory(${ISTA_DATA_MANAGER})
 add_subdirectory(${ISTA_MODULE})
 add_subdirectory(${ISTA_DATA_MANAGER}/adapter/csr)
+add_subdirectory(${ISTA_DATA_MANAGER}/adapter/timing_edit)
+add_subdirectory(${ISTA_MODULE}/timing_edit_transaction)
 add_subdirectory(${ISTA_TOOLKIT})
 
 add_library(ista_source INTERFACE)

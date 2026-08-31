@@ -16,6 +16,8 @@
 // ***************************************************************************************
 #include "GraphBuilder.hpp"
 
+#include <algorithm>
+
 #include "DataManager.hpp"
 #include "DelayCalculator.hpp"
 #include "Logger.hpp"
@@ -468,6 +470,9 @@ void GraphBuilder::makeNetDriverLoad(Net& net)
       net.get_load_pin_list().push_back(pin_name);
     }
   }
+
+  std::ranges::sort(net.get_driver_pin_list());
+  std::ranges::sort(net.get_load_pin_list());
 
   if (net.get_driver_pin_list().size() > 1) {
     STALOG.error(Loc::current(), "The net has multiple driver pins: net=", net.get_net_name(),

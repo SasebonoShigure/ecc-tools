@@ -69,6 +69,7 @@ class StaCsrSessionContext;
 struct StaCsrReferenceAttempt;
 struct StaCsrScatterAttempt;
 class StaCsrSessionProbeAccess;
+class StaTimingEditSessionProbeAccess;
 class StaInterfaceLifecycleTestAccess;
 class TimingCharacterizer;
 
@@ -253,6 +254,7 @@ class STAInterface
   friend class DataManager;
   friend class TimingCharacterizer;
   friend class StaCsrSessionProbeAccess;
+  friend class StaTimingEditSessionProbeAccess;
   friend class StaInterfaceLifecycleTestAccess;
 
   class OperationGuard

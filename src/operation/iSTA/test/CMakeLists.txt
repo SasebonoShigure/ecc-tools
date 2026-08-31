@@ -65,6 +65,22 @@ if(BUILD_TESTING)
   )
 
   add_test(
+      NAME ista_timing_edit_trace_schema_validation
+      COMMAND
+      "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/schema/validate_timing_edit_trace.py"
+      --schema
+      "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/schema/timing_edit_trace_v1.schema.json"
+      --self-test
+  )
+  set_tests_properties(
+      ista_timing_edit_trace_schema_validation
+      PROPERTIES
+      LABELS "ista_unit;ista_timing_edit"
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+  )
+
+  add_test(
       NAME ista_csr_snapshot_schema_validation
       COMMAND
       "${ISTA_TEST_PYTHON_EXECUTABLE}"
@@ -181,6 +197,9 @@ if(BUILD_TESTING)
   )
   add_test(NAME ista_graph_builder_state_test COMMAND ista_graph_builder_state_test)
   set_tests_properties(ista_graph_builder_state_test PROPERTIES LABELS "ista_unit")
+
+  include("${CMAKE_CURRENT_SOURCE_DIR}/TimingEditTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/TimingEditOracleTests.cmake")
 
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceTests.cmake")

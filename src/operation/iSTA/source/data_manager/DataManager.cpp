@@ -74,6 +74,12 @@ void DataManager::output()
 
 DataManager* DataManager::_dm_instance = nullptr;
 
+std::unique_ptr<Database> DataManager::exchangeDatabase(std::unique_ptr<Database> replacement) noexcept
+{
+  _database.swap(replacement);
+  return replacement;
+}
+
 #if 1  // build
 
 void DataManager::buildConfig()
@@ -158,7 +164,7 @@ void DataManager::buildInstanceList()
 
 void DataManager::makeInstanceList()
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   for (std::pair<const std::string, Instance>& instance_pair : database.get_instance_map()) {
     instance_pair.second.get_pin_name_list().clear();
   }
@@ -175,7 +181,7 @@ void DataManager::makeInstanceList()
 
 void DataManager::buildInstanceTimingInfo()
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   for (std::pair<const std::string, Instance>& instance_pair : database.get_instance_map()) {
     makeInstanceTimingInfo(instance_pair.second);
   }
@@ -183,7 +189,7 @@ void DataManager::buildInstanceTimingInfo()
 
 void DataManager::makeInstanceTimingInfo(Instance& instance)
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   std::map<std::string, TimingCell>& timing_cell_map = database.get_timing_library().get_cell_map();
   if (timing_cell_map.count(instance.get_cell_name()) == 0) {
     return;
@@ -278,7 +284,7 @@ void DataManager::buildNetList()
 
 void DataManager::makeNetList()
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   for (std::pair<const std::string, Pin>& pin_pair : database.get_pin_map()) {
     pin_pair.second.get_net_name().clear();
   }
@@ -290,7 +296,7 @@ void DataManager::makeNetList()
 
 void DataManager::makeNet(const std::string& net_name, Net& net)
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   net.get_driver_pin().clear();
   net.get_driver_pin_list().clear();
   net.get_load_pin_list().clear();
@@ -304,7 +310,7 @@ void DataManager::makeNet(const std::string& net_name, Net& net)
 
 void DataManager::readConstraint()
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   std::string sdc_file_path = database.get_timing_constraint().get_sdc_file_path();
   database.get_timing_constraint().get_clock_map().clear();
   database.get_timing_constraint().get_port_constraint_map().clear();
@@ -652,7 +658,7 @@ void DataManager::parseSetCaseAnalysis(std::vector<std::string>& token_list)
   bool case_value = token_list[1] == "1";
   std::vector<std::string> object_list = getObjectList(token_list);
   for (std::string& pin_name : resolveObjectList(object_list)) {
-    _database.get_timing_constraint().get_case_analysis_map()[pin_name] = case_value;
+    getDatabase().get_timing_constraint().get_case_analysis_map()[pin_name] = case_value;
   }
 }
 
@@ -897,7 +903,7 @@ bool DataManager::isCommandOptionValue(std::vector<std::string>& token_list, std
 
 std::vector<std::string> DataManager::resolveObjectList(std::vector<std::string>& object_list)
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   std::vector<std::string> resolved_object_list;
   for (std::string& object_name : object_list) {
     std::string resolved_object_name = object_name;
@@ -930,7 +936,7 @@ std::vector<std::string> DataManager::resolveObjectList(std::vector<std::string>
 
 void DataManager::updateClock(TimingClock& timing_clock)
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   if (timing_clock.get_clock_name().empty()) {
     return;
   }
@@ -939,7 +945,7 @@ void DataManager::updateClock(TimingClock& timing_clock)
 
 TimingPortConstraint& DataManager::getPortConstraint(const std::string& port_name)
 {
-  Database& database = _database;
+  Database& database = getDatabase();
   TimingPortConstraint& port_constraint = database.get_timing_constraint().get_port_constraint_map()[port_name];
   port_constraint.set_port_name(port_name);
   return port_constraint;
@@ -1034,7 +1040,7 @@ void DataManager::printConfig()
 void DataManager::printDatabase()
 {
   std::size_t port_num = 0;
-  for (std::pair<const std::string, Pin>& pin_pair : _database.get_pin_map()) {
+  for (std::pair<const std::string, Pin>& pin_pair : _database->get_pin_map()) {
     if (pin_pair.second.get_is_port()) {
       port_num++;
     }
@@ -1043,15 +1049,15 @@ void DataManager::printDatabase()
   // **********        STA        ********** //
   STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(0), "STA_DATABASE");
   STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(1), "design_name");
-  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database.get_design_name());
+  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database->get_design_name());
   STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(1), "instance_num");
-  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database.get_instance_map().size());
+  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database->get_instance_map().size());
   STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(1), "port_num");
   STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), port_num);
   STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(1), "pin_num");
-  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database.get_pin_map().size());
+  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database->get_pin_map().size());
   STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(1), "net_num");
-  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database.get_net_map().size());
+  STALOG.info(Loc::current(), STAUTIL.getSpaceByTabNum(2), _database->get_net_map().size());
   /////////////////////////////////////////////
 }
 

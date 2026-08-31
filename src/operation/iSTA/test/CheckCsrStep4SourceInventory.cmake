@@ -155,6 +155,8 @@ set(PAYLOAD_HEADER "${ADAPTER_DIR}/CsrReferenceFingerprintPayload.hpp")
 set(FINGERPRINT_SOURCE "${ADAPTER_DIR}/CsrFingerprint.cpp")
 set(FINGERPRINT_HEADER "${ADAPTER_DIR}/CsrFingerprint.hpp")
 set(GRAPH_SOURCE "${ADAPTER_DIR}/TimingGraphCsrAdapter.cpp")
+set(TIMING_EDIT_RESOLVER "${ISTA_SOURCE_ROOT}/source/data_manager/adapter/timing_edit/TimingEditResolver.cpp")
+set(TIMING_EDIT_PREPARER "${ISTA_SOURCE_ROOT}/source/data_manager/adapter/timing_edit/NativeTimingEditPreparer.cpp")
 set(NATIVE_INTERNAL "${CORE_DIR}/CsrReferenceNativeModelValidatorInternal.hpp")
 set(REFERENCE_HEADER "${CORE_DIR}/CsrReferenceValidator.hpp")
 set(FIFO_SOURCE "${CORE_DIR}/CsrFifoLevelization.cpp")
@@ -249,8 +251,9 @@ set(CALLSITE_COUNT_SNAPSHOT_IDENTITY 4)
 set(CALLSITE_FILES_SNAPSHOT_IDENTITY
     "${FINGERPRINT_HEADER}" "${FINGERPRINT_SOURCE}" "${PAYLOAD_SOURCE}")
 set(CALLSITE_REGEX_GRAPH_EXPORT "exportCsrGraphSnapshot\\(")
-set(CALLSITE_COUNT_GRAPH_EXPORT 3)
-set(CALLSITE_FILES_GRAPH_EXPORT "${ADAPTER_HEADER}" "${GRAPH_SOURCE}" "${ADAPTER_SOURCE}")
+set(CALLSITE_COUNT_GRAPH_EXPORT 4)
+set(CALLSITE_FILES_GRAPH_EXPORT
+    "${ADAPTER_HEADER}" "${GRAPH_SOURCE}" "${ADAPTER_SOURCE}" "${TIMING_EDIT_RESOLVER}")
 set(CALLSITE_REGEX_FIFO_REPLAY "replayFifoLevelization\\(")
 set(CALLSITE_COUNT_FIFO_REPLAY 6)
 set(CALLSITE_FILES_FIFO_REPLAY
@@ -310,11 +313,12 @@ foreach(CALLSITE_KEY IN LISTS EXACT_CALLSITE_KEYS)
   endif()
 endforeach()
 
-set(EXPECTED_EXPORT_FILES "${ADAPTER_SOURCE}" "${ADAPTER_HEADER}" "${SCATTER_SOURCE}" "${SESSION_BRIDGE_SOURCE}")
+set(EXPECTED_EXPORT_FILES "${ADAPTER_SOURCE}" "${ADAPTER_HEADER}" "${SCATTER_SOURCE}"
+                          "${SESSION_BRIDGE_SOURCE}" "${TIMING_EDIT_PREPARER}")
 list(SORT EXPORT_OCCURRENCE_FILES)
 list(SORT EXPECTED_EXPORT_FILES)
-if(NOT EXPORT_OCCURRENCE_FILES STREQUAL EXPECTED_EXPORT_FILES OR NOT EXPORT_OCCURRENCES EQUAL 4)
-  message(FATAL_ERROR "reference exporter inventory must include declaration, definition, Step 6 scatter, and Step 7 bridge")
+if(NOT EXPORT_OCCURRENCE_FILES STREQUAL EXPECTED_EXPORT_FILES OR NOT EXPORT_OCCURRENCES EQUAL 5)
+  message(FATAL_ERROR "reference exporter inventory must include declared production consumers")
 endif()
 
 set(EXPECTED_VALIDATION_FILES

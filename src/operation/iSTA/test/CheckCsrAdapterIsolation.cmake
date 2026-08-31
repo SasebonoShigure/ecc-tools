@@ -502,6 +502,7 @@ set(EXPECTED_TEST_DELAY_MAP_FILES
     "${CSR_TEST_ROOT}/ArcTimingArcDelayTest.cpp"
     "${CSR_TEST_ROOT}/CsrReferencePoisonSupport.cpp"
     "${CSR_TEST_ROOT}/CsrNativeTimingOracleContractTest.cpp"
+    "${CSR_TEST_ROOT}/timing_edit/oracle/IndependentOracleObservation.cpp"
     "${BASELINE_SOURCE}")
 assert_same_inventory(TEST_DELAY_MAP_FILES EXPECTED_TEST_DELAY_MAP_FILES
                       "test timing-arc delay-map caller")

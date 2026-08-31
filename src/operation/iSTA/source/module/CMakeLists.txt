@@ -1,5 +1,6 @@
 add_subdirectory(${ISTA_MODULE}/timing_csr)
 add_subdirectory(${ISTA_MODULE}/timing_csr_snapshot)
+add_subdirectory(${ISTA_MODULE}/timing_edit_contract)
 add_subdirectory(${ISTA_MODULE}/delay_calculator)
 add_subdirectory(${ISTA_MODULE}/graph_builder)
 add_subdirectory(${ISTA_MODULE}/clock_propagator)

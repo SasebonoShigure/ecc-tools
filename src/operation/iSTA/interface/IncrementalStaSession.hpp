@@ -37,6 +37,7 @@ struct StaAnalysisContext;
 namespace ista {
 
 class StaCsrSessionContext;
+class StaTimingEditSessionProbeAccess;
 struct StaCsrReferenceAttempt;
 struct StaCsrScatterAttempt;
 
@@ -75,6 +76,8 @@ class IncrementalStaSession
   [[nodiscard]] const StaExecutionRequest& request() const noexcept { return _request; }
 
  private:
+  friend class StaTimingEditSessionProbeAccess;
+
   [[nodiscard]] StaStatus withCurrentState(StaStatus status) const;
   [[nodiscard]] StaStatus invalidState(std::string message) const;
   [[nodiscard]] bool isIncrementalRequest() const noexcept;

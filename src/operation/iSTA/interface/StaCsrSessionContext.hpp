@@ -28,6 +28,7 @@ namespace ista {
 class Database;
 class STAInterface;
 class StaCsrSessionContextTestAccess;
+class StaTimingEditSessionProbeAccess;
 
 namespace csr {
 struct CsrCommittedSessionSnapshot;
@@ -86,6 +87,7 @@ class StaCsrSessionContext final
  private:
   friend class STAInterface;
   friend class StaCsrSessionContextTestAccess;
+  friend class StaTimingEditSessionProbeAccess;
 
   [[nodiscard]] StaCsrSessionSubstate substate() const noexcept { return _substate; }
   [[nodiscard]] StaCsrCaptureAttempt capture(const Database& database);

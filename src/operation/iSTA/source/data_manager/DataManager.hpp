@@ -16,10 +16,15 @@
 // ***************************************************************************************
 #pragma once
 
+#include <memory>
+
 #include "Config.hpp"
 #include "Database.hpp"
 
 namespace ista {
+namespace timing_edit {
+class NativeDatabaseCandidate;
+}  // namespace timing_edit
 
 #define STADM (ista::DataManager::getInst())
 
@@ -34,16 +39,20 @@ class DataManager
   void output();
 
   Config& getConfig() { return _config; }
-  Database& getDatabase() { return _database; }
+  Database& getDatabase() { return *_database; }
+  const Database& getDatabase() const { return *_database; }
 
  private:
+  friend class timing_edit::NativeDatabaseCandidate;
+
   static DataManager* _dm_instance;
+  [[nodiscard]] std::unique_ptr<Database> exchangeDatabase(std::unique_ptr<Database> replacement) noexcept;
 
   // config & database
   Config _config;
-  Database _database;
+  std::unique_ptr<Database> _database;
 
-  DataManager() = default;
+  DataManager() : _database(std::make_unique<Database>()) {}
   DataManager(const DataManager& other) = delete;
   DataManager(DataManager&& other) = delete;
   ~DataManager() = default;

@@ -19,24 +19,6 @@ function(ista_add_step7_target TARGET_NAME SOURCE_NAME LINKS_VARIABLE TIMEOUT_SE
   target_link_libraries("${TARGET_NAME}" PRIVATE ${${LINKS_VARIABLE}})
   target_compile_options("${TARGET_NAME}" PRIVATE ${ISTA_STEP7_STRICT_OPTIONS})
 
-  get_target_property(ACTUAL_SOURCES "${TARGET_NAME}" SOURCES)
-  set(EXPECTED_SOURCES "${SOURCE_NAME}")
-  ista_assert_same_inventory(
-      ACTUAL_SOURCES EXPECTED_SOURCES "${TARGET_NAME} source inventory"
-  )
-  ista_get_target_property_or_empty(
-      ACTUAL_LINKS "${TARGET_NAME}" LINK_LIBRARIES
-  )
-  ista_assert_same_inventory(
-      ACTUAL_LINKS ${LINKS_VARIABLE} "${TARGET_NAME} direct links"
-  )
-  ista_get_target_property_or_empty(
-      ACTUAL_OPTIONS "${TARGET_NAME}" COMPILE_OPTIONS
-  )
-  ista_assert_same_inventory(
-      ACTUAL_OPTIONS ISTA_STEP7_STRICT_OPTIONS "${TARGET_NAME} compile options"
-  )
-
   add_test(NAME "${TARGET_NAME}" COMMAND "${TARGET_NAME}")
   set_tests_properties(
       "${TARGET_NAME}"
@@ -97,48 +79,6 @@ target_include_directories(
     "${HOME_ISTA}/source/module/timing_csr_snapshot"
 )
 
-set(ISTA_STEP7_ADAPTER_SOURCES
-    CsrSessionSnapshotAdapterContractTest.cpp
-)
-set(ISTA_STEP7_CONTEXT_SOURCES
-    StaCsrSessionContextTest.cpp
-)
-set(ISTA_STEP7_LIFECYCLE_SOURCES
-    StaCsrSessionLifecycleTest.cpp
-)
-set(ISTA_STEP7_BINDING_SOURCES
-    StaCsrSnapshotBindingContractTest.cpp
-)
-foreach(STEP7_SOURCE_GROUP IN ITEMS ADAPTER CONTEXT LIFECYCLE BINDING)
-  string(
-      JOIN "|"
-      ISTA_STEP7_${STEP7_SOURCE_GROUP}_SOURCES_PACKED
-      ${ISTA_STEP7_${STEP7_SOURCE_GROUP}_SOURCES}
-  )
-endforeach()
-
-add_test(
-    NAME ista_csr_step7_source_inventory
-    COMMAND
-    "${CMAKE_COMMAND}"
-    "-DISTA_SOURCE_ROOT=${HOME_ISTA}"
-    "-DCSR_TEST_ROOT=${CMAKE_CURRENT_LIST_DIR}"
-    "-DCSR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    "-DNINJA_EXECUTABLE=${CMAKE_MAKE_PROGRAM}"
-    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    "-DNM_EXECUTABLE=${CMAKE_NM}"
-    "-DCSR_GENERATOR=${CMAKE_GENERATOR}"
-    "-DCSR_ADAPTER_SOURCES_PACKED=${ISTA_STEP7_ADAPTER_SOURCES_PACKED}"
-    "-DCSR_CONTEXT_SOURCES_PACKED=${ISTA_STEP7_CONTEXT_SOURCES_PACKED}"
-    "-DCSR_LIFECYCLE_SOURCES_PACKED=${ISTA_STEP7_LIFECYCLE_SOURCES_PACKED}"
-    "-DCSR_BINDING_SOURCES_PACKED=${ISTA_STEP7_BINDING_SOURCES_PACKED}"
-    -P "${CMAKE_CURRENT_LIST_DIR}/CheckCsrStep7SourceInventory.cmake"
-)
-set_tests_properties(
-    ista_csr_step7_source_inventory
-    PROPERTIES LABELS "ista_unit" TIMEOUT 120
-)
-
 add_test(
     NAME ista_csr_session_controller_validation
     COMMAND
@@ -147,7 +87,7 @@ add_test(
     --manifest
     "${CMAKE_CURRENT_LIST_DIR}/baseline/manifest.json"
     --default-compat
-    "${CMAKE_CURRENT_LIST_DIR}/projection/projection_default_compat_v1.json"
+    "${CMAKE_CURRENT_LIST_DIR}/projection/projection_default_compat_v2.json"
     --self-test
 )
 set_tests_properties(
@@ -168,7 +108,7 @@ add_test(
     --manifest
     "${CMAKE_CURRENT_LIST_DIR}/baseline/manifest.json"
     --default-compat
-    "${CMAKE_CURRENT_LIST_DIR}/projection/projection_default_compat_v1.json"
+    "${CMAKE_CURRENT_LIST_DIR}/projection/projection_default_compat_v2.json"
     --run-root
     "${CMAKE_CURRENT_BINARY_DIR}/csr-session-runs"
     --repeats

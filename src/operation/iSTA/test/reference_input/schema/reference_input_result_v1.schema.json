@@ -12,7 +12,6 @@
     "context",
     "repeat_index",
     "run_nonce",
-    "input_case_sha256",
     "session_token",
     "pre_candidate_wire_hex",
     "post_candidate_wire_hex",
@@ -29,7 +28,6 @@
     "context": {"$ref": "#/$defs/context"},
     "repeat_index": {"$ref": "#/$defs/u64"},
     "run_nonce": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
-    "input_case_sha256": {"$ref": "#/$defs/sha256"},
     "session_token": {"type": "integer", "const": 1, "minimum": 1, "maximum": 18446744073709551615},
     "pre_candidate_wire_hex": {"$ref": "#/$defs/lowerHex"},
     "post_candidate_wire_hex": {"$ref": "#/$defs/lowerHex"},
@@ -45,7 +43,6 @@
   },
   "$defs": {
     "u64": {"type": "integer", "minimum": 0, "maximum": 18446744073709551615},
-    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "lowerHex": {"type": "string", "pattern": "^(?:[0-9a-f]{2})+$"},
     "family": {
       "enum": [

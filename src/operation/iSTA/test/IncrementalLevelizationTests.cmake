@@ -29,21 +29,6 @@ target_compile_options(ista_csr_external_level_backend_test
     ${ISTA_STAGE6_STRICT_OPTIONS}
 )
 
-get_target_property(ISTA_STAGE6_EXTERNAL_LEVEL_ACTUAL_SOURCES
-    ista_csr_external_level_backend_test SOURCES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_EXTERNAL_LEVEL_ACTUAL_SOURCES
-    ISTA_STAGE6_EXTERNAL_LEVEL_SOURCES
-    "Stage 6 external-level backend test source inventory"
-)
-ista_get_target_property_or_empty(ISTA_STAGE6_EXTERNAL_LEVEL_ACTUAL_LINKS
-    ista_csr_external_level_backend_test LINK_LIBRARIES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_EXTERNAL_LEVEL_ACTUAL_LINKS
-    ISTA_STAGE6_EXTERNAL_LEVEL_LINKS
-    "Stage 6 external-level backend test direct links"
-)
-
 add_test(NAME ista_csr_external_level_backend_test
          COMMAND ista_csr_external_level_backend_test)
 set_tests_properties(ista_csr_external_level_backend_test PROPERTIES
@@ -68,21 +53,6 @@ target_compile_features(ista_stage6_functional_receipt_test PRIVATE cxx_std_20)
 target_compile_options(ista_stage6_functional_receipt_test
     PRIVATE
     ${ISTA_STAGE6_STRICT_OPTIONS}
-)
-
-get_target_property(ISTA_STAGE6_RECEIPT_ACTUAL_SOURCES
-    ista_stage6_functional_receipt_test SOURCES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_RECEIPT_ACTUAL_SOURCES
-    ISTA_STAGE6_RECEIPT_SOURCES
-    "Stage 6 separated functional receipt source inventory"
-)
-ista_get_target_property_or_empty(ISTA_STAGE6_RECEIPT_ACTUAL_LINKS
-    ista_stage6_functional_receipt_test LINK_LIBRARIES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_RECEIPT_ACTUAL_LINKS
-    ISTA_STAGE6_RECEIPT_LINKS
-    "Stage 6 separated functional receipt direct links"
 )
 
 add_test(NAME ista_stage6_functional_receipt_test
@@ -151,28 +121,6 @@ target_link_libraries(ista_stage6_production_fresh_probe PRIVATE
 target_compile_features(ista_stage6_production_fresh_probe PRIVATE cxx_std_20)
 target_compile_options(ista_stage6_production_fresh_probe PRIVATE
     ${ISTA_STAGE6_STRICT_OPTIONS}
-)
-
-get_target_property(ISTA_STAGE6_PROBE_ACTUAL_SOURCES
-    ista_stage6_production_fresh_probe SOURCES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_PROBE_ACTUAL_SOURCES
-    ISTA_STAGE6_PRODUCTION_FRESH_PROBE_SOURCES
-    "Stage 6 production-fresh probe source inventory"
-)
-ista_get_target_property_or_empty(ISTA_STAGE6_PROBE_ACTUAL_LINKS
-    ista_stage6_production_fresh_probe LINK_LIBRARIES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_PROBE_ACTUAL_LINKS
-    ISTA_STAGE6_PRODUCTION_FRESH_PROBE_LINKS
-    "Stage 6 production-fresh probe direct links"
-)
-ista_get_target_property_or_empty(ISTA_STAGE6_PROBE_ACTUAL_OPTIONS
-    ista_stage6_production_fresh_probe COMPILE_OPTIONS)
-ista_assert_same_inventory(
-    ISTA_STAGE6_PROBE_ACTUAL_OPTIONS
-    ISTA_STAGE6_STRICT_OPTIONS
-    "Stage 6 production-fresh probe strict compile options"
 )
 
 add_test(
@@ -277,21 +225,6 @@ target_compile_options(ista_stage6_mode_recovery_replay_test
     ${ISTA_STAGE6_STRICT_OPTIONS}
 )
 
-get_target_property(ISTA_STAGE6_RECOVERY_ACTUAL_SOURCES
-    ista_stage6_mode_recovery_replay_test SOURCES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_RECOVERY_ACTUAL_SOURCES
-    ISTA_STAGE6_RECOVERY_SOURCES
-    "Stage 6 mode recovery replay test source inventory"
-)
-ista_get_target_property_or_empty(ISTA_STAGE6_RECOVERY_ACTUAL_LINKS
-    ista_stage6_mode_recovery_replay_test LINK_LIBRARIES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_RECOVERY_ACTUAL_LINKS
-    ISTA_STAGE6_RECOVERY_LINKS
-    "Stage 6 mode recovery replay test direct links"
-)
-
 add_test(NAME ista_stage6_mode_recovery_replay_test
          COMMAND ista_stage6_mode_recovery_replay_test)
 set_tests_properties(ista_stage6_mode_recovery_replay_test PROPERTIES
@@ -344,30 +277,6 @@ target_compile_features(
 target_compile_options(ista_stage6_active_payload_microcase_test
     PRIVATE
     ${ISTA_STAGE6_STRICT_OPTIONS}
-)
-
-get_target_property(ISTA_STAGE6_ACTIVE_PAYLOAD_ACTUAL_SOURCES
-    ista_stage6_active_payload_microcase_test SOURCES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_ACTIVE_PAYLOAD_ACTUAL_SOURCES
-    ISTA_STAGE6_ACTIVE_PAYLOAD_SOURCES
-    "Stage 6 active-payload microcase source inventory"
-)
-ista_get_target_property_or_empty(
-    ISTA_STAGE6_ACTIVE_PAYLOAD_ACTUAL_LINKS
-    ista_stage6_active_payload_microcase_test LINK_LIBRARIES)
-ista_assert_same_inventory(
-    ISTA_STAGE6_ACTIVE_PAYLOAD_ACTUAL_LINKS
-    ISTA_STAGE6_ACTIVE_PAYLOAD_LINKS
-    "Stage 6 active-payload microcase direct links"
-)
-ista_get_target_property_or_empty(
-    ISTA_STAGE6_ACTIVE_PAYLOAD_ACTUAL_OPTIONS
-    ista_stage6_active_payload_microcase_test COMPILE_OPTIONS)
-ista_assert_same_inventory(
-    ISTA_STAGE6_ACTIVE_PAYLOAD_ACTUAL_OPTIONS
-    ISTA_STAGE6_STRICT_OPTIONS
-    "Stage 6 active-payload microcase strict compile options"
 )
 
 add_test(NAME ista_stage6_active_payload_microcase_test

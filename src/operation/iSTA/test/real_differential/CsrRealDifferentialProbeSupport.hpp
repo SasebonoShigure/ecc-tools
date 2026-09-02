@@ -46,7 +46,6 @@ struct ProbeOptions
   std::string lane;
   std::filesystem::path executable;
   std::filesystem::path descriptor_manifest;
-  std::string descriptor_manifest_sha256;
   std::filesystem::path tech_lef;
   std::filesystem::path cell_lef;
   std::filesystem::path liberty;
@@ -57,7 +56,6 @@ struct ProbeOptions
   std::string case_name;
   std::vector<std::string> expected_clocks;
   std::string expected_clocks_json;
-  std::string expected_clocks_sha256;
   std::uint64_t repeat_index{0};
   std::string input_case_sha256;
   std::string run_nonce;
@@ -75,7 +73,6 @@ struct ProbeOptions
 void loadProbeDesign(const ProbeOptions& options);
 
 [[nodiscard]] std::vector<std::uint8_t> readFileBytes(const std::filesystem::path& path);
-[[nodiscard]] std::string sha256Hex(std::string_view bytes);
 [[nodiscard]] std::string sha256File(const std::filesystem::path& path);
 [[nodiscard]] std::string bytesToHex(const std::vector<std::uint8_t>& bytes);
 [[nodiscard]] std::vector<std::uint8_t> hexToBytes(std::string_view bytes, std::string_view label);

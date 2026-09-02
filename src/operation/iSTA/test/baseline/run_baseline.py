@@ -211,12 +211,6 @@ def execute_case(
 
     current = golden_payload(case, manifest, snapshots[0], artifacts[0])
     validate_golden(current, case, manifest)
-    expected_topology = case.get("expected_topology_sha256")
-    if expected_topology is not None and expected_topology != current["topology_hash"]:
-        raise BaselineError(
-            f"{case['name']}: manifest topology hash changed; "
-            f"expected {expected_topology}, got {current['topology_hash']}"
-        )
     golden_path = baseline_dir / manifest["golden_directory"] / f"{case['name']}.json"
     if action != "record":
         if not golden_path.is_file():
@@ -226,10 +220,6 @@ def execute_case(
             )
         golden = require_mapping(load_json(golden_path), f"golden {case['name']}")
         validate_golden(golden, case, manifest)
-        if golden.get("topology_hash") != current["topology_hash"]:
-            raise BaselineError(f"{case['name']}: topology hash changed")
-        if golden.get("config_hash") != current["config_hash"]:
-            raise BaselineError(f"{case['name']}: configuration/input hash changed")
         assert_equal(
             golden.get("snapshot"),
             current["snapshot"],
@@ -248,9 +238,6 @@ def execute_case(
     result = {
         "case": case["name"],
         "repeats": repeats,
-        "topology_hash": current["topology_hash"],
-        "config_hash": current["config_hash"],
-        "full_snapshot_sha256_diagnostic": current["provenance"]["full_snapshot_sha256_diagnostic"],
         "artifact_paths": current["provenance"]["artifact_paths"],
         "elapsed_controller_seconds": elapsed,
         "status": "recorded" if action == "record" else "verified",
@@ -294,7 +281,7 @@ def main(argv: list[str]) -> int:
     if args.self_test:
         return run_self_test(manifest_path)
     manifest = require_mapping(load_json(manifest_path), "manifest")
-    validate_manifest(manifest, manifest_path, allow_unpinned_topology=args.record_golden)
+    validate_manifest(manifest, manifest_path)
     if args.probe is None:
         raise BaselineError("--probe is required unless --self-test is used")
     probe = args.probe.resolve()

@@ -6,7 +6,6 @@
 // iEDA is licensed under Mulan PSL v2.
 // ***************************************************************************************
 #include <algorithm>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -16,7 +15,6 @@
 
 #include "BufferTraceCanonicalEncoding.hpp"
 #include "BufferTraceJson.hpp"
-#include "CsrFingerprint.hpp"
 #include "TimingEditValidation.hpp"
 
 namespace {
@@ -215,21 +213,9 @@ BufferTraceArtifact syntheticArtifact()
                   batches[1].edits[0].creation_token)},
               .accepted_tokens = {batches[1].edits[0].creation_token}}},
       .stop_reason = GenerationStopReason::kRoundsReached};
-  BufferTraceArtifact artifact{
+  return BufferTraceArtifact{
       .replay = std::move(replay),
-      .generation_only = std::move(generation),
-      .integrity = {"sha256", std::string(64, '0')}};
-  const auto payload = canonicalBufferTraceIntegrityPayloadBytes(artifact);
-  artifact.integrity.frozen_artifact_digest
-      = csr::sha256Hex(std::span<const std::uint8_t>(payload));
-  return artifact;
-}
-
-void refreshIntegrity(BufferTraceArtifact& artifact)
-{
-  const auto payload = canonicalBufferTraceIntegrityPayloadBytes(artifact);
-  artifact.integrity.frozen_artifact_digest
-      = csr::sha256Hex(std::span<const std::uint8_t>(payload));
+      .generation_only = std::move(generation)};
 }
 
 bool hasCode(const BufferTraceContractViolations& errors,
@@ -330,14 +316,6 @@ void testForwardReferenceAndGenerationOnlyIsolation()
   require(canonicalGenerationReceiptBytes(artifact.generation_only)
               != canonicalGenerationReceiptBytes(tampered.generation_only),
           "generation evidence mutation was not observable in its own receipt");
-
-  auto different_hash = artifact;
-  different_hash.integrity.frozen_artifact_digest = std::string(64, 'c');
-  require(different_hash.replay == artifact.replay,
-          "auxiliary integrity identity changed functional replay fields");
-  require(hasCode(validateBufferTraceArtifact(different_hash),
-                  BufferTraceContractCode::kIdentityMismatch),
-          "artifact identity mismatch was not reported as auxiliary evidence");
 }
 
 void testCanonicalTokenAndRoundPoisoning()
@@ -410,7 +388,6 @@ void testAcceptedEvaluationPermutationMapsByTokenOrdinal()
                          second_token),
       first_evaluation};
   round.accepted_tokens.push_back(second_token);
-  refreshIntegrity(artifact);
   requireNoErrors(validateBufferTraceArtifact(artifact),
                   "accepted evaluation permutation was not mapped by token ordinal");
 }
@@ -436,7 +413,6 @@ void testStrictJsonAndCreatedReferenceRoundTrip()
           .decision = CandidateDecision::kNonCriticalNet,
           .rejection_reason = std::nullopt,
           .accepted_creation_token = std::nullopt});
-  refreshIntegrity(artifact);
   require(validateBufferTraceArtifact(artifact).empty(),
           "round two evidence could not reference round one materializations");
 
@@ -468,11 +444,10 @@ void testSyntheticLogicalNamesAreLeafFiles()
   }
 }
 
-void requireArtifactCode(BufferTraceArtifact artifact,
+void requireArtifactCode(const BufferTraceArtifact& artifact,
                          BufferTraceContractCode code,
                          const std::string& message)
 {
-  refreshIntegrity(artifact);
   require(hasCode(validateBufferTraceArtifact(artifact), code), message);
 }
 

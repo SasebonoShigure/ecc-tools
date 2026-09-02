@@ -66,12 +66,10 @@
   ],
   "replay_projection_excludes": [
     "generation_only",
-    "integrity",
     "arrival_ns",
     "required_ns",
     "slack_ns",
     "candidate_load_pf",
     "gain_ns"
-  ],
-  "integrity_usage": "artifact_identity_only"
+  ]
 }

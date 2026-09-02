@@ -43,7 +43,6 @@ inline constexpr std::array<std::string_view, 17> kReferencePoisonFamilyTokens =
 
 struct ReferencePoisonBinding
 {
-  std::string input_case_sha256;
   std::uint64_t repeat_index{0};
   std::string run_nonce;
   std::uint64_t session_token{0};

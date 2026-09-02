@@ -561,7 +561,6 @@ def replay(args: argparse.Namespace) -> None:
         "relative_tolerance": REL_TOLERANCE,
         "prefixes": summaries,
         "functional_correctness_primary": True,
-        "hash_used_as_functional_oracle": False,
         "fresh_oracle_time_excluded_from_incremental_samples": True,
     })
 

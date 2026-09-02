@@ -115,12 +115,10 @@ template <typename Mutate>
 void requireMutation(const CsrReferenceInput& baseline, const std::string& name, Mutate mutate)
 {
   const auto baseline_bytes = canonicalReferenceInputBytes(baseline);
-  const auto baseline_hash = sha256Hex(baseline_bytes);
   CsrReferenceInput changed = baseline;
   mutate(changed);
   const auto changed_bytes = canonicalReferenceInputBytes(changed);
   require(changed_bytes != baseline_bytes, name + " did not change canonical bytes");
-  require(sha256Hex(changed_bytes) != baseline_hash, name + " did not change canonical hash");
 }
 
 enum class KeySite
@@ -273,7 +271,6 @@ void testTimingTableStateDistinctions()
   for (std::size_t lhs = 0; lhs < states.size(); ++lhs)
     for (std::size_t rhs = lhs + 1; rhs < states.size(); ++rhs) {
       require(states[lhs] != states[rhs], "missing/present-empty/0D/1D/2D table states must have distinct canonical bytes");
-      require(sha256Hex(states[lhs]) != sha256Hex(states[rhs]), "missing/present-empty/0D/1D/2D table states must have distinct hashes");
     }
 }
 

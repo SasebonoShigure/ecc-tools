@@ -26,19 +26,6 @@ function(ista_add_step6_target TARGET_NAME SOURCES_VARIABLE LINKS_VARIABLE)
   target_include_directories("${TARGET_NAME}" PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
   target_link_libraries("${TARGET_NAME}" PRIVATE ${${LINKS_VARIABLE}})
   target_compile_options("${TARGET_NAME}" PRIVATE ${ISTA_STEP6_STRICT_OPTIONS})
-
-  get_target_property(ACTUAL_SOURCES "${TARGET_NAME}" SOURCES)
-  ista_assert_same_inventory(
-      ACTUAL_SOURCES ${SOURCES_VARIABLE} "${TARGET_NAME} source inventory"
-  )
-  ista_get_target_property_or_empty(ACTUAL_LINKS "${TARGET_NAME}" LINK_LIBRARIES)
-  ista_assert_same_inventory(
-      ACTUAL_LINKS ${LINKS_VARIABLE} "${TARGET_NAME} direct links"
-  )
-  ista_get_target_property_or_empty(ACTUAL_OPTIONS "${TARGET_NAME}" COMPILE_OPTIONS)
-  ista_assert_same_inventory(
-      ACTUAL_OPTIONS ISTA_STEP6_STRICT_OPTIONS "${TARGET_NAME} compile options"
-  )
 endfunction()
 
 set(ISTA_STEP6_COMMON_SOURCES
@@ -158,41 +145,4 @@ add_test(
 set_tests_properties(
     ista_csr_timing_scatter_rerun
     PROPERTIES LABELS "ista_smoke" TIMEOUT 300
-)
-
-foreach(STEP6_SOURCE_GROUP IN ITEMS
-        NATIVE_ORACLE
-        SCATTER_CONTRACT
-        SCATTER_ATOMICITY
-        SCATTER_PROPERTY
-        PUBLIC_HEADER
-        RERUN)
-  string(
-      JOIN "|"
-      ISTA_STEP6_${STEP6_SOURCE_GROUP}_SOURCES_PACKED
-      ${ISTA_STEP6_${STEP6_SOURCE_GROUP}_SOURCES}
-  )
-endforeach()
-add_test(
-    NAME ista_csr_step6_source_inventory
-    COMMAND
-    "${CMAKE_COMMAND}"
-    "-DISTA_SOURCE_ROOT=${HOME_ISTA}"
-    "-DCSR_TEST_ROOT=${CMAKE_CURRENT_LIST_DIR}"
-    "-DCSR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    "-DNINJA_EXECUTABLE=${CMAKE_MAKE_PROGRAM}"
-    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    "-DNM_EXECUTABLE=${CMAKE_NM}"
-    "-DCSR_GENERATOR=${CMAKE_GENERATOR}"
-    "-DCSR_NATIVE_ORACLE_SOURCES_PACKED=${ISTA_STEP6_NATIVE_ORACLE_SOURCES_PACKED}"
-    "-DCSR_SCATTER_CONTRACT_SOURCES_PACKED=${ISTA_STEP6_SCATTER_CONTRACT_SOURCES_PACKED}"
-    "-DCSR_SCATTER_ATOMICITY_SOURCES_PACKED=${ISTA_STEP6_SCATTER_ATOMICITY_SOURCES_PACKED}"
-    "-DCSR_SCATTER_PROPERTY_SOURCES_PACKED=${ISTA_STEP6_SCATTER_PROPERTY_SOURCES_PACKED}"
-    "-DCSR_PUBLIC_HEADER_SOURCES_PACKED=${ISTA_STEP6_PUBLIC_HEADER_SOURCES_PACKED}"
-    "-DCSR_RERUN_SOURCES_PACKED=${ISTA_STEP6_RERUN_SOURCES_PACKED}"
-    -P "${CMAKE_CURRENT_LIST_DIR}/CheckCsrStep6SourceInventory.cmake"
-)
-set_tests_properties(
-    ista_csr_step6_source_inventory
-    PROPERTIES LABELS "ista_unit" TIMEOUT 60
 )

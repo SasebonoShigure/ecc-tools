@@ -49,7 +49,6 @@ def _valid_record(
             "pristine_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=False,
@@ -58,7 +57,6 @@ def _valid_record(
             "before_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=False,
@@ -66,7 +64,6 @@ def _valid_record(
             "after_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=True,
@@ -82,7 +79,6 @@ def _valid_record(
         "context": dict(contract.CANONICAL_CONTEXT),
         "repeat_index": repeat_index,
         "run_nonce": nonce,
-        "input_case_sha256": descriptor.input_case_sha256,
         "session_token": contract.SESSION_TOKEN,
         "pre_candidate_wire_hex": candidate_bytes.hex(),
         "post_candidate_wire_hex": candidate_bytes.hex(),
@@ -285,7 +281,6 @@ def _encode_envelope(
         else domain_family
     )
     writer.string(f"{fixture.CANARY_PREFIX}{token}{fixture.CANARY_SUFFIX}")
-    writer.string(envelope.binding.input_case_sha256)
     writer.u64(envelope.binding.repeat_index)
     writer.string(envelope.binding.run_nonce)
     writer.u64(envelope.binding.session_token)

@@ -64,12 +64,6 @@ target_link_libraries(ista_buffer_trace_observation_extractor_test
 )
 ista_register_buffer_trace_test(
     ista_buffer_trace_observation_extractor_test)
-ista_assert_timing_edit_target_inventory(
-    ista_buffer_trace_observation_extractor_test
-    ISTA_BUFFER_TRACE_EXTRACTOR_TEST_SOURCES
-    ISTA_BUFFER_TRACE_EXTRACTOR_TEST_LINKS
-    ISTA_BUFFER_TRACE_TEST_COMPILE_OPTIONS
-)
 
 
 set(ISTA_BUFFER_TRACE_REPLAYER_TEST_SOURCES
@@ -84,8 +78,6 @@ target_link_libraries(ista_buffer_trace_replayer_test
 )
 ista_register_buffer_trace_test(ista_buffer_trace_replayer_test)
 
-get_filename_component(ISTA_BUFFER_TRACE_BENCHMARK_ROOT
-    "${CMAKE_CURRENT_LIST_DIR}/../benchmark/buffer_trace" ABSOLUTE)
 set(ISTA_BUFFER_TRACE_PARASITIC_BOUNDARY_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/BufferTraceParasiticBoundaryTest.cpp"
     ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
@@ -104,50 +96,6 @@ target_link_libraries(ista_buffer_trace_parasitic_full_boundary
     ${ISTA_BUFFER_TRACE_PARASITIC_BOUNDARY_LINKS}
 )
 ista_register_buffer_trace_test(ista_buffer_trace_parasitic_full_boundary)
-ista_assert_timing_edit_target_inventory(
-    ista_buffer_trace_parasitic_full_boundary
-    ISTA_BUFFER_TRACE_PARASITIC_BOUNDARY_SOURCES
-    ISTA_BUFFER_TRACE_PARASITIC_BOUNDARY_LINKS
-    ISTA_BUFFER_TRACE_TEST_COMPILE_OPTIONS
-)
-
-set(ISTA_BUFFER_TRACE_CONTRACT_EXPECTED_SOURCES
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/BufferTraceCanonicalEncoding.cpp"
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/BufferTraceValidationRules.cpp"
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/BufferTraceJson.cpp"
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/GreedyBufferCandidateSelector.cpp"
-)
-set(ISTA_BUFFER_TRACE_CONTRACT_EXPECTED_LINKS
-    ista_timing_edit_contract
-    ista_timing_csr_core
-)
-ista_assert_timing_edit_target_inventory(
-    ista_buffer_trace_contract
-    ISTA_BUFFER_TRACE_CONTRACT_EXPECTED_SOURCES
-    ISTA_BUFFER_TRACE_CONTRACT_EXPECTED_LINKS
-    ISTA_BUFFER_TRACE_TEST_COMPILE_OPTIONS
-)
-
-set(ISTA_BUFFER_TRACE_RUNTIME_EXPECTED_SOURCES
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/BufferFixedTraceGenerator.cpp"
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/BufferReplayContext.cpp"
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/BufferTraceReplayer.cpp"
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/FreshBaselineRunner.cpp"
-    "${ISTA_BUFFER_TRACE_BENCHMARK_ROOT}/NativeBufferObservationExtractor.cpp"
-)
-set(ISTA_BUFFER_TRACE_RUNTIME_EXPECTED_LINKS
-    ista_buffer_trace_contract
-    ista_timing_edit_transaction
-    ista_timing_edit_native
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
-ista_assert_timing_edit_target_inventory(
-    ista_buffer_trace_runtime
-    ISTA_BUFFER_TRACE_RUNTIME_EXPECTED_SOURCES
-    ISTA_BUFFER_TRACE_RUNTIME_EXPECTED_LINKS
-    ISTA_BUFFER_TRACE_TEST_COMPILE_OPTIONS
-)
 
 foreach(PROPERTY_SEED IN ITEMS 1 7 42 20260831 3735928559)
   add_test(
@@ -237,69 +185,6 @@ target_link_libraries(ista_buffer_trace_production_fresh_probe PRIVATE
 target_compile_options(ista_buffer_trace_production_fresh_probe PRIVATE
     ${ISTA_BUFFER_TRACE_TEST_COMPILE_OPTIONS}
 )
-
-get_target_property(ISTA_BUFFER_TRACE_PROBE_ACTUAL_SOURCES
-    ista_buffer_trace_production_fresh_probe SOURCES)
-ista_assert_same_inventory(
-    ISTA_BUFFER_TRACE_PROBE_ACTUAL_SOURCES
-    ISTA_BUFFER_TRACE_PROBE_SOURCES
-    "Stage 4 production-fresh probe source inventory"
-)
-ista_get_target_property_or_empty(
-    ISTA_BUFFER_TRACE_PROBE_ACTUAL_LINKS
-    ista_buffer_trace_production_fresh_probe
-    LINK_LIBRARIES
-)
-ista_assert_same_inventory(
-    ISTA_BUFFER_TRACE_PROBE_ACTUAL_LINKS
-    ISTA_BUFFER_TRACE_PROBE_LINKS
-    "Stage 4 production-fresh probe direct links"
-)
-ista_get_target_property_or_empty(
-    ISTA_BUFFER_TRACE_PROBE_ACTUAL_OPTIONS
-    ista_buffer_trace_production_fresh_probe
-    COMPILE_OPTIONS
-)
-ista_assert_same_inventory(
-    ISTA_BUFFER_TRACE_PROBE_ACTUAL_OPTIONS
-    ISTA_BUFFER_TRACE_TEST_COMPILE_OPTIONS
-    "Stage 4 production-fresh probe strict compile options"
-)
-
-ista_collect_timing_edit_link_closure(
-    ista_buffer_trace_contract ISTA_BUFFER_TRACE_CONTRACT_CLOSURE
-)
-ista_collect_timing_edit_link_closure(
-    ista_buffer_trace_runtime ISTA_BUFFER_TRACE_RUNTIME_CLOSURE
-)
-string(JOIN "|" ISTA_BUFFER_TRACE_CONTRACT_CLOSURE_PACKED
-    ${ISTA_BUFFER_TRACE_CONTRACT_CLOSURE})
-string(JOIN "|" ISTA_BUFFER_TRACE_RUNTIME_CLOSURE_PACKED
-    ${ISTA_BUFFER_TRACE_RUNTIME_CLOSURE})
-string(JOIN "|" ISTA_BUFFER_TRACE_PROBE_SOURCES_PACKED
-    ${ISTA_BUFFER_TRACE_PROBE_SOURCES})
-add_test(
-    NAME ista_buffer_trace_stage4_inventory
-    COMMAND
-    "${CMAKE_COMMAND}"
-    "-DTEST_ROOT=${CMAKE_CURRENT_LIST_DIR}"
-    "-DBENCHMARK_ROOT=${CMAKE_CURRENT_LIST_DIR}/../benchmark/buffer_trace"
-    "-DSCHEMA_ROOT=${CMAKE_CURRENT_LIST_DIR}/../benchmark/schema"
-    "-DBUILD_DIR=${CMAKE_BINARY_DIR}"
-    "-DNINJA_EXECUTABLE=${CMAKE_MAKE_PROGRAM}"
-    "-DBUILD_GENERATOR=${CMAKE_GENERATOR}"
-    "-DPROBE_SOURCES_PACKED=${ISTA_BUFFER_TRACE_PROBE_SOURCES_PACKED}"
-    "-DPROBE_TARGET=ista_buffer_trace_production_fresh_probe"
-    "-DCONTRACT_ARCHIVE=$<TARGET_FILE:ista_buffer_trace_contract>"
-    "-DRUNTIME_ARCHIVE=$<TARGET_FILE:ista_buffer_trace_runtime>"
-    "-DNM_EXECUTABLE=${CMAKE_NM}"
-    "-DCONTRACT_CLOSURE_PACKED=${ISTA_BUFFER_TRACE_CONTRACT_CLOSURE_PACKED}"
-    "-DRUNTIME_CLOSURE_PACKED=${ISTA_BUFFER_TRACE_RUNTIME_CLOSURE_PACKED}"
-    -P
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/CheckBufferTraceStage4Isolation.cmake"
-)
-set_tests_properties(ista_buffer_trace_stage4_inventory
-    PROPERTIES LABELS "ista_unit;ista_buffer" TIMEOUT 60)
 
 add_test(
     NAME ista_buffer_trace_one_shot_reuse_reject

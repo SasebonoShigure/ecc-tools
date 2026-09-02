@@ -339,19 +339,10 @@ struct GenerationReceipt
   friend bool operator==(const GenerationReceipt&, const GenerationReceipt&) = default;
 };
 
-struct IntegrityReceipt
-{
-  std::string algorithm{"sha256"};
-  std::string frozen_artifact_digest;
-
-  friend bool operator==(const IntegrityReceipt&, const IntegrityReceipt&) = default;
-};
-
 struct BufferTraceArtifact
 {
   ReplayProgram replay;
   GenerationReceipt generation_only;
-  IntegrityReceipt integrity;
 
   friend bool operator==(const BufferTraceArtifact&, const BufferTraceArtifact&) = default;
 };

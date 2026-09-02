@@ -27,7 +27,6 @@ namespace ista::timing_edit {
 [[nodiscard]] std::vector<std::uint8_t> canonicalStableNodeRefBytes(const StableNodeRef& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalStableNetRefBytes(const StableNetRef& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalStableArcRefBytes(const StableArcRef& value);
-[[nodiscard]] std::vector<std::uint8_t> canonicalComponentFingerprintsBytes(const ComponentFingerprints& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalPreStateEvidenceBytes(const CanonicalPreStateEvidence& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalBaselineSemanticIdentityBytes(const BaselineSemanticIdentity& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalCommittedEditIdentityBytes(const CommittedEditIdentity& value);

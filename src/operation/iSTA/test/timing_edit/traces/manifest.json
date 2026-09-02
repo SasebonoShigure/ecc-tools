@@ -1,7 +1,6 @@
 {
   "schema_version": "buffer-trace-fixture-manifest/1.0.0",
   "correctness_basis": "field_level_functional_receipts",
-  "integrity_usage": "artifact_identity_auxiliary_only",
   "traces": [
     {
       "path": "synthetic_two_batch.json",
@@ -13,8 +12,7 @@
       "comparability_status": "non_comparable",
       "comparability_reason": "engineering_rc_no_physical",
       "batch_count": 2,
-      "accepted_edit_count": 3,
-      "auxiliary_sha256": "3b683204d3044d29c73b6d9afd3417b0c8c82d39fd45f7a9b90b305137b52c52"
+      "accepted_edit_count": 3
     },
     {
       "path": "real_buffer_fanout.json",
@@ -26,8 +24,7 @@
       "comparability_status": "non_comparable",
       "comparability_reason": "engineering_rc_no_physical",
       "batch_count": 1,
-      "accepted_edit_count": 4,
-      "auxiliary_sha256": "646d0f48209f8cf3fb988b4b708044cc1387ad65bb4581a40458cc1dd5de52a2"
+      "accepted_edit_count": 4
     }
   ]
 }

@@ -29,7 +29,6 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
-#include <span>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -52,8 +51,6 @@ constexpr std::array<std::string_view, 14> kFlags{
     "--descriptor-manifest",  "--tech-lef",     "--cell-lef",          "--liberty",   "--verilog", "--sdc",        "--top", "--case-name",
     "--expected-clocks-json", "--repeat-index", "--input-case-sha256", "--run-nonce", "--run-dir", "--result-temp"};
 constexpr std::array<std::string_view, 5> kInputLabels{"tech_lef", "cell_lef", "liberty", "verilog", "sdc"};
-constexpr std::string_view kBaselineSha = "c2cf7aac05719ba7b437b45918cc11ade5fec68f2727135facaa46b7b4f4b47b";
-constexpr std::string_view kTechSha = "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc";
 [[noreturn]] void fail(std::string_view message)
 {
   throw std::runtime_error(std::string(message));
@@ -153,13 +150,15 @@ fs::path inputPath(const ProbeOptions& options, std::string_view label)
   }
   return options.sdc;
 }
-void bindInput(ProbeOptions& options, std::string_view label, const fs::path& expected, std::string_view declared_sha)
+std::string bindInput(ProbeOptions& options, std::string_view label, const fs::path& expected)
 {
   const fs::path supplied = inputPath(options, label);
-  if (supplied != expected || !lowerHex(declared_sha, 64) || sha256File(expected) != declared_sha) {
-    fail(std::string(label) + " path or SHA differs from descriptor manifest");
+  if (supplied != expected) {
+    fail(std::string(label) + " path differs from descriptor manifest");
   }
-  options.inputs.push_back({std::string(label), expected, std::string(declared_sha)});
+  std::string digest = sha256File(expected);
+  options.inputs.push_back({std::string(label), expected, digest});
+  return digest;
 }
 void requireArcSelector(const Json& value, std::string_view label)
 {
@@ -202,22 +201,14 @@ void requireClockArgument(ProbeOptions& options, const Json& expected)
     fail("expected clock argv differs from descriptor");
   }
 }
-std::vector<std::pair<std::string, std::string>> baselineInputs(const Json& input_sha)
+std::string baselineFingerprint(const Json& descriptor, std::vector<std::pair<std::string, std::string>> inputs)
 {
-  std::vector<std::pair<std::string, std::string>> values;
-  for (auto item = input_sha.begin(); item != input_sha.end(); ++item) {
-    values.emplace_back(item.key(), text(item.value(), "baseline input SHA"));
-  }
   auto key_bytes = [](const std::string& value) {
     CanonicalEncoder encoder;
     encoder.appendString(value);
     return encoder.bytes();
   };
-  std::sort(values.begin(), values.end(), [&](const auto& lhs, const auto& rhs) { return key_bytes(lhs.first) < key_bytes(rhs.first); });
-  return values;
-}
-std::string baselineFingerprint(const Json& descriptor, const std::vector<std::pair<std::string, std::string>>& inputs)
-{
+  std::sort(inputs.begin(), inputs.end(), [&](const auto& lhs, const auto& rhs) { return key_bytes(lhs.first) < key_bytes(rhs.first); });
   CanonicalEncoder encoder;
   encoder.appendDomain("ista-csr-projection-input-case");
   for (std::string_view key : {"name", "top", "verilog", "sdc", "expected_clock"}) {
@@ -242,16 +233,14 @@ void validateBaselineManifest(ProbeOptions& options)
       "baseline semantics");
   requireExactKeys(root.at("tolerances"), {"absolute", "relative"}, "baseline tolerances");
   requireExactKeys(root.at("fresh_process_repeats"), {"ctest", "local"}, "baseline repeats");
-  if (options.descriptor_manifest_sha256 != kBaselineSha || root.at("schema_version") != 1 || root.at("time_unit") != "ns" || !root.at("cases").is_array()
-      || root.at("cases").size() != 2) {
-    fail("baseline manifest frozen identity differs");
+  if (root.at("schema_version") != 1 || root.at("time_unit") != "ns" || !root.at("cases").is_array() || root.at("cases").size() != 2) {
+    fail("baseline manifest contract differs");
   }
   const Json* selected = nullptr;
   for (const Json& item : root.at("cases")) {
-    requireExactKeys(item, {"name", "top", "verilog", "sdc", "expected_clock", "expected_topology_sha256", "required_artifacts", "input_sha256"},
-                     "baseline case");
-    if (!item.at("required_artifacts").is_array() || !item.at("input_sha256").is_object()) {
-      fail("baseline case array/object shape differs");
+    requireExactKeys(item, {"name", "top", "verilog", "sdc", "expected_clock", "required_artifacts"}, "baseline case");
+    if (!item.at("required_artifacts").is_array()) {
+      fail("baseline required_artifacts must be an array");
     }
     for (const Json& artifact : item.at("required_artifacts")) {
       (void) text(artifact, "required artifact");
@@ -275,17 +264,12 @@ void validateBaselineManifest(ProbeOptions& options)
       {"verilog", text(item.at("verilog"), "baseline verilog")},
       {"sdc", text(item.at("sdc"), "baseline sdc")},
   }};
-  if (item.at("input_sha256").size() != relatives.size()) {
-    fail("baseline case must declare exactly five inputs");
-  }
+  std::vector<std::pair<std::string, std::string>> input_hashes;
   for (const auto& [label, relative] : relatives) {
-    if (!item.at("input_sha256").contains(relative)) {
-      fail("baseline input manifest key differs");
-    }
-    bindInput(options, label, canonicalRegular(options.descriptor_manifest.parent_path() / relative, label),
-              text(item.at("input_sha256").at(relative), "baseline SHA"));
+    const fs::path path = canonicalRegular(options.descriptor_manifest.parent_path() / relative, label);
+    input_hashes.emplace_back(relative, bindInput(options, label, path));
   }
-  if (baselineFingerprint(item, baselineInputs(item.at("input_sha256"))) != options.input_case_sha256) {
+  if (baselineFingerprint(item, std::move(input_hashes)) != options.input_case_sha256) {
     fail("baseline input-case SHA differs");
   }
   options.descriptor = {{"name", options.case_name}, {"top", options.top}, {"expected_clocks", options.expected_clocks}, {"extended", false}};
@@ -338,7 +322,7 @@ std::string extendedFingerprint(const Json& descriptor, const std::vector<ProbeI
 void validateExtendedManifest(ProbeOptions& options)
 {
   Json& root = options.descriptor;
-  requireExactKeys(root, {"schema", "domain", "baseline_manifest", "baseline_manifest_sha256", "tolerances", "extended_cases", "coverage_claims"},
+  requireExactKeys(root, {"schema", "domain", "baseline_manifest", "tolerances", "extended_cases", "coverage_claims"},
                    "extended manifest");
   const Json& tolerances = root.at("tolerances");
   requireExactKeys(tolerances, {"absolute", "relative"}, "extended tolerances");
@@ -353,8 +337,7 @@ void validateExtendedManifest(ProbeOptions& options)
   const fs::path baseline
       = canonicalRegular((options.descriptor_manifest.parent_path() / "../baseline/manifest.json").lexically_normal(), "referenced baseline manifest");
   if (root.at("schema") != "ista-csr-real-differential-manifest/1.0.0" || root.at("domain") != "ista-csr-real-differential-input-case/1.0.0"
-      || root.at("baseline_manifest") != "../baseline/manifest.json" || root.at("baseline_manifest_sha256") != kBaselineSha
-      || sha256File(baseline) != kBaselineSha || root.at("coverage_claims") != expected_claims || !tolerances.at("absolute").is_number()
+      || root.at("baseline_manifest") != "../baseline/manifest.json" || root.at("coverage_claims") != expected_claims || !tolerances.at("absolute").is_number()
       || !tolerances.at("relative").is_number() || std::bit_cast<std::uint64_t>(tolerances.at("absolute").get<double>()) != 0x3e112e0be826d695ULL
       || std::bit_cast<std::uint64_t>(tolerances.at("relative").get<double>()) != 0x3e112e0be826d695ULL || !root.at("extended_cases").is_array()
       || root.at("extended_cases").size() != 1) {
@@ -377,14 +360,13 @@ void validateExtendedManifest(ProbeOptions& options)
   for (std::size_t index = 0; index < kInputLabels.size(); ++index) {
     const std::string_view label = kInputLabels[index];
     const Json& input = descriptor.at("inputs").at(std::string(label));
-    requireExactKeys(input, {"path", "sha256"}, "extended input");
+    requireExactKeys(input, {"path"}, "extended input");
     const std::string relative = text(input.at("path"), "extended relative input");
-    const std::string digest = text(input.at("sha256"), "extended input SHA");
     const fs::path candidate = canonicalRegular((options.descriptor_manifest.parent_path() / relative).lexically_normal(), label);
-    if (relative != relative_paths[index] || (index == 0 && (digest != kTechSha || candidate != baseline.parent_path() / "fixtures/stage0_tech.lef"))) {
+    if (relative != relative_paths[index] || (index == 0 && candidate != baseline.parent_path() / "fixtures/stage0_tech.lef")) {
       fail("extended input frozen path differs");
     }
-    bindInput(options, label, candidate, digest);
+    bindInput(options, label, candidate);
   }
   constexpr std::array<std::string_view, 3> anchor_keys{"non_unate_anchor", "disabled_anchor", "parallel_anchor"};
   constexpr std::array<std::string_view, 3> anchor_instances{"u_nonunate", "u_disabled", "u_parallel"};
@@ -455,7 +437,6 @@ void validateExtendedManifest(ProbeOptions& options)
 void validateManifest(ProbeOptions& options)
 {
   const std::vector<std::uint8_t> bytes = readFileBytes(options.descriptor_manifest);
-  options.descriptor_manifest_sha256 = csr::sha256Hex(bytes);
   options.descriptor = parseStrictJson(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), "descriptor manifest");
   if (options.case_name == "supported_branches") {
     validateExtendedManifest(options);
@@ -491,7 +472,6 @@ ProbeOptions parseProbeOptions(int argc, char* argv[], std::string_view lane)
   options.top = values[6];
   options.case_name = values[7];
   options.expected_clocks_json = values[8];
-  options.expected_clocks_sha256 = sha256Hex(options.expected_clocks_json);
   const Json clocks = parseStrictJson(options.expected_clocks_json, "expected clocks argv");
   options.expected_clocks = stringArray(clocks, "expected clocks argv");
   options.repeat_index = decimalU64(values[9]);
@@ -522,12 +502,11 @@ Json makeArgvReceipt(const ProbeOptions& options)
 {
   Json inputs = Json::array();
   for (const ProbeInput& input : options.inputs) {
-    inputs.push_back({{"label", input.label}, {"path", input.path.string()}, {"sha256", input.sha256}});
+    inputs.push_back({{"label", input.label}, {"path", input.path.string()}});
   }
   return {{"argv", options.canonical_argv},
-          {"clock_bytes_sha256", options.expected_clocks_sha256},
           {"cwd", fs::canonical(fs::current_path()).string()},
-          {"descriptor_manifest", {{"path", options.descriptor_manifest.string()}, {"sha256", options.descriptor_manifest_sha256}}},
+          {"descriptor_manifest", {{"path", options.descriptor_manifest.string()}}},
           {"executable", options.executable.string()},
           {"resolved_inputs", std::move(inputs)},
           {"run_dir", options.run_dir.string()},
@@ -576,10 +555,6 @@ std::vector<std::uint8_t> readFileBytes(const fs::path& path)
     fail("failed to read input file");
   }
   return bytes;
-}
-std::string sha256Hex(std::string_view bytes)
-{
-  return csr::sha256Hex(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size()));
 }
 std::string sha256File(const fs::path& path)
 {

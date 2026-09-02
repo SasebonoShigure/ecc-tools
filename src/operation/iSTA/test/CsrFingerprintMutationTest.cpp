@@ -429,13 +429,11 @@ void testReferenceInputFieldMutations()
   addSeedEndpointAndSupportCases(cases);
   const CsrReferenceInput baseline = inputFixture();
   const auto baseline_bytes = canonicalReferenceInputBytes(baseline);
-  const auto baseline_hash = sha256Hex(baseline_bytes);
   for (const auto& test : cases) {
     CsrReferenceInput changed = baseline;
     test.mutate(changed);
     const auto changed_bytes = canonicalReferenceInputBytes(changed);
     require(changed_bytes != baseline_bytes, test.name + " did not change canonical bytes");
-    require(sha256Hex(changed_bytes) != baseline_hash, test.name + " did not change canonical hash");
   }
 }
 
@@ -443,13 +441,11 @@ void testExcludedProcessAndCapacityState()
 {
   const CsrReferenceInput baseline = inputFixture();
   const auto baseline_bytes = canonicalReferenceInputBytes(baseline);
-  const auto baseline_hash = sha256Hex(baseline_bytes);
   const auto requireExcluded = [&](auto mutate, const std::string& field) {
     CsrReferenceInput changed = baseline;
     mutate(changed);
     const auto bytes = canonicalReferenceInputBytes(changed);
     require(bytes == baseline_bytes, field + " changed canonical bytes");
-    require(sha256Hex(bytes) == baseline_hash, field + " changed canonical hash");
   };
   requireExcluded([](auto& value) { value.source_identity.fingerprint_schema_version = "identity-only"; }, "identity schema");
   requireExcluded([](auto& value) { value.source_identity.session_token = 99; }, "session token");

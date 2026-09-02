@@ -9,15 +9,12 @@
 
 #include <array>
 #include <algorithm>
-#include <span>
 #include <utility>
 #include <variant>
 
 #include "BufferReplayContext.hpp"
-#include "BufferTraceCanonicalEncoding.hpp"
 #include "BufferTraceReplayer.hpp"
 #include "Database.hpp"
-#include "CsrFingerprint.hpp"
 #include "GreedyBufferCandidateSelector.hpp"
 #include "NativeBufferObservationExtractor.hpp"
 
@@ -197,8 +194,7 @@ BufferTraceGenerationResult BufferFixedTraceGenerator::generate(
                                .generation_only
                                = GenerationReceipt{.profile = request.profile,
                                                    .rounds = {},
-                                                   .stop_reason = GenerationStopReason::kEmptyAcceptedBatch},
-                               .integrity = {}};
+                                                   .stop_reason = GenerationStopReason::kEmptyAcceptedBatch}};
   std::vector<FunctionalBatchReceipt> batch_receipts;
   ReplayReceipt functional = runner.withFreshGenerationBaseline(
       artifact.replay, [&](BufferReplayContext& context) {
@@ -276,10 +272,6 @@ BufferTraceGenerationResult BufferFixedTraceGenerator::generate(
         }
       });
 
-  const std::vector<std::uint8_t> payload
-      = canonicalBufferTraceIntegrityPayloadBytes(artifact);
-  artifact.integrity.frozen_artifact_digest
-      = csr::sha256Hex(std::span<const std::uint8_t>(payload));
   if (const auto violations = validateBufferTraceArtifact(artifact);
       !violations.empty()) {
     fail(BufferGenerationFailureCode::kInvalidArtifact,

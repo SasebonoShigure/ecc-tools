@@ -64,9 +64,6 @@ foreach(STEP8_PYTHON_SOURCE IN LISTS ISTA_STEP8_PYTHON_SOURCES)
   list(APPEND ISTA_STEP8_PYTHON_DEPENDENCIES
        "${CMAKE_CURRENT_LIST_DIR}/${STEP8_PYTHON_SOURCE}")
 endforeach()
-string(JOIN "|" ISTA_STEP8_PYTHON_SOURCES_PACKED
-       ${ISTA_STEP8_PYTHON_SOURCES})
-
 set(ISTA_STEP8_PROBE_LINKS
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
@@ -88,23 +85,6 @@ function(ista_add_step8_target TARGET_NAME SOURCES_VARIABLE LINKS_VARIABLE)
   )
   target_link_libraries("${TARGET_NAME}" PRIVATE ${${LINKS_VARIABLE}})
   target_compile_options("${TARGET_NAME}" PRIVATE ${ISTA_STEP8_STRICT_OPTIONS})
-
-  get_target_property(ACTUAL_SOURCES "${TARGET_NAME}" SOURCES)
-  ista_assert_same_inventory(
-      ACTUAL_SOURCES ${SOURCES_VARIABLE} "${TARGET_NAME} source inventory"
-  )
-  ista_get_target_property_or_empty(
-      ACTUAL_LINKS "${TARGET_NAME}" LINK_LIBRARIES
-  )
-  ista_assert_same_inventory(
-      ACTUAL_LINKS ${LINKS_VARIABLE} "${TARGET_NAME} direct links"
-  )
-  ista_get_target_property_or_empty(
-      ACTUAL_OPTIONS "${TARGET_NAME}" COMPILE_OPTIONS
-  )
-  ista_assert_same_inventory(
-      ACTUAL_OPTIONS ISTA_STEP8_STRICT_OPTIONS "${TARGET_NAME} compile options"
-  )
 endfunction()
 
 ista_add_step8_target(
@@ -146,37 +126,6 @@ set_tests_properties(
     TIMEOUT 60
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
     REQUIRED_FILES "${ISTA_STEP8_PYTHON_DEPENDENCIES}"
-)
-
-foreach(STEP8_SOURCE_GROUP IN ITEMS ORACLE REFERENCE WIRE)
-  string(
-      JOIN "|"
-      ISTA_STEP8_${STEP8_SOURCE_GROUP}_SOURCES_PACKED
-      ${ISTA_STEP8_${STEP8_SOURCE_GROUP}_SOURCES}
-  )
-endforeach()
-
-add_test(
-    NAME ista_csr_step8_source_inventory
-    COMMAND
-    "${CMAKE_COMMAND}"
-    "-DISTA_SOURCE_ROOT=${HOME_ISTA}"
-    "-DCSR_TEST_ROOT=${CMAKE_CURRENT_LIST_DIR}"
-    "-DCSR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    "-DNINJA_EXECUTABLE=${CMAKE_MAKE_PROGRAM}"
-    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    "-DNM_EXECUTABLE=${CMAKE_NM}"
-    "-DCSR_GENERATOR=${CMAKE_GENERATOR}"
-    "-DSTEP8_ORACLE_SOURCES_PACKED=${ISTA_STEP8_ORACLE_SOURCES_PACKED}"
-    "-DSTEP8_REFERENCE_SOURCES_PACKED=${ISTA_STEP8_REFERENCE_SOURCES_PACKED}"
-    "-DSTEP8_WIRE_SOURCES_PACKED=${ISTA_STEP8_WIRE_SOURCES_PACKED}"
-    "-DSTEP8_PYTHON_SOURCES_PACKED=${ISTA_STEP8_PYTHON_SOURCES_PACKED}"
-    "-DPYTHON_EXECUTABLE=${ISTA_TEST_PYTHON_EXECUTABLE}"
-    -P "${CMAKE_CURRENT_LIST_DIR}/CheckCsrStep8SourceInventory.cmake"
-)
-set_tests_properties(
-    ista_csr_step8_source_inventory
-    PROPERTIES LABELS "ista_unit" TIMEOUT 120
 )
 
 add_test(

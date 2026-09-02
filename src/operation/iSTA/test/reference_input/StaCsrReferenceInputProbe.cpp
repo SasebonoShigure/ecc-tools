@@ -61,7 +61,6 @@ struct Options
   std::string expected_clock;
   StaAnalysisContext context;
   std::uint64_t repeat_index{0};
-  std::string input_case_sha256;
   std::uint64_t session_token{0};
   std::string run_nonce;
   fs::path run_dir;
@@ -220,9 +219,9 @@ Options parseOptions(int argc, char* argv[])
       throw std::runtime_error("duplicate option: " + name);
   }
   const std::vector<std::string> required = {
-      "--tech-lef",          "--cell-lef",       "--liberty",        "--verilog",     "--sdc",         "--top",
-      "--case-name",         "--expected-clock", "--liberty-corner", "--temperature", "--rc-corner",   "--repeat-index",
-      "--input-case-sha256", "--session-token",  "--run-nonce",      "--run-dir",     "--result-temp",
+      "--tech-lef",      "--cell-lef",       "--liberty",        "--verilog",     "--sdc",       "--top",
+      "--case-name",     "--expected-clock", "--liberty-corner", "--temperature", "--rc-corner", "--repeat-index",
+      "--session-token", "--run-nonce",      "--run-dir",        "--result-temp",
   };
   for (const auto& name : required)
     if (!values.contains(name) || values.at(name).empty())
@@ -241,7 +240,6 @@ Options parseOptions(int argc, char* argv[])
   options.expected_clock = values.at("--expected-clock");
   options.context = {values.at("--liberty-corner"), values.at("--temperature"), values.at("--rc-corner")};
   options.repeat_index = parseU64(values.at("--repeat-index"), "repeat index");
-  options.input_case_sha256 = values.at("--input-case-sha256");
   options.session_token = parseU64(values.at("--session-token"), "session token");
   options.run_nonce = values.at("--run-nonce");
   options.run_dir = values.at("--run-dir");
@@ -277,8 +275,6 @@ void validateOptions(Options& options)
     throw std::runtime_error("top and expected clock must be non-empty");
   if (options.context.liberty_corner.empty() || options.context.temperature.empty() || options.context.rc_corner.empty())
     throw std::runtime_error("analysis context fields must be non-empty");
-  if (!isLowerHex(options.input_case_sha256, 64))
-    throw std::runtime_error("input case fingerprint must be lowercase SHA-256");
   if (!isLowerHex(options.run_nonce, 32))
     throw std::runtime_error("run nonce must be 32 lowercase hex characters");
   if (options.session_token != 1)
@@ -335,7 +331,7 @@ Observation observeAndPoison(ista::Database& database, const Options& options)
   Observation result;
   result.pre_candidate = canonicalIndependentReferenceInputBytes(pristine);
   result.pre_raw = canonicalIndependentReferenceInputRawBytes(raw_before);
-  const ReferencePoisonBinding binding{options.input_case_sha256, options.repeat_index, options.run_nonce, options.session_token};
+  const ReferencePoisonBinding binding{options.repeat_index, options.run_nonce, options.session_token};
   result.canaries = poisonReferenceDerivedState(database, raw_before, binding);
 
   const CsrReferenceInput post
@@ -382,7 +378,6 @@ Json makeResult(const Options& options, const Observation& observation)
       {"context", {{"liberty_corner", options.context.liberty_corner}, {"temperature", options.context.temperature}, {"rc_corner", options.context.rc_corner}}},
       {"repeat_index", options.repeat_index},
       {"run_nonce", options.run_nonce},
-      {"input_case_sha256", options.input_case_sha256},
       {"session_token", options.session_token},
       {"pre_candidate_wire_hex", toHex(observation.pre_candidate)},
       {"post_candidate_wire_hex", toHex(observation.post_candidate)},

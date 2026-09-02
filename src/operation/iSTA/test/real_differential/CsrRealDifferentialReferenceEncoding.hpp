@@ -16,13 +16,7 @@
 
 namespace ista::csr::real_diff {
 
-struct EncodedSourceWire
-{
-  std::string wire_hex;
-  std::string sha256;
-};
-
-[[nodiscard]] EncodedSourceWire encodeSnapshotCandidate(const CsrReferenceInput& input);
+[[nodiscard]] std::string encodeSnapshotCandidate(const CsrReferenceInput& input);
 [[nodiscard]] NeutralWire encodeReferenceTiming(const CsrReferenceInput& input, const CsrTimingResult& result);
 [[nodiscard]] Json identityToJson(const CsrSnapshotIdentity& identity);
 [[nodiscard]] Json observationToJson(const CsrSnapshotObservation& observation);

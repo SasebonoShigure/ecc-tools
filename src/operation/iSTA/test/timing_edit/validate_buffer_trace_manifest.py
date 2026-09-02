@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate frozen Stage 4 trace metadata without treating digests as correctness."""
+"""Validate frozen Stage 4 trace metadata against the trace contents."""
 
 import argparse
 import json
@@ -39,14 +39,12 @@ def exact_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
 
 def validate(manifest_path: pathlib.Path) -> None:
     manifest = read_json(manifest_path)
-    exact_keys(manifest, {"schema_version", "correctness_basis",
-                          "integrity_usage", "traces"}, "manifest")
+    exact_keys(manifest, {"schema_version", "correctness_basis", "traces"},
+               "manifest")
     if manifest["schema_version"] != "buffer-trace-fixture-manifest/1.0.0":
         raise ManifestError("unknown fixture manifest version")
     if manifest["correctness_basis"] != "field_level_functional_receipts":
         raise ManifestError("functional field receipts are not the correctness basis")
-    if manifest["integrity_usage"] != "artifact_identity_auxiliary_only":
-        raise ManifestError("digest usage is not auxiliary-only")
     traces = manifest["traces"]
     if not isinstance(traces, list) or len(traces) != 2:
         raise ManifestError("manifest must freeze exactly two Stage 4 traces")
@@ -56,7 +54,7 @@ def validate(manifest_path: pathlib.Path) -> None:
     entry_keys = {
         "path", "trace_schema_version", "selection_mode", "workload_kind",
         "profile_id", "seed", "comparability_status", "comparability_reason",
-        "batch_count", "accepted_edit_count", "auxiliary_sha256",
+        "batch_count", "accepted_edit_count",
     }
     for index, entry in enumerate(traces):
         if not isinstance(entry, dict):
@@ -66,7 +64,7 @@ def validate(manifest_path: pathlib.Path) -> None:
         if relative.is_absolute() or len(relative.parts) != 1:
             raise ManifestError("trace path must be one repository-local leaf")
         trace = read_json(manifest_path.parent / entry["path"])
-        exact_keys(trace, {"replay", "generation_only", "integrity"},
+        exact_keys(trace, {"replay", "generation_only"},
                    f"trace {entry['path']}")
         header = trace["replay"]["header"]
         workload = trace["replay"]["workload"]
@@ -83,13 +81,10 @@ def validate(manifest_path: pathlib.Path) -> None:
             "comparability_reason": header.get("comparability_reason"),
             "batch_count": len(batches),
             "accepted_edit_count": len(tokens),
-            "auxiliary_sha256": trace["integrity"]["frozen_artifact_digest"],
         }
         for field, value in observed.items():
             if entry[field] != value:
                 raise ManifestError(f"{entry['path']} metadata differs at {field}")
-        if trace["integrity"]["algorithm"] != "sha256":
-            raise ManifestError(f"{entry['path']} uses an unknown auxiliary digest")
         if any(token["seed"] != entry["seed"] for token in tokens):
             raise ManifestError(f"{entry['path']} has inconsistent edit seeds")
 

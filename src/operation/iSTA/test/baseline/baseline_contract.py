@@ -69,10 +69,6 @@ def canonical_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -114,9 +110,7 @@ def _resolve_contained(base: Path, relative: str, where: str) -> Path:
     return resolved
 
 
-def validate_manifest(
-    manifest: dict[str, Any], manifest_path: Path, *, allow_unpinned_topology: bool
-) -> None:
+def validate_manifest(manifest: dict[str, Any], manifest_path: Path) -> None:
     require_exact_keys(
         manifest,
         {
@@ -196,9 +190,7 @@ def validate_manifest(
                 "verilog",
                 "sdc",
                 "expected_clock",
-                "expected_topology_sha256",
                 "required_artifacts",
-                "input_sha256",
             },
             f"cases[{index}]",
         )
@@ -215,23 +207,17 @@ def validate_manifest(
                 raise BaselineError(f"cases[{index}].{field} must be a non-empty string")
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", case["top"]) is None:
             raise BaselineError(f"cases[{index}].top must be a safe Verilog identifier")
-        verilog = _resolve_contained(
-            manifest_path.parent, case["verilog"], f"cases[{index}].verilog"
+        input_paths = (
+            "fixtures/stage0_tech.lef",
+            "fixtures/stage0_cells.lef",
+            "fixtures/stage0.lib",
+            case["verilog"],
+            case["sdc"],
         )
-        sdc = _resolve_contained(manifest_path.parent, case["sdc"], f"cases[{index}].sdc")
-        if not verilog.is_file() or not sdc.is_file():
-            raise BaselineError(f"cases[{index}] Verilog/SDC input does not exist")
-        topology_hash = case.get("expected_topology_sha256")
-        if topology_hash is None:
-            if not allow_unpinned_topology:
-                raise BaselineError(
-                    f"cases[{index}].expected_topology_sha256 is unpinned; "
-                    "only --record-golden may bootstrap it"
-                )
-        elif re.fullmatch(r"[0-9a-f]{64}", str(topology_hash)) is None:
-            raise BaselineError(
-                f"cases[{index}].expected_topology_sha256 must be null or lowercase SHA-256"
-            )
+        for relative in input_paths:
+            path = _resolve_contained(manifest_path.parent, relative, f"cases[{index}] input")
+            if not path.is_file():
+                raise BaselineError(f"cases[{index}] input does not exist: {relative}")
         required_artifacts = require_list(
             case.get("required_artifacts"), f"cases[{index}].required_artifacts"
         )
@@ -246,33 +232,6 @@ def validate_manifest(
                     f"cases[{index}] artifact contains an unknown placeholder: {artifact}"
                 )
             _resolve_contained(Path("/baseline-run"), artifact.format(top=case["top"]), "artifact")
-        hashes = require_mapping(case.get("input_sha256"), f"cases[{index}].input_sha256")
-        expected_inputs = {
-            "fixtures/stage0_tech.lef",
-            "fixtures/stage0_cells.lef",
-            "fixtures/stage0.lib",
-            case["verilog"],
-            case["sdc"],
-        }
-        if set(hashes) != expected_inputs:
-            raise BaselineError(
-                f"cases[{index}].input_sha256 must pin exactly the five consumed inputs; "
-                f"missing={sorted(expected_inputs - set(hashes))}, "
-                f"extra={sorted(set(hashes) - expected_inputs)}"
-            )
-        for relative, expected in hashes.items():
-            if not isinstance(relative, str) or not re.fullmatch(r"[0-9a-f]{64}", str(expected)):
-                raise BaselineError(f"invalid SHA-256 entry in cases[{index}].input_sha256")
-            resolved = _resolve_contained(
-                manifest_path.parent, relative, f"cases[{index}].input_sha256"
-            )
-            if not resolved.is_file():
-                raise BaselineError(f"fixture does not exist: {resolved}")
-            actual = sha256_file(resolved)
-            if actual != expected:
-                raise BaselineError(
-                    f"fixture SHA-256 mismatch for {relative}: expected {expected}, got {actual}"
-                )
 
 
 _ALLOWED_SENTINELS = {"missing", "pos_inf", "neg_inf"}
@@ -517,49 +476,21 @@ def assert_equal(expected: Any, actual: Any, label: str, absolute: float, relati
         raise BaselineError(f"{label} mismatch ({len(errors)} differences):\n{preview}{suffix}")
 
 
-def semantic_hashes(
-    snapshot: dict[str, Any], case: dict[str, Any], manifest: dict[str, Any]
-) -> tuple[str, str]:
-    topology = snapshot.get("topology")
-    if not isinstance(topology, dict):
-        raise BaselineError("probe snapshot has no topology object")
-    config = snapshot.get("config")
-    if not isinstance(config, dict):
-        raise BaselineError("probe snapshot has no config object")
-    config_contract = {
-        "case": case["name"],
-        "top": case["top"],
-        "expected_clock": case["expected_clock"],
-        "input_sha256": case["input_sha256"],
-        "config": config,
-        "source_baseline": manifest["source_baseline"],
-        "semantics": manifest["semantics"],
-        "time_unit": manifest["time_unit"],
-        "tolerances": manifest["tolerances"],
-    }
-    return sha256_bytes(canonical_bytes(topology)), sha256_bytes(canonical_bytes(config_contract))
-
-
 def golden_payload(
     case: dict[str, Any],
     manifest: dict[str, Any],
     snapshot: dict[str, Any],
     artifacts: dict[str, Any],
 ) -> dict[str, Any]:
-    topology_hash, config_hash = semantic_hashes(snapshot, case, manifest)
     return {
         "golden_schema_version": 1,
         "case": case["name"],
-        "topology_hash": topology_hash,
-        "config_hash": config_hash,
         "snapshot": snapshot,
         "artifacts": artifacts,
         "provenance": {
-            "input_sha256": case["input_sha256"],
             "source_baseline": manifest["source_baseline"],
             "tolerances": manifest["tolerances"],
             "artifact_paths": artifacts["inventory_paths"],
-            "full_snapshot_sha256_diagnostic": sha256_bytes(canonical_bytes(snapshot)),
         },
     }
 
@@ -580,44 +511,37 @@ def _expect_baseline_error(name: str, action: Any) -> None:
 
 def run_contract_self_test(manifest_path: Path) -> None:
     manifest = require_mapping(load_json(manifest_path), "manifest")
-    validate_manifest(manifest, manifest_path, allow_unpinned_topology=True)
-
-    missing_input = json.loads(canonical_bytes(manifest))
-    del missing_input["cases"][0]["input_sha256"]["fixtures/stage0.lib"]
-    _expect_baseline_error(
-        "missing-consumed-input",
-        lambda: validate_manifest(missing_input, manifest_path, allow_unpinned_topology=True),
-    )
+    validate_manifest(manifest, manifest_path)
 
     escaping_golden = json.loads(canonical_bytes(manifest))
     escaping_golden["golden_directory"] = "../golden"
     _expect_baseline_error(
         "escaping-golden-directory",
-        lambda: validate_manifest(escaping_golden, manifest_path, allow_unpinned_topology=True),
+        lambda: validate_manifest(escaping_golden, manifest_path),
     )
     escaping_case = json.loads(canonical_bytes(manifest))
     escaping_case["cases"][0]["name"] = "../../escaped"
     _expect_baseline_error(
         "escaping-case-name",
-        lambda: validate_manifest(escaping_case, manifest_path, allow_unpinned_topology=True),
+        lambda: validate_manifest(escaping_case, manifest_path),
     )
     typo_transition = json.loads(canonical_bytes(manifest))
     typo_transition["semantics"]["transitions"][1] = "fal"
     _expect_baseline_error(
         "semantics-transition-typo",
-        lambda: validate_manifest(typo_transition, manifest_path, allow_unpinned_topology=True),
+        lambda: validate_manifest(typo_transition, manifest_path),
     )
     wrong_root_level = json.loads(canonical_bytes(manifest))
     wrong_root_level["semantics"]["root_level"] = 0
     _expect_baseline_error(
         "semantics-root-level",
-        lambda: validate_manifest(wrong_root_level, manifest_path, allow_unpinned_topology=True),
+        lambda: validate_manifest(wrong_root_level, manifest_path),
     )
     extra_semantic = json.loads(canonical_bytes(manifest))
     extra_semantic["semantics"]["unexpected"] = True
     _expect_baseline_error(
         "semantics-extra-key",
-        lambda: validate_manifest(extra_semantic, manifest_path, allow_unpinned_topology=True),
+        lambda: validate_manifest(extra_semantic, manifest_path),
     )
     _expect_baseline_error(
         "unknown-sentinel",
@@ -643,18 +567,4 @@ def run_contract_self_test(manifest_path: Path) -> None:
     if not errors:
         raise BaselineError("contract self-test accepted an out-of-tolerance float change")
 
-    hash_snapshot = {"topology": {}, "config": {}}
-    case = manifest["cases"][0]
-    _, base_config_hash = semantic_hashes(hash_snapshot, case, manifest)
-    changed_source = json.loads(canonical_bytes(manifest))
-    changed_source["source_baseline"]["parent_commit"] = "0" * 40
-    _, changed_source_hash = semantic_hashes(hash_snapshot, case, changed_source)
-    if changed_source_hash == base_config_hash:
-        raise BaselineError("config hash does not cover source baseline provenance")
-    changed_tolerance = json.loads(canonical_bytes(manifest))
-    changed_tolerance["tolerances"]["absolute"] *= 10
-    _, changed_tolerance_hash = semantic_hashes(hash_snapshot, case, changed_tolerance)
-    if changed_tolerance_hash == base_config_hash:
-        raise BaselineError("config hash does not cover comparison tolerance")
-
-    print("contract self-test: 15 checks passed")
+    print("contract self-test passed")

@@ -75,7 +75,6 @@ def _validate_manifest(manifest: object) -> dict[str, dict[str, object]]:
         "source_artifact_roles",
         "profiles",
         "replay_projection_excludes",
-        "integrity_usage",
     }
     if set(manifest) != expected_keys:
         fail("manifest", "must have the exact version-1 key set")
@@ -84,9 +83,8 @@ def _validate_manifest(manifest: object) -> dict[str, dict[str, object]]:
         or manifest["trace_schema"] != "buffer-fixed-trace/1.0.0"
         or manifest["stage3_contract_schema"] != "timing-edit-trace/1.0.0"
         or manifest["selection_mode"] != "fixed_trace"
-        or manifest["integrity_usage"] != "artifact_identity_only"
     ):
-        fail("manifest", "version, selection mode or integrity usage is not frozen v1")
+        fail("manifest", "version or selection mode is not frozen v1")
     if manifest["source_artifact_roles"] != [
         "tech_lef",
         "cell_lef",
@@ -98,7 +96,6 @@ def _validate_manifest(manifest: object) -> dict[str, dict[str, object]]:
     excluded = manifest["replay_projection_excludes"]
     if not isinstance(excluded, list) or not {
         "generation_only",
-        "integrity",
         "arrival_ns",
         "required_ns",
         "slack_ns",
@@ -480,7 +477,6 @@ def _valid_artifact(*, real: bool = False) -> dict[str, object]:
             ],
             "stop_reason": "empty_accepted_batch",
         },
-        "integrity": {"algorithm": "sha256", "frozen_artifact_digest": "a" * 64},
     }
 
 

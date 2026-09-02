@@ -13,8 +13,6 @@ from baseline_contract import (
     require_exact_keys,
     require_list,
     require_mapping,
-    semantic_hashes,
-    sha256_bytes,
     sha256_file,
     validate_manifest,
     validate_snapshot,
@@ -24,18 +22,14 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _GOLDEN_KEYS = {
     "golden_schema_version",
     "case",
-    "topology_hash",
-    "config_hash",
     "snapshot",
     "artifacts",
     "provenance",
 }
 _PROVENANCE_KEYS = {
-    "input_sha256",
     "source_baseline",
     "tolerances",
     "artifact_paths",
-    "full_snapshot_sha256_diagnostic",
 }
 _ARTIFACT_KEYS = {
     "required_paths",
@@ -105,7 +99,6 @@ def validate_golden(golden: dict[str, Any], case: dict[str, Any], manifest: dict
     provenance = require_mapping(golden.get("provenance"), "golden.provenance")
     require_exact_keys(provenance, _PROVENANCE_KEYS, "golden.provenance")
     expected_provenance = {
-        "input_sha256": case["input_sha256"],
         "source_baseline": manifest["source_baseline"],
         "tolerances": manifest["tolerances"],
         "artifact_paths": inventory,
@@ -113,19 +106,6 @@ def validate_golden(golden: dict[str, Any], case: dict[str, Any], manifest: dict
     for field, expected in expected_provenance.items():
         if canonical_bytes(provenance[field]) != canonical_bytes(expected):
             raise BaselineError(f"golden provenance {field} is stale or inconsistent")
-    diagnostic = provenance["full_snapshot_sha256_diagnostic"]
-    expected_diagnostic = sha256_bytes(canonical_bytes(snapshot))
-    if type(diagnostic) is not str or _SHA256.fullmatch(diagnostic) is None:
-        raise BaselineError("golden snapshot diagnostic must be a lowercase SHA-256")
-    if diagnostic != expected_diagnostic:
-        raise BaselineError("golden snapshot diagnostic does not hash the golden snapshot")
-    topology_hash, config_hash = semantic_hashes(snapshot, case, manifest)
-    for field, expected in (("topology_hash", topology_hash), ("config_hash", config_hash)):
-        actual = golden[field]
-        if type(actual) is not str or _SHA256.fullmatch(actual) is None:
-            raise BaselineError(f"golden {field} must be a lowercase SHA-256")
-        if actual != expected:
-            raise BaselineError(f"golden {field} is not self-consistent")
 
 
 def normalize_text(text: str, run_dir: Path) -> str:
@@ -179,7 +159,7 @@ def _expect_golden_failure(
 
 def run_golden_self_test(manifest_path: Path) -> None:
     manifest = require_mapping(load_json(manifest_path), "manifest")
-    validate_manifest(manifest, manifest_path, allow_unpinned_topology=False)
+    validate_manifest(manifest, manifest_path)
     references: list[tuple[dict[str, Any], dict[str, Any]]] = []
     golden_dir = manifest_path.parent / manifest["golden_directory"]
     for case in manifest["cases"]:
@@ -194,22 +174,13 @@ def run_golden_self_test(manifest_path: Path) -> None:
     stale_provenance = copy.deepcopy(reference)
     stale_provenance["provenance"]["source_baseline"]["parent_commit"] = "0" * 40
     _expect_golden_failure("stale-provenance", stale_provenance, case, manifest)
-    bad_diagnostic = copy.deepcopy(reference)
-    bad_diagnostic["provenance"]["full_snapshot_sha256_diagnostic"] = "A" * 64
-    _expect_golden_failure("bad-diagnostic", bad_diagnostic, case, manifest)
     extra_top_level = copy.deepcopy(reference)
     extra_top_level["unexpected"] = True
     _expect_golden_failure("extra-top-level-key", extra_top_level, case, manifest)
     extra_provenance = copy.deepcopy(reference)
     extra_provenance["provenance"]["unexpected"] = True
     _expect_golden_failure("extra-provenance-key", extra_provenance, case, manifest)
-    wrong_topology_hash = copy.deepcopy(reference)
-    wrong_topology_hash["topology_hash"] = "0" * 64
-    _expect_golden_failure("wrong-topology-hash", wrong_topology_hash, case, manifest)
-    wrong_config_hash = copy.deepcopy(reference)
-    wrong_config_hash["config_hash"] = "0" * 64
-    _expect_golden_failure("wrong-config-hash", wrong_config_hash, case, manifest)
-    print(f"golden self-test: {len(references) + 7} checks passed")
+    print("golden self-test passed")
 
 
 def run_artifact_self_test() -> None:

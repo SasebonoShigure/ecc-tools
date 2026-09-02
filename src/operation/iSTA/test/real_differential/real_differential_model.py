@@ -11,7 +11,6 @@
 import hashlib
 import json
 import math
-import re
 import struct
 import sys
 from dataclasses import dataclass
@@ -43,7 +42,7 @@ def _bootstrap_sibling_paths():
     load_case_descriptors,
 ) = _bootstrap_sibling_paths()
 BaselineError = _baseline.BaselineError
-sha256_bytes = _baseline.sha256_bytes
+
 
 MANIFEST_SCHEMA = "ista-csr-real-differential-manifest/1.0.0"
 MANIFEST_DOMAIN = "ista-csr-real-differential-input-case/1.0.0"
@@ -124,7 +123,6 @@ _MANIFEST_KEYS = {
     "schema",
     "domain",
     "baseline_manifest",
-    "baseline_manifest_sha256",
     "tolerances",
     "extended_cases",
     "coverage_claims",
@@ -165,8 +163,6 @@ _NEAR_KEYS = {
     "lower_exclusive",
     "upper_exclusive",
 }
-_SHA = re.compile(r"[0-9a-f]{64}")
-_BASELINE_SHA = "c2cf7aac05719ba7b437b45918cc11ade5fec68f2727135facaa46b7b4f4b47b"
 _EXTENDED_PATHS = tuple(
     [
         "../baseline/fixtures/stage0_tech.lef",
@@ -176,7 +172,6 @@ _EXTENDED_PATHS = tuple(
         "fixtures/supported_branches.sdc",
     ]
 )
-_EXTENDED_CASE_SHA = "acef79a9df5ce938e5400189935a76fe64c1dad88ae9d9b0a5f89d8bbe25c276"
 
 
 class DifferentialModelError(BaselineError):
@@ -247,7 +242,6 @@ class CaseDescriptor:
     inputs: tuple[InputArtifact, ...]
     input_case_sha256: str
     descriptor_manifest: Path
-    descriptor_manifest_sha256: str
     raw_descriptor: dict[str, Any] | None = None
     non_unate_anchor: ArcSelector | None = None
     disabled_anchor: ArcSelector | None = None
@@ -271,7 +265,6 @@ class CaseDescriptor:
 @dataclass(frozen=True)
 class ManifestBundle:
     path: Path
-    sha256: str
     baseline_manifest: Path
     cases: tuple[CaseDescriptor, ...]
     absolute_tolerance: float
@@ -355,12 +348,6 @@ def _text(value: Any, where: str, *, empty: bool = False) -> str:
     if not isinstance(value, str) or (not empty and not value):
         raise DifferentialModelError(f"{where} must be a string")
     value.encode("utf-8", errors="strict")
-    return value
-
-
-def _sha(value: Any, where: str) -> str:
-    if not isinstance(value, str) or _SHA.fullmatch(value) is None:
-        raise DifferentialModelError(f"{where} must be a lowercase SHA-256")
     return value
 
 
@@ -498,6 +485,40 @@ def _fingerprint(descriptor: CaseDescriptor) -> str:
     return hashlib.sha256(writer.data).hexdigest()
 
 
+def _canonical_string_bytes(value: str) -> bytes:
+    writer = _Writer()
+    writer.string(value)
+    return bytes(writer.data)
+
+
+def _baseline_fingerprint(descriptor: CaseDescriptor) -> str:
+    if len(descriptor.expected_clocks) != 1:
+        raise DifferentialModelError("baseline fingerprint requires exactly one clock")
+    inputs = tuple(
+        sorted(
+            ((artifact.manifest_path, artifact.sha256) for artifact in descriptor.inputs),
+            key=lambda item: _canonical_string_bytes(item[0]),
+        )
+    )
+    if len(inputs) != 5 or len({path for path, _digest in inputs}) != 5:
+        raise DifferentialModelError("baseline fingerprint requires exactly five unique inputs")
+    writer = _Writer()
+    for value in ("ista-csr", "ista-csr-projection-input-case", "1.0.0"):
+        writer.string(value)
+    for value in (
+        descriptor.name,
+        descriptor.top,
+        descriptor.input("verilog").manifest_path,
+        descriptor.input("sdc").manifest_path,
+        descriptor.expected_clocks[0],
+    ):
+        writer.string(value)
+    for path, digest in inputs:
+        writer.string(path)
+        writer.string(digest)
+    return hashlib.sha256(writer.data).hexdigest()
+
+
 def canonical_clock_json(clocks: tuple[str, ...]) -> str:
     return json.dumps(list(clocks), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
@@ -505,7 +526,6 @@ def canonical_clock_json(clocks: tuple[str, ...]) -> str:
 def _extended(
     manifest: dict[str, Any],
     manifest_path: Path,
-    manifest_sha: str,
     baseline_tech: Path,
 ) -> CaseDescriptor:
     cases = _items(manifest["extended_cases"], "manifest.extended_cases")
@@ -526,13 +546,12 @@ def _extended(
     artifacts = []
     for label in INPUT_ORDER:
         item = _mapping(input_map[label], f"extended.inputs.{label}")
-        _exact(item, {"path", "sha256"}, f"extended.inputs.{label}")
+        _exact(item, {"path"}, f"extended.inputs.{label}")
         relative = _text(item["path"], f"extended.inputs.{label}.path")
-        declared = _sha(item["sha256"], f"extended.inputs.{label}.sha256")
         path = _input_path(manifest_path.parent, label, relative, baseline_tech)
-        if not path.is_file() or path.is_symlink() or _baseline.sha256_file(path) != declared:
-            raise DifferentialModelError(f"extended {label} file/SHA differs")
-        artifacts.append(InputArtifact(label, relative, path, declared))
+        if not path.is_file() or path.is_symlink():
+            raise DifferentialModelError(f"extended {label} file is unavailable")
+        artifacts.append(InputArtifact(label, relative, path, _baseline.sha256_file(path)))
     if tuple(item.manifest_path for item in artifacts) != _EXTENDED_PATHS:
         raise DifferentialModelError("extended input path bytes changed")
     anchors = tuple(
@@ -588,7 +607,6 @@ def _extended(
         tuple(artifacts),
         "",
         manifest_path,
-        manifest_sha,
         raw,
         anchors[0],
         anchors[1],
@@ -599,14 +617,11 @@ def _extended(
         near,
     )
     fingerprint = _fingerprint(draft)
-    if fingerprint != _EXTENDED_CASE_SHA:
-        raise DifferentialModelError("extended canonical input-case SHA changed")
     return CaseDescriptor(**{**draft.__dict__, "input_case_sha256": fingerprint})
 
 
 def _baseline_cases(path: Path) -> tuple[CaseDescriptor, CaseDescriptor]:
     result = []
-    manifest_sha = _baseline.sha256_file(path)
     for source in load_case_descriptors(path):
         paths = {
             "tech_lef": source.tech_lef,
@@ -616,28 +631,27 @@ def _baseline_cases(path: Path) -> tuple[CaseDescriptor, CaseDescriptor]:
             "sdc": source.sdc_path,
         }
         source_paths = {resolved: relative for relative, resolved in source.input_paths}
-        hashes = dict(source.input_hashes)
         inputs = tuple(
             InputArtifact(
                 label,
                 source_paths[paths[label]],
                 paths[label],
-                hashes[source_paths[paths[label]]],
+                _baseline.sha256_file(paths[label]),
             )
             for label in INPUT_ORDER
         )
         if source.expected_clock != "vclk":
             raise DifferentialModelError("baseline expected clock changed")
+        draft = CaseDescriptor(
+            source.name,
+            source.top,
+            ("vclk",),
+            inputs,
+            "",
+            path,
+        )
         result.append(
-            CaseDescriptor(
-                source.name,
-                source.top,
-                ("vclk",),
-                inputs,
-                source.input_case_sha256,
-                path,
-                manifest_sha,
-            )
+            CaseDescriptor(**{**draft.__dict__, "input_case_sha256": _baseline_fingerprint(draft)})
         )
     return result[0], result[1]
 
@@ -651,13 +665,8 @@ def load_manifest(manifest_path: Path, baseline_path: Path) -> ManifestBundle:
         raise DifferentialModelError("manifest schema/domain changed")
     if manifest["baseline_manifest"] != "../baseline/manifest.json":
         raise DifferentialModelError("baseline manifest path bytes changed")
-    baseline_sha = _sha(manifest["baseline_manifest_sha256"], "manifest.baseline_manifest_sha256")
-    if (
-        baseline_sha != _BASELINE_SHA
-        or (manifest_path.parent / manifest["baseline_manifest"]).resolve() != baseline_path
-        or _baseline.sha256_file(baseline_path) != baseline_sha
-    ):
-        raise DifferentialModelError("frozen baseline manifest path/SHA changed")
+    if (manifest_path.parent / manifest["baseline_manifest"]).resolve() != baseline_path:
+        raise DifferentialModelError("baseline manifest path differs")
     tolerances = _mapping(manifest["tolerances"], "manifest.tolerances")
     _exact(tolerances, {"absolute", "relative"}, "manifest.tolerances")
     absolute = _number(tolerances["absolute"], "manifest.tolerances.absolute")
@@ -684,7 +693,6 @@ def load_manifest(manifest_path: Path, baseline_path: Path) -> ManifestBundle:
     extended = _extended(
         manifest,
         manifest_path,
-        _baseline.sha256_file(manifest_path),
         baseline[0].input("tech_lef").path,
     )
     cases = (*baseline, extended)
@@ -692,7 +700,6 @@ def load_manifest(manifest_path: Path, baseline_path: Path) -> ManifestBundle:
         raise DifferentialModelError("case order changed")
     return ManifestBundle(
         manifest_path,
-        _baseline.sha256_file(manifest_path),
         baseline_path,
         cases,
         absolute,

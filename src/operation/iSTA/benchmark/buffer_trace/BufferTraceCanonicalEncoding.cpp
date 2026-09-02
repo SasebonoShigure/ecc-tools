@@ -21,11 +21,9 @@
 #include <cmath>
 #include <limits>
 #include <set>
-#include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
-#include "CsrFingerprint.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "TimingEditByteOrder.hpp"
 #include "TimingEditCanonicalEncoding.hpp"
@@ -274,12 +272,6 @@ void validateEvaluationEvidence(const CandidateEvaluationReceipt& evaluation, co
     reject(errors, BufferTraceContractCode::kInvalidValue, field + ".buffer" + violation.field.substr(kLibraryPrefix.size()), violation.message);
   }
 }
-bool lowercaseSha256(const std::string& value)
-{
-  return value.size() == 64 && std::all_of(value.begin(), value.end(), [](char character) {
-           return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f');
-         });
-}
 bool finiteNumeric(const GainComputationReceipt& value)
 {
   const double fields[] = {value.arrival_ns, value.required_ns, value.slack_ns, value.upstream_resistance_kohm,
@@ -462,14 +454,6 @@ Bytes canonicalGenerationReceiptBytes(const GenerationReceipt& receipt)
         encoder.appendBytes(timing_edit::canonicalCreationTokenBytes(creation_token));
     }
     encoder.appendString(token(receipt.stop_reason));
-  });
-}
-Bytes canonicalBufferTraceIntegrityPayloadBytes(const BufferTraceArtifact& artifact)
-{
-  return encode("buffer-trace-integrity-payload", [&](CanonicalEncoder& encoder) {
-    encoder.appendString(artifact.integrity.algorithm);
-    encoder.appendBytes(canonicalReplayProgramBytes(artifact.replay));
-    encoder.appendBytes(canonicalGenerationReceiptBytes(artifact.generation_only));
   });
 }
 BufferTraceContractViolations validateSelectionProfile(const SelectionProfile& profile)
@@ -681,15 +665,6 @@ BufferTraceContractViolations validateBufferTraceArtifact(const BufferTraceArtif
   if ((artifact.generation_only.stop_reason == GenerationStopReason::kMaxTotalInsertionsReached) != reached_limit)
     reject(errors, BufferTraceContractCode::kInvalidValue, "generation_only.stop_reason",
            "max-total stop reason must be used exactly when accepted count reaches the limit");
-  const bool valid_integrity = artifact.integrity.algorithm == "sha256" && lowercaseSha256(artifact.integrity.frozen_artifact_digest);
-  if (!valid_integrity)
-    reject(errors, BufferTraceContractCode::kInvalidValue, "integrity", "integrity is auxiliary SHA-256 artifact identity only");
-  else if (errors.empty()) {
-    const Bytes payload = canonicalBufferTraceIntegrityPayloadBytes(artifact);
-    if (csr::sha256Hex(std::span<const std::uint8_t>(payload)) != artifact.integrity.frozen_artifact_digest)
-      reject(errors, BufferTraceContractCode::kIdentityMismatch, "integrity.frozen_artifact_digest",
-             "must equal SHA-256 of the canonical frozen artifact payload");
-  }
   return errors;
 }
 }  // namespace ista::buffer_trace

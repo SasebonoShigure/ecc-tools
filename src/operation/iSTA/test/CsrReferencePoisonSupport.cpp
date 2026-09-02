@@ -456,7 +456,7 @@ void poisonFamily(ista::Database& database, const CsrReferenceInputRawProjection
 std::vector<ReferencePoisonCanary> poisonReferenceDerivedState(ista::Database& database, const CsrReferenceInputRawProjection& raw,
                                                                const ReferencePoisonBinding& binding)
 {
-  if (binding.input_case_sha256.empty() || binding.run_nonce.empty() || binding.session_token == 0)
+  if (binding.run_nonce.empty() || binding.session_token == 0)
     throw std::invalid_argument("poison canary binding is incomplete");
   const std::vector<std::int32_t> fallback_keys = planFallbackKeys(database, raw);
   const EncodedPoisonFamilies pristine = encodeFamilies(database, raw, binding, fallback_keys, true);

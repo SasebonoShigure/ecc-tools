@@ -12,7 +12,7 @@
 namespace ista::buffer_trace::test_support {
 
 // Recomputes every accepted gain from the production-exported CSR Liberty
-// closure. A trace digest is deliberately neither consumed nor returned.
+// closure.
 void requireProductionGenerationGain(
     const BufferTraceGenerationResult& generated);
 

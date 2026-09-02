@@ -164,7 +164,6 @@ def run(args: argparse.Namespace) -> None:
         "functional_correctness_primary": True,
         "performance_claims_made": False,
         "speedup_or_break_even_reported": False,
-        "hash_used_as_acceptance": False,
     }
     require(output["raw_sample_count"] >= MIN_SAMPLES,
             "timing smoke did not retain six raw samples")

@@ -13,7 +13,6 @@ CANARY_DOMAIN_SUFFIX = "/1.0.0"
 
 @dataclass(frozen=True)
 class Binding:
-    input_case_sha256: str
     repeat_index: int
     run_nonce: str
     session_token: int
@@ -336,7 +335,7 @@ def decode_canary_wire(payload: bytes, outer_family: str) -> CanaryEnvelope:
     expected_domain = f"{CANARY_DOMAIN_PREFIX}{outer_family}{CANARY_DOMAIN_SUFFIX}"
     if reader.string() != expected_domain:
         raise CanonicalError("canary domain/family/version mismatch")
-    binding = Binding(reader.string(), reader.u64(), reader.string(), reader.u64())
+    binding = Binding(reader.u64(), reader.string(), reader.u64())
     subjects = reader.vector(lambda _index: _subject(reader, family), "subjects")
     reader.finish()
     if not subjects:

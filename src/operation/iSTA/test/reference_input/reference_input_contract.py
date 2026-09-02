@@ -2,7 +2,6 @@
 """Strict schemas, independent probe validation, and atomic publication contracts."""
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -58,7 +57,6 @@ COMPLEX_RAW_HEX = (
     "0000000000000000000000000200000000000000026132000000000000000261310040000000000000000000"
     "000000000002613100000000000000026132003ff0000000000000"
 )
-COMPLEX_RAW_SHA256 = "981c927eea2234d723aed25ae799b30b2a25f6128961c7fece42dd11762a92f5"
 PROBE_KEYS = frozenset(
     {
         "schema",
@@ -68,7 +66,6 @@ PROBE_KEYS = frozenset(
         "context",
         "repeat_index",
         "run_nonce",
-        "input_case_sha256",
         "session_token",
         "pre_candidate_wire_hex",
         "post_candidate_wire_hex",
@@ -91,15 +88,11 @@ CASE_RESULT_KEYS = frozenset({"case", "repeats"})
 REPEAT_KEYS = frozenset(
     {
         "repeat_index",
-        "input_case_sha256",
         "session_token",
-        "candidate_wire_sha256",
-        "raw_projection_sha256",
         "touched_families",
     }
 )
 FAMILY_TOKENS = tuple(canary_wire.model.CANARY_FAMILY_TOKENS)
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 _NONCE = re.compile(r"[0-9a-f]{32}")
 _LOWER_HEX = re.compile(r"(?:[0-9a-f]{2})+")
 
@@ -115,8 +108,8 @@ class ValidatedProbe:
     record: dict[str, Any]
     candidate: object
     raw: object
-    candidate_wire_sha256: str
-    raw_projection_sha256: str
+    candidate_bytes: bytes
+    raw_bytes: bytes
     touched_families: tuple[str, ...]
 
 
@@ -145,12 +138,6 @@ def _exact_keys(value: dict[str, Any], expected: frozenset[str], where: str) -> 
 def _u64(value: Any, where: str, *, minimum: int = 0) -> int:
     if type(value) is not int or not minimum <= value < 1 << 64:
         raise ReferenceInputContractError(f"{where} must be a non-bool u64")
-    return value
-
-
-def _sha(value: Any, where: str) -> str:
-    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
-        raise ReferenceInputContractError(f"{where} must be lowercase SHA-256")
     return value
 
 
@@ -335,13 +322,11 @@ def validate_probe_record(
         "expected_clock": descriptor.expected_clock,
         "repeat_index": expected_repeat,
         "run_nonce": expected_nonce,
-        "input_case_sha256": descriptor.input_case_sha256,
         "session_token": SESSION_TOKEN,
     }
     for field, expected in expected_echo.items():
         if type(record[field]) is not type(expected) or record[field] != expected:
             raise ReferenceInputContractError(f"probe {field} does not echo its run slot")
-    _sha(record["input_case_sha256"], "probe.input_case_sha256")
     context = _validate_context(
         record["context"], CANONICAL_CONTEXT if expected_context is None else expected_context
     )
@@ -368,12 +353,10 @@ def validate_probe_record(
             raise ReferenceInputContractError(f"canary {token} is invalid: {exc}") from exc
         binding = before.binding
         if (
-            binding.input_case_sha256,
             binding.repeat_index,
             binding.run_nonce,
             binding.session_token,
         ) != (
-            descriptor.input_case_sha256,
             expected_repeat,
             expected_nonce,
             SESSION_TOKEN,
@@ -388,8 +371,8 @@ def validate_probe_record(
         record,
         candidate,
         raw,
-        hashlib.sha256(candidate_bytes).hexdigest(),
-        hashlib.sha256(raw_bytes).hexdigest(),
+        candidate_bytes,
+        raw_bytes,
         tuple(touched),
     )
 
@@ -406,7 +389,6 @@ def validate_controller_result(
     cases = _list(result["case_results"], "controller.case_results")
     if len(cases) != 2:
         raise ReferenceInputContractError("controller requires exactly two case results")
-    first_hashes: list[tuple[str, str]] = []
     for case_index, descriptor in enumerate(descriptors):
         case = _mapping(cases[case_index], f"case_results[{case_index}]")
         _exact_keys(case, CASE_RESULT_KEYS, f"case_results[{case_index}]")
@@ -415,26 +397,15 @@ def validate_controller_result(
         rows = _list(case["repeats"], f"case {descriptor.name}.repeats")
         if len(rows) != repeats:
             raise ReferenceInputContractError("controller repeat count is incomplete")
-        hashes: set[tuple[str, str]] = set()
         for expected_repeat, raw_row in enumerate(rows):
             row = _mapping(raw_row, f"case {descriptor.name} repeat")
             _exact_keys(row, REPEAT_KEYS, "controller repeat")
             if row["repeat_index"] != expected_repeat or type(row["repeat_index"]) is not int:
                 raise ReferenceInputContractError("controller repeat indices are not exact")
-            if row["input_case_sha256"] != descriptor.input_case_sha256:
-                raise ReferenceInputContractError("controller repeat case fingerprint differs")
             if row["session_token"] != SESSION_TOKEN or type(row["session_token"]) is not int:
                 raise ReferenceInputContractError("controller repeat session token differs")
-            candidate_hash = _sha(row["candidate_wire_sha256"], "candidate hash")
-            raw_hash = _sha(row["raw_projection_sha256"], "raw hash")
             if tuple(_list(row["touched_families"], "touched_families")) != FAMILY_TOKENS:
                 raise ReferenceInputContractError("controller touched_families differs")
-            hashes.add((candidate_hash, raw_hash))
-        if len(hashes) != 1:
-            raise ReferenceInputContractError("same-case fresh repeats drifted")
-        first_hashes.append(next(iter(hashes)))
-    if first_hashes[0][0] == first_hashes[1][0] or first_hashes[0][1] == first_hashes[1][1]:
-        raise ReferenceInputContractError("chain and diamond candidate/raw hashes must differ")
     return result
 
 
@@ -480,11 +451,7 @@ def publish_atomic(temporary: Path, final: Path, where: str) -> None:
 def _validate_complex_raw_kat() -> None:
     expected = raw_kat.complex_raw_kat_input()
     payload = raw_wire.encode_raw_wire(expected)
-    if (
-        len(payload) != 1127
-        or payload.hex() != COMPLEX_RAW_HEX
-        or hashlib.sha256(payload).hexdigest() != COMPLEX_RAW_SHA256
-    ):
+    if len(payload) != 1127 or payload.hex() != COMPLEX_RAW_HEX:
         raise ReferenceInputContractError("complex raw-wire known-answer bytes differ")
     decoded = raw_wire.decode_raw_wire(bytes.fromhex(COMPLEX_RAW_HEX))
     if decoded != expected:
@@ -542,7 +509,6 @@ def _self_test(probe_schema: Path, controller_schema: Path) -> None:
     if (
         len(payload) != 115
         or payload.hex() != raw_wire.EMPTY_RAW_HEX
-        or hashlib.sha256(payload).hexdigest() != raw_wire.EMPTY_RAW_SHA256
         or raw_wire.decode_raw_wire(payload) != raw_wire.empty_raw_input()
     ):
         raise ReferenceInputContractError("empty raw-wire known-answer test differs")

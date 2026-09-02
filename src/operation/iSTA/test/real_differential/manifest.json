@@ -2,7 +2,6 @@
   "schema": "ista-csr-real-differential-manifest/1.0.0",
   "domain": "ista-csr-real-differential-input-case/1.0.0",
   "baseline_manifest": "../baseline/manifest.json",
-  "baseline_manifest_sha256": "c2cf7aac05719ba7b437b45918cc11ade5fec68f2727135facaa46b7b4f4b47b",
   "tolerances": {
     "absolute": 1e-09,
     "relative": 1e-09
@@ -17,24 +16,19 @@
       ],
       "inputs": {
         "tech_lef": {
-          "path": "../baseline/fixtures/stage0_tech.lef",
-          "sha256": "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc"
+          "path": "../baseline/fixtures/stage0_tech.lef"
         },
         "cell_lef": {
-          "path": "fixtures/supported_branches_cells.lef",
-          "sha256": "92f47819602d45d264a5b1f460e24cbb4f69bd62bed8742ea64d2b825f5f4ad5"
+          "path": "fixtures/supported_branches_cells.lef"
         },
         "liberty": {
-          "path": "fixtures/supported_branches.lib",
-          "sha256": "9b2abaa48fde582a01e9eac7a09bf6fff63122e143299e3f8cee19a313577447"
+          "path": "fixtures/supported_branches.lib"
         },
         "verilog": {
-          "path": "fixtures/supported_branches.v",
-          "sha256": "fea8a5c73637a15664d76b8afe5bffb6cd03ed09ca91a445a6cf54a37a71785f"
+          "path": "fixtures/supported_branches.v"
         },
         "sdc": {
-          "path": "fixtures/supported_branches.sdc",
-          "sha256": "f56f83b6b823c76feb1772a93340e31302aaf799c02c4aecc7a7af0907ea4005"
+          "path": "fixtures/supported_branches.sdc"
         }
       },
       "non_unate_anchor": {

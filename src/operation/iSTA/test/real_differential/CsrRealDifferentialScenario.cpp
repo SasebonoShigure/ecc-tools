@@ -200,9 +200,7 @@ Json levelReceipt(const Json& native, const Json& replay)
   const std::string native_bytes = native.dump();
   const std::string replay_bytes = replay.dump();
   return {{"native_bytes_hex", bytesToHex(std::vector<std::uint8_t>(native_bytes.begin(), native_bytes.end()))},
-          {"native_sha256", sha256Hex(native_bytes)},
           {"replay_bytes_hex", bytesToHex(std::vector<std::uint8_t>(replay_bytes.begin(), replay_bytes.end()))},
-          {"replay_sha256", sha256Hex(replay_bytes)},
           {"equal", true}};
 }
 const TimingPathState* pathState(const TimingPoint& point, std::string_view tag)

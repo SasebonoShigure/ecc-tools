@@ -31,8 +31,4 @@ namespace ista::buffer_trace {
 [[nodiscard]] std::vector<std::uint8_t> canonicalReplayProgramBytes(const ReplayProgram& program);
 [[nodiscard]] std::vector<std::uint8_t> canonicalGenerationReceiptBytes(const GenerationReceipt& receipt);
 
-// This is the byte payload an integrity tool may identify. Functional replay
-// equality must compare ReplayProgram and timing objects, never this digest.
-[[nodiscard]] std::vector<std::uint8_t> canonicalBufferTraceIntegrityPayloadBytes(const BufferTraceArtifact& artifact);
-
 }  // namespace ista::buffer_trace

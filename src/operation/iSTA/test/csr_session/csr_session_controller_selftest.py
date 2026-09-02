@@ -23,7 +23,7 @@ from csr_session_contract import (
     CONTROLLER_SCHEMA,
     PROBE_SCHEMA,
     SessionContractError,
-    canonical_default_payload_sha256,
+    _actual_default_semantics,
     load_default_compat,
     validate_controller_result,
     validate_default_records,
@@ -35,6 +35,7 @@ from projection_contract import (
     load_case_descriptors,
     load_json,
 )
+from projection_wire_fixture import fixture_bytes
 
 _FINGERPRINT_FIELDS = (
     "topology_fingerprint",
@@ -114,8 +115,8 @@ def _session(
             "node_count": counts[0],
             "edge_count": counts[1],
             "level_count": counts[2],
-            "projection_sha256": _digest(f"{case}:projection"),
-            "fifo_sha256": _digest(f"{case}:fifo"),
+            "projection_wire_hex": f"{case}:projection".encode().hex(),
+            "fifo_wire_hex": f"{case}:fifo".encode().hex(),
         },
     }
 
@@ -132,7 +133,6 @@ def _record(
         "run_nonce": nonce,
         "case": descriptor.name,
         "repeat_index": repeat_index,
-        "input_case_sha256": descriptor.input_case_sha256,
         "full_observation": None,
         "sessions": [
             _session(descriptor.name, case_index * 10 + 1, counts),
@@ -142,18 +142,15 @@ def _record(
     }
 
 
-def _summary(
-    descriptors: Sequence[CaseDescriptor],
-    payloads: dict[str, str],
-) -> dict[str, Any]:
+def _summary(descriptors: Sequence[CaseDescriptor]) -> dict[str, Any]:
     default_results: list[dict[str, Any]] = []
     case_results: list[dict[str, Any]] = []
     for case_index, descriptor in enumerate(descriptors):
         default_results.append(
             {
                 "case": descriptor.name,
-                "input_case_sha256": descriptor.input_case_sha256,
-                "payload_sha256": payloads[descriptor.name],
+                "projection_wire_hex": f"{descriptor.name}:projection".encode().hex(),
+                "fifo_wire_hex": f"{descriptor.name}:fifo".encode().hex(),
             }
         )
         records = []
@@ -163,7 +160,6 @@ def _summary(
         case_results.append(
             {
                 "case": descriptor.name,
-                "input_case_sha256": descriptor.input_case_sha256,
                 "repeats": records,
             }
         )
@@ -210,10 +206,6 @@ def _test_record_validation(
         ("false-complete", lambda item: item.__setitem__("complete", False)),
         ("wrong-case", lambda item: item.__setitem__("case", "diamond")),
         ("wrong-repeat", lambda item: item.__setitem__("repeat_index", 2)),
-        (
-            "wrong-input-sha",
-            lambda item: item.__setitem__("input_case_sha256", "0" * 64),
-        ),
         ("wrong-nonce", lambda item: item.__setitem__("run_nonce", "bad")),
         (
             "full-observation",
@@ -267,6 +259,12 @@ def _test_record_validation(
         (
             "observation-oracle-count",
             lambda item: item["sessions"][0]["oracle"].__setitem__("node_count", 99),
+        ),
+        (
+            "malformed-projection-bytes",
+            lambda item: item["sessions"][0]["oracle"].__setitem__(
+                "projection_wire_hex", "not-hex"
+            ),
         ),
         (
             "bool-count",
@@ -328,6 +326,12 @@ def _test_summary_validation(
             "default-order",
             lambda item: item["default_compat_results"].reverse(),
         ),
+        (
+            "default-projection-mismatch",
+            lambda item: item["default_compat_results"][0].__setitem__(
+                "projection_wire_hex", b"stable-wrong-projection".hex()
+            ),
+        ),
         ("missing-case", lambda item: item["case_results"].pop()),
         ("case-order", lambda item: item["case_results"].reverse()),
         (
@@ -364,9 +368,9 @@ def _test_summary_validation(
             "same-projection",
             lambda item: [
                 record["sessions"][0]["oracle"].__setitem__(
-                    "projection_sha256",
+                    "projection_wire_hex",
                     item["case_results"][0]["repeats"][0]["sessions"][0]["oracle"][
-                        "projection_sha256"
+                        "projection_wire_hex"
                     ],
                 )
                 for record in item["case_results"][1]["repeats"]
@@ -381,6 +385,22 @@ def _test_summary_validation(
                 )
                 for record in item["case_results"][1]["repeats"]
             ],
+        ),
+        (
+            "stable-session-projection-drift",
+            lambda item: _replace_session_wires(
+                item["case_results"][0],
+                b"stable-wrong-projection".hex(),
+                item["default_compat_results"][0]["fifo_wire_hex"],
+            ),
+        ),
+        (
+            "stable-session-fifo-drift",
+            lambda item: _replace_session_wires(
+                item["case_results"][0],
+                item["default_compat_results"][0]["projection_wire_hex"],
+                b"stable-wrong-fifo".hex(),
+            ),
         ),
     )
     for name, mutation in mutations:
@@ -417,6 +437,15 @@ def _replace_counts(record: dict[str, Any], counts: dict[str, int]) -> None:
         session["oracle"]["level_count"] = counts["levels"]
 
 
+def _replace_session_wires(
+    case_result: dict[str, Any], projection_wire_hex: str, fifo_wire_hex: str
+) -> None:
+    for record in case_result["repeats"]:
+        for session in record["sessions"]:
+            session["oracle"]["projection_wire_hex"] = projection_wire_hex
+            session["oracle"]["fifo_wire_hex"] = fifo_wire_hex
+
+
 def _test_raw_loader(summary: dict[str, Any], directory: Path) -> None:
     encoded = json.dumps(summary, sort_keys=True, separators=(",", ":")).encode("utf-8")
     samples = {
@@ -440,43 +469,43 @@ def _test_raw_loader(summary: dict[str, Any], directory: Path) -> None:
 def _test_default_compat(
     descriptors: Sequence[CaseDescriptor],
     compat_path: Path,
-) -> dict[str, str]:
+) -> None:
     compat = load_default_compat(compat_path)
-    payloads = dict(compat["payload_sha256_by_case"])
-    poisoned_loader = copy.deepcopy(compat)
-    poisoned_loader["payload_sha256_by_case"]["chain"] = "0" * 64
+    malformed = copy.deepcopy(compat)
+    malformed["expected_by_case"]["chain"]["functional_projection"] = []
     with tempfile.TemporaryDirectory(prefix="csr-session-compat-selftest-") as temporary:
-        poisoned_path = Path(temporary) / "poisoned-default-compat.json"
-        poisoned_path.write_text(json.dumps(poisoned_loader), encoding="utf-8")
+        malformed_path = Path(temporary) / "malformed-default-compat.json"
+        malformed_path.write_text(json.dumps(malformed), encoding="utf-8")
         _expect_error(
-            "default-loader-exact-sha",
-            lambda: load_default_compat(poisoned_path),
+            "default-loader-functional-projection",
+            lambda: load_default_compat(malformed_path),
         )
 
     sample_records: dict[str, tuple[dict[str, Any], ...]] = {}
     synthetic_compat = copy.deepcopy(compat)
     for descriptor in descriptors:
-        records = tuple(
-            {
-                "schema": "legacy",
-                "case": descriptor.name,
-                "run_nonce": f"{3:02x}{index + 1:030x}",
-                "repeat_index": index,
-                "complete": True,
-            }
-            for index in range(3)
-        )
-        digest = canonical_default_payload_sha256(records[0])
-        synthetic_compat["payload_sha256_by_case"][descriptor.name] = digest
+        projection, oracle, _node_count, _arc_count = fixture_bytes(descriptor.name)
+        record = {
+            "case": descriptor.name,
+            "top": descriptor.top,
+            "expected_clock": descriptor.expected_clock,
+            "direct_projection": projection.hex(),
+            "native_graph_oracle": oracle.hex(),
+            "complete": True,
+        }
+        semantic = _actual_default_semantics(record, f"synthetic {descriptor.name}")
+        records = tuple(copy.deepcopy(record) for _index in range(3))
+        synthetic_compat["expected_by_case"][descriptor.name] = semantic
         sample_records[descriptor.name] = records
     validate_default_records(sample_records, descriptors, synthetic_compat)
     poisoned = copy.deepcopy(synthetic_compat)
-    poisoned["payload_sha256_by_case"]["chain"] = "0" * 64
+    poisoned["expected_by_case"]["chain"]["functional_projection"]["nodes"][0][
+        "direction"
+    ] = "output"
     _expect_error(
-        "default-repeat-compat",
+        "default-semantic-drift",
         lambda: validate_default_records(sample_records, descriptors, poisoned),
     )
-    return payloads
 
 
 def _test_subprocess_protocol(
@@ -610,8 +639,8 @@ def _test_subprocess_protocol(
 
 def run_self_test(manifest_path: Path, compat_path: Path) -> None:
     descriptors = load_case_descriptors(manifest_path)
-    payloads = _test_default_compat(descriptors, compat_path)
-    summary = _summary(descriptors, payloads)
+    _test_default_compat(descriptors, compat_path)
+    summary = _summary(descriptors)
     _test_record_validation(descriptors, summary)
     _test_summary_validation(descriptors, summary)
     with tempfile.TemporaryDirectory(prefix="csr-session-selftest-") as temporary:

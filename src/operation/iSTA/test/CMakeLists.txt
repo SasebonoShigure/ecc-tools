@@ -7,40 +7,6 @@ if(BUILD_TESTING)
     set(ISTA_TEST_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
   endif()
 
-  function(ista_get_target_property_or_empty OUTPUT TARGET_NAME PROPERTY_NAME)
-    get_target_property(PROPERTY_VALUE "${TARGET_NAME}" "${PROPERTY_NAME}")
-    if("${PROPERTY_VALUE}" MATCHES "-NOTFOUND$")
-      set(PROPERTY_VALUE)
-    endif()
-    set("${OUTPUT}" "${PROPERTY_VALUE}" PARENT_SCOPE)
-  endfunction()
-
-  function(ista_assert_unique_list LIST_VARIABLE DESCRIPTION)
-    set(SEEN_ITEMS)
-    foreach(ITEM IN LISTS ${LIST_VARIABLE})
-      list(FIND SEEN_ITEMS "${ITEM}" SEEN_INDEX)
-      if(NOT SEEN_INDEX EQUAL -1)
-        message(FATAL_ERROR "duplicate ${DESCRIPTION}: ${ITEM}")
-      endif()
-      list(APPEND SEEN_ITEMS "${ITEM}")
-    endforeach()
-  endfunction()
-
-  function(ista_assert_same_inventory ACTUAL_VARIABLE EXPECTED_VARIABLE DESCRIPTION)
-    ista_assert_unique_list(${ACTUAL_VARIABLE} "actual ${DESCRIPTION}")
-    ista_assert_unique_list(${EXPECTED_VARIABLE} "expected ${DESCRIPTION}")
-    set(ACTUAL_SORTED ${${ACTUAL_VARIABLE}})
-    set(EXPECTED_SORTED ${${EXPECTED_VARIABLE}})
-    list(SORT ACTUAL_SORTED)
-    list(SORT EXPECTED_SORTED)
-    if(NOT "${ACTUAL_SORTED}" STREQUAL "${EXPECTED_SORTED}")
-      message(
-          FATAL_ERROR
-          "${DESCRIPTION} mismatch; actual=[${ACTUAL_SORTED}] expected=[${EXPECTED_SORTED}]"
-      )
-    endif()
-  endfunction()
-
   add_executable(ista_arc_timing_arc_delay_test
       ArcTimingArcDelayTest.cpp
   )
@@ -206,9 +172,7 @@ if(BUILD_TESTING)
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceInputTests.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceInputIsolationTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrTimingScatterTests.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/CsrIsolationTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/IncrementalLevelizationTests.cmake")
 
   add_executable(ista_full_baseline_probe

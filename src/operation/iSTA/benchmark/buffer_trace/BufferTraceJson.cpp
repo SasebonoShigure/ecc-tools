@@ -656,14 +656,10 @@ ReplayProgramJsonParseResult parseReplayTemplateJson(std::string_view json_text)
 BufferTraceArtifactJsonParseResult parseBufferTraceArtifactJson(std::string_view json_text)
 {
   return parseResult<BufferTraceArtifactJsonParseResult>(json_text, [](const Json& value) {
-    exactObject(value, "artifact", {"replay", "generation_only", "integrity"});
+    exactObject(value, "artifact", {"replay", "generation_only"});
     ReplayProgram replay = parseReplay(value.at("replay"));
     GenerationReceipt generation = parseGeneration(value.at("generation_only"), replay, value.at("replay"));
-    const auto& integrity = value.at("integrity");
-    exactObject(integrity, "integrity", {"algorithm", "frozen_artifact_digest"});
-    BufferTraceArtifact result{std::move(replay), std::move(generation),
-                               {text(integrity.at("algorithm"), "integrity.algorithm"),
-                                text(integrity.at("frozen_artifact_digest"), "integrity.frozen_artifact_digest")}};
+    BufferTraceArtifact result{std::move(replay), std::move(generation)};
     if (const auto errors = validateBufferTraceArtifact(result); !errors.empty())
       throw WireError(errors.front().code, errors.front().field, errors.front().message);
     return result;
@@ -685,7 +681,7 @@ std::string bufferTraceArtifactToJson(const BufferTraceArtifact& artifact)
 {
   if (const auto errors = validateBufferTraceArtifact(artifact); !errors.empty())
     throw std::invalid_argument(errors.front().field + ": " + errors.front().message);
-  return Json{{"replay", toReplay(artifact.replay)}, {"generation_only", toGeneration(artifact.generation_only, artifact.replay)},
-              {"integrity", {{"algorithm", artifact.integrity.algorithm}, {"frozen_artifact_digest", artifact.integrity.frozen_artifact_digest}}}}.dump();
+  return Json{{"replay", toReplay(artifact.replay)},
+              {"generation_only", toGeneration(artifact.generation_only, artifact.replay)}}.dump();
 }
 }  // namespace ista::buffer_trace

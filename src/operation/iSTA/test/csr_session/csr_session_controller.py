@@ -31,13 +31,6 @@ from baseline_contract import (  # noqa: E402
     BaselineError,
     load_json,
 )
-from projection_contract import (  # noqa: E402
-    CaseDescriptor,
-    load_case_descriptors,
-    publish_atomic,
-    require_regular_owned_file,
-    write_json_exclusive,
-)
 from csr_session_contract import (  # noqa: E402
     CONTROLLER_SCHEMA,
     SessionContractError,
@@ -46,9 +39,16 @@ from csr_session_contract import (  # noqa: E402
     validate_default_records,
     validate_session_probe_record,
 )
+from projection_contract import (  # noqa: E402
+    CaseDescriptor,
+    load_case_descriptors,
+    publish_atomic,
+    require_regular_owned_file,
+    write_json_exclusive,
+)
 
 _DEFAULT_MANIFEST = _BASELINE_ROOT / "manifest.json"
-_DEFAULT_COMPAT = _PROJECTION_ROOT / "projection_default_compat_v1.json"
+_DEFAULT_COMPAT = _PROJECTION_ROOT / "projection_default_compat_v2.json"
 
 
 @dataclass(frozen=True)
@@ -143,8 +143,6 @@ def _probe_arguments(slot: SessionRunSlot) -> tuple[str, ...]:
         descriptor.expected_clock,
         "--repeat-index",
         str(slot.repeat_index),
-        "--input-case-sha256",
-        descriptor.input_case_sha256,
         "--run-nonce",
         slot.run_nonce,
         "--run-dir",
@@ -248,7 +246,6 @@ def _build_summary(
         case_results.append(
             {
                 "case": descriptor.name,
-                "input_case_sha256": descriptor.input_case_sha256,
                 "repeats": case_records,
             }
         )

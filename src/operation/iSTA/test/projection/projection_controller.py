@@ -129,8 +129,6 @@ def _probe_arguments(slot: RunSlot) -> tuple[str, ...]:
         descriptor.expected_clock,
         "--repeat-index",
         str(slot.repeat_index),
-        "--input-case-sha256",
-        descriptor.input_case_sha256,
         "--run-nonce",
         slot.run_nonce,
         "--run-dir",

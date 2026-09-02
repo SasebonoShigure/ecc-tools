@@ -13,8 +13,8 @@
 namespace ista::buffer_trace::test {
 
 // Test-only, field-preserving projections used by the cross-process
-// controller.  They deliberately expose topology, electrical inputs,
-// constraints, and timing lanes instead of replacing them with a digest.
+// controller. They expose topology, electrical inputs, constraints, and
+// timing lanes.
 [[nodiscard]] nlohmann::json csrReferenceInputToJson(
     const csr::CsrReferenceInput& input);
 [[nodiscard]] nlohmann::json csrTimingResultToJson(

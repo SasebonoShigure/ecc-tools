@@ -2,14 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://openecos.org/schemas/buffer_fixed_trace_v1.schema.json",
   "title": "iSTA fixed buffer semantic trace, version 1",
-  "description": "Closed-world Stage 4 artifact. Functional replay equality is authoritative; integrity SHA-256 is only an artifact identity aid.",
+  "description": "Closed-world Stage 4 artifact whose replay and generation evidence are validated directly.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["replay", "generation_only", "integrity"],
+  "required": ["replay", "generation_only"],
   "properties": {
     "replay": {"$ref": "#/$defs/replayProgram"},
-    "generation_only": {"$ref": "#/$defs/generationReceipt"},
-    "integrity": {"$ref": "#/$defs/integrityReceipt"}
+    "generation_only": {"$ref": "#/$defs/generationReceipt"}
   },
   "$defs": {
     "u64": {
@@ -31,10 +30,6 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^(?!\\.{1,2}$)[^/\\u0000]+$"
-    },
-    "sha256": {
-      "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
     },
     "header": {
       "type": "object",
@@ -322,15 +317,6 @@
         "stop_reason": {
           "enum": ["empty_accepted_batch", "rounds_reached", "max_total_insertions_reached"]
         }
-      }
-    },
-    "integrityReceipt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["algorithm", "frozen_artifact_digest"],
-      "properties": {
-        "algorithm": {"const": "sha256"},
-        "frozen_artifact_digest": {"$ref": "#/$defs/sha256"}
       }
     }
   }

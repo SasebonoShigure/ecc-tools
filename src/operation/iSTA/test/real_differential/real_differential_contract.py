@@ -35,7 +35,6 @@ _leaves = wire.wire_leaves
 _map = wire.mapping
 _r = wire.require
 _schema = wire.validate_schema_fragment
-_sha = wire.sha256_bytes
 _timing = wire.validate_neutral_wire
 _number = wire.wire_number
 _names = str.split
@@ -110,9 +109,7 @@ def _validate_scenario(value, case, timing, where):
     receipt = scenario["level_order"]
     native = _hex(receipt["native_bytes_hex"], f"{where}.level_order.native")
     replay = _hex(receipt["replay_bytes_hex"], f"{where}.level_order.replay")
-    values = (_sha(native), _sha(replay), True)
-    valid = native == replay == expected
-    valid = valid and _same(receipt, _names("native_sha256 replay_sha256 equal"), values)
+    valid = native == replay == expected and receipt["equal"] is True
     _r(valid, f"{where} level/order receipt differs from actual timing")
     return scenario
 
@@ -424,9 +421,6 @@ def _validate_reference(record, case, timing):
     source = record["source_wires"]
     raw_source = _hex(source["pre_poison_raw_wire_hex"], "source pre-poison raw")
     candidate_bytes = _hex(source["snapshot_candidate_wire_hex"], "source candidate")
-    valid = _sha(raw_source) == source["pre_poison_raw_sha256"]
-    valid = valid and _sha(candidate_bytes) == source["snapshot_candidate_sha256"]
-    _r(valid, "bad-sha source wire")
     try:
         candidate = candidate_wire.decode_candidate_wire(candidate_bytes)
     except RuntimeError as exc:
@@ -442,11 +436,11 @@ def _validate_reference(record, case, timing):
     }
     _schema("#/$defs/identity", record["identity"], "reference.identity")
     _r(_map(record["identity"], "reference.identity") == expected, "hash-drift identity")
-    poison = zip(wire.POISON_FAMILIES, record["poison"], strict=True)
-    valid = len(record["poison"]) == len(wire.POISON_FAMILIES) and all(
-        item["family"] == family and item["before_sha256"] != item["after_sha256"]
-        for family, item in poison
-    )
+    valid = len(record["poison"]) == len(wire.POISON_FAMILIES)
+    for family, item in zip(wire.POISON_FAMILIES, record["poison"], strict=True):
+        before = _hex(item["before_typed_bytes_hex"], f"poison.{family}.before")
+        after = _hex(item["after_typed_bytes_hex"], f"poison.{family}.after")
+        valid = valid and item["family"] == family and before != after
     _r(valid, "poison family order/change differs")
     projection = record["forbidden_projection"]
     receipts = [
@@ -458,7 +452,6 @@ def _validate_reference(record, case, timing):
     for name in wire.CHECKPOINTS:
         item = projection[name]
         payload = _hex(item["raw_wire_hex"], f"projection.{name}.wire")
-        _r(_sha(payload) == item["raw_sha256"], f"bad-sha projection {name}")
         checkpoints.append(payload)
     _r(checkpoints[0] == raw_source and len(set(checkpoints)) == 1, "raw-provenance bytes")
     try:
@@ -490,18 +483,13 @@ def validate_probe(raw, case, lane, repeat, nonce, pid, argv, executable, direct
     def _validate_argv_receipt(value, case, argv, executable, directory, temporary):
         _schema("#/$defs/argvReceipt", value, "probe.argv_receipt")
         receipt = _map(value, "probe.argv_receipt")
-        clock_sha = _sha(wire.canonical_clock_json(case.expected_clocks).encode())
-        valid = tuple(receipt["argv"]) == argv and receipt["clock_bytes_sha256"] == clock_sha
-        _r(valid, "stale probe argv/clock receipt differs")
+        _r(tuple(receipt["argv"]) == argv, "stale probe argv receipt differs")
         names = _names("cwd executable run_dir result_temp")
         values = tuple(map(str, (directory, executable, directory, temporary)))
         _r(_same(receipt, names, values), "stale probe argv path receipt differs")
-        manifest = {
-            "path": str(case.descriptor_manifest),
-            "sha256": case.descriptor_manifest_sha256,
-        }
+        manifest = {"path": str(case.descriptor_manifest)}
         inputs = [
-            {"label": item.label, "path": str(item.path), "sha256": item.sha256}
+            {"label": item.label, "path": str(item.path)}
             for item in case.inputs
         ]
         valid = receipt["descriptor_manifest"] == manifest and receipt["resolved_inputs"] == inputs

@@ -438,7 +438,6 @@ def replay(args: argparse.Namespace) -> None:
         "relative_tolerance": REL_TOLERANCE,
         "prefixes": summaries,
         "functional_correctness_primary": True,
-        "hash_or_raw_dense_id_used_as_acceptance": False,
         "timing_and_resource_evidence_saved": True,
     })
 

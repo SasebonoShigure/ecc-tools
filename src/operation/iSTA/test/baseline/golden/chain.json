@@ -1078,7 +1078,6 @@
     }
   },
   "case": "chain",
-  "config_hash": "dfbd8ca5e2445a785f012659c842d68b790ea55227c75ec08282b3b2d4dd9228",
   "golden_schema_version": 1,
   "provenance": {
     "artifact_paths": [
@@ -1090,14 +1089,6 @@
       "timing_reporter/timing_max.rpt",
       "timing_reporter/timing_paths.json"
     ],
-    "full_snapshot_sha256_diagnostic": "6dd7f0d6d15cd34c22d12a0aebcb43e705423503c8f4251c38337956b6727059",
-    "input_sha256": {
-      "fixtures/chain.sdc": "96b0c4d42f516c88ae8c8be05a8fb583f7f04afa5151e9d5d0980d06a6dff202",
-      "fixtures/chain.v": "1cb34cb28ce1fb00fd21c4590fe686ea434271d10259026bf246a133e62943de",
-      "fixtures/stage0.lib": "71484897dc56c62760be3dde8a57c3722634cbe4771385e8c2c1c5a6ddcb9577",
-      "fixtures/stage0_cells.lef": "9af8e5d7547cb8beb15386e0e2867a0778721df2f7b33917949dc11b651524d8",
-      "fixtures/stage0_tech.lef": "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc"
-    },
     "source_baseline": {
       "ecc_tools_base_commit": "31ebf6cae5ba8b4a472b97947acf54e1deb82daa",
       "ecc_tools_branch": "IncreGPUSTA",
@@ -3879,6 +3870,5 @@
         "data_out"
       ]
     }
-  },
-  "topology_hash": "94c0754e0583a40f7ee61e7d44d306f62845d5899bc7109e757ed4549a8b5aa0"
+  }
 }

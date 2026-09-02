@@ -18,16 +18,12 @@ namespace {
 using namespace ista;
 using namespace ista::buffer_trace;
 
-template <typename Value>
-concept HasIntegrityReceipt = requires(Value value) { value.integrity; };
-
 static_assert(!std::is_default_constructible_v<BufferReplayContext>);
 static_assert(!std::is_copy_constructible_v<BufferReplayContext>);
 static_assert(!std::is_copy_assignable_v<BufferReplayContext>);
 static_assert(!std::is_move_constructible_v<BufferReplayContext>);
 static_assert(!std::is_move_assignable_v<BufferReplayContext>);
 static_assert(!std::is_destructible_v<BufferReplayContext>);
-static_assert(!HasIntegrityReceipt<ReplayReceipt>);
 static_assert(std::is_copy_constructible_v<ReplayReceipt>);
 static_assert(std::is_move_constructible_v<ReplayReceipt>);
 

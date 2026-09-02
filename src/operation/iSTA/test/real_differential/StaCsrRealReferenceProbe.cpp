@@ -46,7 +46,6 @@ struct RawCheckpoint
 {
   test::CsrReferenceInputRawProjection projection;
   std::vector<std::uint8_t> bytes;
-  std::string sha256;
   Json json;
 };
 
@@ -62,19 +61,13 @@ void require(bool condition, std::string_view message)
   }
 }
 
-std::string byteSha(const std::vector<std::uint8_t>& bytes)
-{
-  return sha256Hex(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
-}
-
 RawCheckpoint takeRawCheckpoint(const Database& database, std::string_view name, std::uint64_t ordinal, Json& receipts)
 {
   RawCheckpoint checkpoint;
   checkpoint.projection = test::projectCsrReferenceInputRaw(database);
   checkpoint.bytes = test::canonicalIndependentReferenceInputRawBytes(checkpoint.projection);
   require(!checkpoint.bytes.empty(), "raw checkpoint wire is empty");
-  checkpoint.sha256 = byteSha(checkpoint.bytes);
-  checkpoint.json = {{"raw_wire_hex", bytesToHex(checkpoint.bytes)}, {"raw_sha256", checkpoint.sha256}};
+  checkpoint.json = {{"raw_wire_hex", bytesToHex(checkpoint.bytes)}};
   receipts.push_back({{"checkpoint", name}, {"call_ordinal", ordinal}});
   return checkpoint;
 }
@@ -87,10 +80,10 @@ Json poisonToJson(const std::vector<test::ReferencePoisonCanary>& canaries)
     const test::ReferencePoisonCanary& canary = canaries[index];
     require(canary.family == test::kReferencePoisonFamilyTokens[index], "poison family order differs");
     require(!canary.before_typed_bytes.empty() && !canary.after_typed_bytes.empty(), "poison typed evidence is empty");
-    const std::string before = byteSha(canary.before_typed_bytes);
-    const std::string after = byteSha(canary.after_typed_bytes);
-    require(before != after, "poison family did not change");
-    result.push_back({{"family", canary.family}, {"before_sha256", before}, {"after_sha256", after}});
+    require(canary.before_typed_bytes != canary.after_typed_bytes, "poison family did not change");
+    result.push_back({{"family", canary.family},
+                      {"before_typed_bytes_hex", bytesToHex(canary.before_typed_bytes)},
+                      {"after_typed_bytes_hex", bytesToHex(canary.after_typed_bytes)}});
   }
   return result;
 }
@@ -239,7 +232,7 @@ Json runReference(Database& database, std::uint64_t session_token, const Json& s
   require(session_token != 0, "scenario supplied a zero session token");
   Json projection_receipts = Json::array();
   RawCheckpoint pre_poison = takeRawCheckpoint(database, "pre_poison", 0, projection_receipts);
-  const test::ReferencePoisonBinding binding{options.input_case_sha256, options.repeat_index, options.run_nonce, session_token};
+  const test::ReferencePoisonBinding binding{options.repeat_index, options.run_nonce, session_token};
   const std::vector<test::ReferencePoisonCanary> poison = test::poisonReferenceDerivedState(database, pre_poison.projection, binding);
   RawCheckpoint post_poison = takeRawCheckpoint(database, "post_poison", 1, projection_receipts);
   require(post_poison.bytes == pre_poison.bytes, "poison changed raw reference input");
@@ -252,7 +245,7 @@ Json runReference(Database& database, std::uint64_t session_token, const Json& s
   require(snapshot->input.source_identity.session_token == session_token && snapshot->input.source_identity.graph_generation == 0,
           "snapshot identity token/generation differs");
   require(snapshot->input.unsupported_reasons.empty(), "snapshot input unexpectedly reports unsupported reasons");
-  const EncodedSourceWire candidate = encodeSnapshotCandidate(snapshot->input);
+  const std::string candidate_wire_hex = encodeSnapshotCandidate(snapshot->input);
 
   CsrComputationResult computation = computeCsrSessionReference(*snapshot);
   require(validateComputationResult(snapshot->input, computation).empty(), "reference computation result is not strict-valid");
@@ -297,9 +290,7 @@ Json runReference(Database& database, std::uint64_t session_token, const Json& s
                     {"post_rerun", std::move(post_rerun.json)},     {"projection_call_receipt", std::move(projection_receipts)}};
   return {{"source_wires",
            {{"pre_poison_raw_wire_hex", bytesToHex(pre_poison.bytes)},
-            {"pre_poison_raw_sha256", pre_poison.sha256},
-            {"snapshot_candidate_wire_hex", candidate.wire_hex},
-            {"snapshot_candidate_sha256", candidate.sha256}}},
+            {"snapshot_candidate_wire_hex", candidate_wire_hex}}},
           {"identity", identityToJson(snapshot->input.source_identity)},
           {"poison", poisonToJson(poison)},
           {"forbidden_projection", std::move(forbidden)},

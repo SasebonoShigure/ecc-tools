@@ -1206,7 +1206,6 @@
     }
   },
   "case": "diamond",
-  "config_hash": "682fdea85fc8e65a7adecc16686da4d28c9dbe8362c27c0973ed85c1fe217f80",
   "golden_schema_version": 1,
   "provenance": {
     "artifact_paths": [
@@ -1218,14 +1217,6 @@
       "timing_reporter/timing_max.rpt",
       "timing_reporter/timing_paths.json"
     ],
-    "full_snapshot_sha256_diagnostic": "3d75bdec898f695574f116c0be660029e4f05a2a7a3afa7894f8b4a5a7e9a608",
-    "input_sha256": {
-      "fixtures/diamond.sdc": "d8b59e8531e5a1df3aa0ec20d0b4255460225b3116efe8536fa47e0344c9d52b",
-      "fixtures/diamond.v": "9ad3b05aadb6128c273bb032058c808eaee6c65abffdab17c1f8245fd6dff1d6",
-      "fixtures/stage0.lib": "71484897dc56c62760be3dde8a57c3722634cbe4771385e8c2c1c5a6ddcb9577",
-      "fixtures/stage0_cells.lef": "9af8e5d7547cb8beb15386e0e2867a0778721df2f7b33917949dc11b651524d8",
-      "fixtures/stage0_tech.lef": "2d9ad7b970cf857f56eb4ccbac359c1683cef16d8e0cea6c218ff9392af958dc"
-    },
     "source_baseline": {
       "ecc_tools_base_commit": "31ebf6cae5ba8b4a472b97947acf54e1deb82daa",
       "ecc_tools_branch": "IncreGPUSTA",
@@ -4952,6 +4943,5 @@
         "data_out"
       ]
     }
-  },
-  "topology_hash": "da8b4d75814db8570c6da233759238849002c0d366bfadb60caf14f521b1d165"
+  }
 }

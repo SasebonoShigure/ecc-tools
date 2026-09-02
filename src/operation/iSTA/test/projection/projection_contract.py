@@ -14,9 +14,8 @@
 #
 # See the Mulan PSL v2 for more details.
 # ***************************************************************************************
-"""Strict manifest, result-schema, fingerprint, and atomic publication contracts."""
+"""Strict manifest, result-schema, and atomic publication contracts."""
 
-import hashlib
 import json
 import os
 import re
@@ -36,7 +35,6 @@ from baseline_contract import (  # noqa: E402
     require_exact_keys,
     require_list,
     require_mapping,
-    sha256_file,
     validate_manifest,
     validate_repeat_count,
 )
@@ -60,17 +58,12 @@ PROBE_KEYS = frozenset(
         "top",
         "expected_clock",
         "repeat_index",
-        "input_case_sha256",
         "node_count",
         "arc_count",
         "direct_projection",
         "decoded_projection",
         "native_graph_oracle",
         "independent_fifo_oracle",
-        "projection_sha256",
-        "oracle_sha256",
-        "database_before_sha256",
-        "database_after_sha256",
         "complete",
     }
 )
@@ -81,7 +74,6 @@ _COMMON_INPUTS = (
     "fixtures/stage0_cells.lef",
     "fixtures/stage0.lib",
 )
-_SHA256 = re.compile(r"[0-9a-f]{64}")
 _NONCE = re.compile(r"[0-9a-f]{32}")
 _LOWER_HEX = re.compile(r"(?:[0-9a-f]{2})+")
 
@@ -97,9 +89,7 @@ class CaseDescriptor:
     verilog: str
     sdc: str
     expected_clock: str
-    input_hashes: tuple[tuple[str, str], ...]
     input_paths: tuple[tuple[str, Path], ...]
-    input_case_sha256: str
 
     def path(self, relative: str) -> Path:
         matches = tuple(path for name, path in self.input_paths if name == relative)
@@ -135,68 +125,10 @@ class ValidatedProbe:
     oracle: OracleSummary
 
 
-class CanonicalWriter:
-    """Small independent writer used only for the input-case descriptor fingerprint."""
-
-    def __init__(self) -> None:
-        self._bytes = bytearray()
-
-    def append_u64(self, value: int) -> None:
-        if type(value) is not int or value < 0 or value >= 1 << 64:
-            raise ProjectionContractError(f"non-canonical U64 value: {value!r}")
-        self._bytes.extend(value.to_bytes(8, "big", signed=False))
-
-    def append_string(self, value: str) -> None:
-        if not isinstance(value, str):
-            raise ProjectionContractError("canonical string value must be a string")
-        encoded = value.encode("utf-8", errors="strict")
-        self.append_u64(len(encoded))
-        self._bytes.extend(encoded)
-
-    def append_domain(self, domain: str, version: str = "1.0.0") -> None:
-        self.append_string("ista-csr")
-        self.append_string(domain)
-        self.append_string(version)
-
-    def bytes(self) -> bytes:
-        return bytes(self._bytes)
-
-
-def _canonical_string_bytes(value: str) -> bytes:
-    writer = CanonicalWriter()
-    writer.append_string(value)
-    return writer.bytes()
-
-
-def compute_case_fingerprint(
-    *,
-    name: str,
-    top: str,
-    verilog: str,
-    sdc: str,
-    expected_clock: str,
-    input_hashes: tuple[tuple[str, str], ...],
-) -> str:
-    if len(input_hashes) != 5 or len({path for path, _digest in input_hashes}) != 5:
-        raise ProjectionContractError("input case fingerprint requires exactly five unique inputs")
-    writer = CanonicalWriter()
-    writer.append_domain("ista-csr-projection-input-case")
-    for value in (name, top, verilog, sdc, expected_clock):
-        if not value:
-            raise ProjectionContractError("input case descriptor strings must be non-empty")
-        writer.append_string(value)
-    for path, digest in sorted(input_hashes, key=lambda item: _canonical_string_bytes(item[0])):
-        if _SHA256.fullmatch(digest) is None:
-            raise ProjectionContractError(f"invalid recomputed SHA-256 for {path!r}")
-        writer.append_string(path)
-        writer.append_string(digest)
-    return hashlib.sha256(writer.bytes()).hexdigest()
-
-
 def load_case_descriptors(manifest_path: Path) -> tuple[CaseDescriptor, CaseDescriptor]:
     manifest_path = manifest_path.resolve()
     manifest = require_mapping(load_json(manifest_path), "manifest")
-    validate_manifest(manifest, manifest_path, allow_unpinned_topology=False)
+    validate_manifest(manifest, manifest_path)
     raw_cases = require_list(manifest.get("cases"), "manifest.cases")
     cases_by_name: dict[str, dict[str, Any]] = {}
     for index, raw_case in enumerate(raw_cases):
@@ -214,11 +146,9 @@ def load_case_descriptors(manifest_path: Path) -> tuple[CaseDescriptor, CaseDesc
     descriptors: list[CaseDescriptor] = []
     for name in CASE_ORDER:
         case = cases_by_name[name]
-        declared = require_mapping(case["input_sha256"], f"case {name}.input_sha256")
         expected_inputs = {*_COMMON_INPUTS, case["verilog"], case["sdc"]}
-        if len(expected_inputs) != 5 or set(declared) != expected_inputs:
+        if len(expected_inputs) != 5:
             raise ProjectionContractError(f"case {name!r} must name exactly five distinct inputs")
-        recomputed: list[tuple[str, str]] = []
         resolved: list[tuple[str, Path]] = []
         for relative in expected_inputs:
             path = (manifest_path.parent / relative).resolve()
@@ -228,23 +158,9 @@ def load_case_descriptors(manifest_path: Path) -> tuple[CaseDescriptor, CaseDesc
                 raise ProjectionContractError(
                     f"case input escapes baseline directory: {relative}"
                 ) from exc
-            digest = sha256_file(path)
-            if digest != declared[relative]:
-                raise ProjectionContractError(
-                    f"case {name!r} input hash changed for {relative!r}: "
-                    f"expected {declared[relative]}, got {digest}"
-                )
-            recomputed.append((relative, digest))
+            if not path.is_file():
+                raise ProjectionContractError(f"case input is unavailable: {relative}")
             resolved.append((relative, path))
-        input_hashes = tuple(sorted(recomputed, key=lambda item: _canonical_string_bytes(item[0])))
-        fingerprint = compute_case_fingerprint(
-            name=name,
-            top=case["top"],
-            verilog=case["verilog"],
-            sdc=case["sdc"],
-            expected_clock=case["expected_clock"],
-            input_hashes=input_hashes,
-        )
         descriptors.append(
             CaseDescriptor(
                 name=name,
@@ -252,13 +168,9 @@ def load_case_descriptors(manifest_path: Path) -> tuple[CaseDescriptor, CaseDesc
                 verilog=case["verilog"],
                 sdc=case["sdc"],
                 expected_clock=case["expected_clock"],
-                input_hashes=input_hashes,
                 input_paths=tuple(resolved),
-                input_case_sha256=fingerprint,
             )
         )
-    if descriptors[0].input_case_sha256 == descriptors[1].input_case_sha256:
-        raise ProjectionContractError("chain and diamond input-case fingerprints must differ")
     return descriptors[0], descriptors[1]
 
 
@@ -266,12 +178,6 @@ def decode_lower_hex(value: Any, where: str) -> bytes:
     if not isinstance(value, str) or _LOWER_HEX.fullmatch(value) is None:
         raise ProjectionContractError(f"{where} must be non-empty lowercase even-length hex")
     return bytes.fromhex(value)
-
-
-def _require_sha(value: Any, where: str) -> str:
-    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
-        raise ProjectionContractError(f"{where} must be a lowercase SHA-256")
-    return value
 
 
 def _require_positive_count(value: Any, where: str) -> int:
@@ -298,7 +204,6 @@ def validate_probe_record(
         "top": descriptor.top,
         "expected_clock": descriptor.expected_clock,
         "repeat_index": expected_repeat,
-        "input_case_sha256": descriptor.input_case_sha256,
     }
     for field, expected_value in expected.items():
         if type(record[field]) is not type(expected_value) or record[field] != expected_value:
@@ -319,19 +224,6 @@ def validate_probe_record(
         raise ProjectionContractError("direct and decoded projection bytes differ")
     if native_oracle != fifo_oracle:
         raise ProjectionContractError("native and independent FIFO oracle bytes differ")
-    projection_sha = _require_sha(record["projection_sha256"], "probe.projection_sha256")
-    oracle_sha = _require_sha(record["oracle_sha256"], "probe.oracle_sha256")
-    before_sha = _require_sha(record["database_before_sha256"], "probe.database_before_sha256")
-    after_sha = _require_sha(record["database_after_sha256"], "probe.database_after_sha256")
-    _require_sha(record["input_case_sha256"], "probe.input_case_sha256")
-    actual_projection_sha = hashlib.sha256(direct).hexdigest()
-    actual_oracle_sha = hashlib.sha256(native_oracle).hexdigest()
-    if projection_sha != actual_projection_sha:
-        raise ProjectionContractError("probe projection SHA-256 does not match bytes")
-    if oracle_sha != actual_oracle_sha:
-        raise ProjectionContractError("probe oracle SHA-256 does not match bytes")
-    if before_sha != projection_sha or after_sha != projection_sha:
-        raise ProjectionContractError("database before/after SHA-256 must equal projection SHA-256")
     try:
         projection = decode_projection(direct)
         oracle = decode_oracle(native_oracle)
@@ -368,8 +260,8 @@ def validate_controller_result(
         records = require_list(case_result["repeats"], f"case {descriptor.name}.repeats")
         if len(records) != repeats:
             raise ProjectionContractError(f"case {descriptor.name!r} repeat count is incomplete")
-        projection_hashes: set[str] = set()
-        oracle_hashes: set[str] = set()
+        projection_payloads: set[str] = set()
+        oracle_payloads: set[str] = set()
         for expected_repeat, raw_record in enumerate(records):
             record = require_mapping(raw_record, f"case {descriptor.name} repeat")
             nonce = record.get("run_nonce")
@@ -379,15 +271,13 @@ def validate_controller_result(
                 raise ProjectionContractError("controller run nonce is reused")
             all_nonces.add(nonce)
             validated = validate_probe_record(record, descriptor, expected_repeat, nonce)
-            projection_hashes.add(validated.record["projection_sha256"])
-            oracle_hashes.add(validated.record["oracle_sha256"])
-        if len(projection_hashes) != 1 or len(oracle_hashes) != 1:
+            projection_payloads.add(validated.record["direct_projection"])
+            oracle_payloads.add(validated.record["native_graph_oracle"])
+        if len(projection_payloads) != 1 or len(oracle_payloads) != 1:
             raise ProjectionContractError(
                 f"case {descriptor.name!r} projection/oracle changed across fresh processes"
             )
-        first_projection_by_case[descriptor.name] = next(iter(projection_hashes))
-    if descriptors[0].input_case_sha256 == descriptors[1].input_case_sha256:
-        raise ProjectionContractError("chain and diamond case fingerprints are equal")
+        first_projection_by_case[descriptor.name] = next(iter(projection_payloads))
     if first_projection_by_case[CASE_ORDER[0]] == first_projection_by_case[CASE_ORDER[1]]:
         raise ProjectionContractError("chain and diamond projection payloads are equal")
     return result

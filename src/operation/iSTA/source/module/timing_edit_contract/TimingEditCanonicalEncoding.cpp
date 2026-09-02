@@ -364,11 +364,6 @@ std::vector<std::uint8_t> canonicalStableArcRefBytes(const StableArcRef& value)
   return encode("timing-edit-arc-ref", [&](CanonicalEncoder& encoder) { appendArcRef(encoder, value); });
 }
 
-std::vector<std::uint8_t> canonicalComponentFingerprintsBytes(const ComponentFingerprints& value)
-{
-  return encode("timing-edit-component-fingerprints", [&](CanonicalEncoder& encoder) { appendFingerprints(encoder, value); });
-}
-
 std::vector<std::uint8_t> canonicalPreStateEvidenceBytes(const CanonicalPreStateEvidence& value)
 {
   return encode("timing-edit-pre-state", [&](CanonicalEncoder& encoder) { appendPreState(encoder, value); });

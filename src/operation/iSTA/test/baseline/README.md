@@ -13,13 +13,14 @@ incremental execution in stage 0.
 - Each case runs in at least three independent operating-system processes and
   in a distinct output directory.  A successful exit without a complete atomic
   snapshot is a failure.
-- `manifest.json` pins every LEF, Liberty, Verilog, and SDC input by SHA-256.
-  Canonical timing values and SDC numeric values are interpreted as nanoseconds.
+- `manifest.json` names every LEF, Liberty, Verilog, and SDC input consumed by
+  each case. Canonical timing values and SDC numeric values are interpreted as
+  nanoseconds.
 - Stable semantic names, graph shape, enum dimensions, typed sentinels, and
-  topology/configuration hashes compare exactly.  Finite timing and power
-  values compare field by field with the manifest's absolute-plus-relative
-  tolerance.  Missing values and positive/negative infinity are distinct typed
-  sentinels; raw JSON NaN/Infinity is forbidden.
+  configuration fields compare directly. Finite timing and power values compare
+  field by field with the manifest's absolute-plus-relative tolerance. Missing
+  values and positive/negative infinity are distinct typed sentinels; raw JSON
+  NaN/Infinity is forbidden.
 - Text artifacts normalize timestamps and run-directory paths, then preserve
   exact text/integer tokens while comparing finite decimal tokens with the same
   tolerance as the snapshot.  This keeps SDF delays, timescales, identifiers,
@@ -69,6 +70,6 @@ The exact executable location is generator-dependent; use
 
 To intentionally bootstrap or replace the references, use the same current
 source executable and add `--record-golden`.  All selected cases finish their
-fresh-process checks before any golden is published.  Review the complete diff,
-topology/configuration hashes, structured timing values, tokenized text, and
-binary hashes before accepting a golden update.
+fresh-process checks before any golden is published. Review the complete
+snapshot and artifact diff, including structured timing values, tokenized
+text, and opaque binary hashes, before accepting a golden update.

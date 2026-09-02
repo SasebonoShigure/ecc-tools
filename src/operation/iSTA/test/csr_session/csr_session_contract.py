@@ -9,8 +9,6 @@
 """Strict fresh-process session probe, transition, and compatibility contracts."""
 
 import copy
-import hashlib
-import json
 import math
 import re
 import sys
@@ -33,17 +31,12 @@ from baseline_contract import (  # noqa: E402
     require_mapping,
     validate_repeat_count,
 )
-from projection_contract import CaseDescriptor  # noqa: E402
+from projection_canonical import decode_oracle, decode_projection  # noqa: E402
+from projection_contract import CaseDescriptor, decode_lower_hex  # noqa: E402
 
 PROBE_SCHEMA = "ista-csr-session-probe/1.0.0"
-CONTROLLER_SCHEMA = "ista-csr-session-controller/1.0.0"
-DEFAULT_COMPAT_SCHEMA = "ista-csr-projection-default-compat/1.0.0"
-FROZEN_BASELINE_PROBE_SHA256 = "a91baa76ed378ba600621445d8ebe94f0b1636c56650da3f2a7e52f4f2ece64d"
-
-FROZEN_DEFAULT_PAYLOAD_SHA256_BY_CASE = {
-    "chain": "aa90a070164f8561cadd68852ff34a88e4045c6b9a37902bab6304952028d9dd",
-    "diamond": "61a87d3fedefdcb12bc7c8868dbb361ad512f5f573413290d15fad08890bfa1f",
-}
+CONTROLLER_SCHEMA = "ista-csr-session-controller/2.0.0"
+DEFAULT_COMPAT_SCHEMA = "ista-csr-projection-default-compat/2.0.0"
 UNSUPPORTED_REASON_TOKENS = (
     "parasitic_net",
     "sequential_instance",
@@ -62,7 +55,6 @@ PROBE_KEYS = {
     "run_nonce",
     "case",
     "repeat_index",
-    "input_case_sha256",
     "full_observation",
     "sessions",
     "complete",
@@ -73,8 +65,8 @@ ORACLE_KEYS = {
     "node_count",
     "edge_count",
     "level_count",
-    "projection_sha256",
-    "fifo_sha256",
+    "projection_wire_hex",
+    "fifo_wire_hex",
 }
 CONTROLLER_KEYS = {
     "schema",
@@ -83,8 +75,15 @@ CONTROLLER_KEYS = {
     "case_results",
     "complete",
 }
-DEFAULT_RESULT_KEYS = {"case", "input_case_sha256", "payload_sha256"}
-CASE_RESULT_KEYS = {"case", "input_case_sha256", "repeats"}
+DEFAULT_RESULT_KEYS = {"case", "projection_wire_hex", "fifo_wire_hex"}
+CASE_RESULT_KEYS = {"case", "repeats"}
+DEFAULT_SEMANTIC_KEYS = (
+    "case",
+    "top",
+    "expected_clock",
+    "functional_projection",
+    "complete",
+)
 OBSERVATION_KEYS = {
     "schema_version",
     "state",
@@ -289,8 +288,8 @@ def _oracle(value: Any, where: str, *, token: int) -> dict[str, Any]:
         _u64(oracle[field], f"{where}.{field}", positive=True)
     if oracle["level_count"] > oracle["node_count"]:
         raise SessionContractError(f"{where}.level_count exceeds node_count")
-    _sha256(oracle["projection_sha256"], f"{where}.projection_sha256")
-    _sha256(oracle["fifo_sha256"], f"{where}.fifo_sha256")
+    decode_lower_hex(oracle["projection_wire_hex"], f"{where}.projection_wire_hex")
+    decode_lower_hex(oracle["fifo_wire_hex"], f"{where}.fifo_wire_hex")
     return oracle
 
 
@@ -343,8 +342,6 @@ def validate_session_probe_record(
         raise SessionContractError("session probe case echo mismatch")
     if _u64(record["repeat_index"], "session probe repeat_index") != repeat_index:
         raise SessionContractError("session probe repeat_index echo mismatch")
-    if record["input_case_sha256"] != descriptor.input_case_sha256:
-        raise SessionContractError("session probe input case fingerprint mismatch")
     if record["full_observation"] is not None:
         raise SessionContractError("cpu/full observation must be null")
     sessions = require_list(record["sessions"], "session probe sessions")
@@ -361,10 +358,10 @@ def validate_session_probe_record(
         raise SessionContractError("same-input sequential sessions changed content fingerprints")
     if validated[0]["active"]["counts"] != validated[1]["active"]["counts"]:
         raise SessionContractError("same-input sequential sessions changed counts")
-    if validated[0]["oracle"]["projection_sha256"] != validated[1]["oracle"]["projection_sha256"]:
-        raise SessionContractError("same-input sequential sessions changed projection hash")
-    if validated[0]["oracle"]["fifo_sha256"] != validated[1]["oracle"]["fifo_sha256"]:
-        raise SessionContractError("same-input sequential sessions changed FIFO hash")
+    if validated[0]["oracle"]["projection_wire_hex"] != validated[1]["oracle"]["projection_wire_hex"]:
+        raise SessionContractError("same-input sequential sessions changed projection bytes")
+    if validated[0]["oracle"]["fifo_wire_hex"] != validated[1]["oracle"]["fifo_wire_hex"]:
+        raise SessionContractError("same-input sequential sessions changed FIFO bytes")
     if record["complete"] is not True:
         raise SessionContractError("session probe result is incomplete")
     return record
@@ -374,61 +371,162 @@ def load_default_compat(path: Path) -> dict[str, Any]:
     compat = require_mapping(load_json(path.resolve()), "default compatibility")
     require_exact_keys(
         compat,
-        {
-            "schema",
-            "baseline_probe_source_sha256",
-            "canonicalization",
-            "payload_sha256_by_case",
-        },
+        {"schema", "expected_by_case"},
         "default compatibility",
     )
     if compat["schema"] != DEFAULT_COMPAT_SCHEMA:
         raise SessionContractError("default compatibility schema changed")
-    if compat["baseline_probe_source_sha256"] != FROZEN_BASELINE_PROBE_SHA256:
-        raise SessionContractError("default compatibility baseline source SHA changed")
-    canonical = require_mapping(
-        compat["canonicalization"], "default compatibility canonicalization"
-    )
-    require_exact_keys(
-        canonical,
-        {"removed_root_keys", "sort_keys", "separators", "ensure_ascii", "final_newline"},
-        "default compatibility canonicalization",
-    )
-    expected_canonical = {
-        "removed_root_keys": ["run_nonce", "repeat_index"],
-        "sort_keys": True,
-        "separators": [",", ":"],
-        "ensure_ascii": False,
-        "final_newline": False,
-    }
-    if canonical != expected_canonical:
-        raise SessionContractError("default compatibility canonicalization changed")
-    payloads = require_mapping(
-        compat["payload_sha256_by_case"],
-        "default compatibility payload_sha256_by_case",
-    )
-    require_exact_keys(payloads, {"chain", "diamond"}, "default compatibility payloads")
-    for case, digest in payloads.items():
-        _sha256(digest, f"default compatibility payload {case}")
-    if dict(payloads) != FROZEN_DEFAULT_PAYLOAD_SHA256_BY_CASE:
-        raise SessionContractError("default compatibility payload SHA changed")
+    expected = require_mapping(compat["expected_by_case"], "default compatibility cases")
+    require_exact_keys(expected, {"chain", "diamond"}, "default compatibility cases")
+    for case, value in expected.items():
+        semantic = require_mapping(value, f"default compatibility {case}")
+        require_exact_keys(
+            semantic,
+            set(DEFAULT_SEMANTIC_KEYS),
+            f"default compatibility {case}",
+        )
+        _expected_default_semantics(semantic, f"default compatibility {case}")
     return compat
 
 
-def canonical_default_payload_sha256(record: Mapping[str, Any]) -> str:
-    payload = copy.deepcopy(dict(record))
-    for field in ("run_nonce", "repeat_index"):
-        if field not in payload:
-            raise SessionContractError(f"legacy default record lacks {field}")
-        del payload[field]
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+def _table_semantics(value: Any) -> list[Any]:
+    return [value.present, value.variable1, value.variable2]
+
+
+def _library_arc_semantics(value: Any) -> dict[str, Any]:
+    return {
+        "library_name": value.library_name,
+        "arc_index": value.arc_index,
+        "sense": value.sense,
+        "trigger_transition": value.trigger_transition,
+        "check_transition": value.check_transition,
+        "sdf_condition": value.sdf_condition,
+        "delay_tables": [_table_semantics(item) for item in value.delay_tables],
+        "slew_tables": [_table_semantics(item) for item in value.slew_tables],
+    }
+
+
+def _functional_projection(record: Mapping[str, Any], where: str) -> dict[str, Any]:
+    projection = decode_projection(
+        decode_lower_hex(record["direct_projection"], f"{where}.direct_projection")
+    )
+    oracle = decode_oracle(
+        decode_lower_hex(record["native_graph_oracle"], f"{where}.native_graph_oracle")
+    )
+    arc_ids = {arc.key: index for index, arc in enumerate(projection.arcs)}
+    return {
+        "projection_schema": projection.schema,
+        "oracle_schema": oracle.schema,
+        "nodes": [
+            {
+                "key": [
+                    node.key.kind,
+                    node.key.full_name,
+                    node.key.instance_name,
+                    node.key.pin_name,
+                ],
+                "direction": node.direction,
+                "instance_cell": node.instance_cell,
+                "net_name": node.net_name,
+                "roles": [
+                    node.is_port,
+                    node.is_startpoint,
+                    node.is_endpoint,
+                    node.is_sequential,
+                    node.is_clock_pin,
+                    node.is_data_pin,
+                    node.is_output_pin,
+                ],
+            }
+            for node in projection.nodes
+        ],
+        "instances": [
+            {
+                "instance_name": instance.instance_name,
+                "cell_name": instance.cell_name,
+                "ordered_pins": [pin.full_name for pin in instance.ordered_pins],
+                "roles": [
+                    instance.is_sequential,
+                    instance.has_timing_checks,
+                    instance.is_clock_gating,
+                    instance.is_macro,
+                ],
+            }
+            for instance in projection.instances
+        ],
+        "arcs": [
+            {
+                "source": arc.key.source.full_name,
+                "sink": arc.key.sink.full_name,
+                "kind": arc.key.kind,
+                "owner_name": arc.key.owner_name,
+                "library_source_port": arc.key.library_source_port,
+                "library_sink_port": arc.key.library_sink_port,
+                "library_arcs": [
+                    _library_arc_semantics(item) for item in arc.key.library_arcs
+                ],
+                "parallel_ordinal": arc.key.parallel_ordinal,
+                "native_traversal_rank": arc.native_traversal_rank,
+                "roles": [
+                    arc.is_clock_arc,
+                    arc.is_disabled,
+                    arc.is_loop_disabled,
+                ],
+            }
+            for arc in projection.arcs
+        ],
+        "base_out": [
+            [row.node.full_name, [arc_ids[arc] for arc in row.ordered_arcs]]
+            for row in projection.base_out
+        ],
+        "base_in": [
+            [row.node.full_name, [arc_ids[arc] for arc in row.ordered_arcs]]
+            for row in projection.base_in
+        ],
+        "ordered_roots": [node.full_name for node in projection.ordered_roots],
+        "ordered_starts": [node.full_name for node in projection.ordered_starts],
+        "ordered_ends": [node.full_name for node in projection.ordered_ends],
+        "native_timing_order": [node.full_name for node in oracle.native_timing_order],
+        "native_node_levels": [
+            [node.full_name, level] for node, level in oracle.native_node_levels
+        ],
+    }
+
+
+def _expected_default_semantics(record: Mapping[str, Any], where: str) -> dict[str, Any]:
+    require_exact_keys(record, set(DEFAULT_SEMANTIC_KEYS), where)
+    result = copy.deepcopy(dict(record))
+    if not isinstance(result["functional_projection"], dict):
+        raise SessionContractError(f"{where}.functional_projection must be an object")
+    return _validate_default_metadata(result, where)
+
+
+def _actual_default_semantics(record: Mapping[str, Any], where: str) -> dict[str, Any]:
+    missing = [
+        field
+        for field in ("case", "top", "expected_clock", "direct_projection", "native_graph_oracle", "complete")
+        if field not in record
+    ]
+    if missing:
+        raise SessionContractError(f"{where} lacks semantic fields: {missing!r}")
+    result = {
+        "case": copy.deepcopy(record["case"]),
+        "top": copy.deepcopy(record["top"]),
+        "expected_clock": copy.deepcopy(record["expected_clock"]),
+        "functional_projection": _functional_projection(record, where),
+        "complete": copy.deepcopy(record["complete"]),
+    }
+    return _validate_default_metadata(result, where)
+
+
+def _validate_default_metadata(result: dict[str, Any], where: str) -> dict[str, Any]:
+    if not isinstance(result["case"], str) or not isinstance(result["top"], str):
+        raise SessionContractError(f"{where} case/top must be strings")
+    if not isinstance(result["expected_clock"], str):
+        raise SessionContractError(f"{where} expected_clock must be a string")
+    if result["complete"] is not True:
+        raise SessionContractError(f"{where}.complete must be true")
+    return result
 
 
 def validate_default_records(
@@ -436,9 +534,8 @@ def validate_default_records(
     descriptors: Sequence[CaseDescriptor],
     compat: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    payloads = require_mapping(
-        compat["payload_sha256_by_case"],
-        "default compatibility payloads",
+    expected_by_case = require_mapping(
+        compat["expected_by_case"], "default compatibility cases"
     )
     results: list[dict[str, Any]] = []
     for descriptor in descriptors:
@@ -447,17 +544,45 @@ def validate_default_records(
             raise SessionContractError(
                 f"default compatibility case {descriptor.name} must have three records"
             )
-        expected = payloads[descriptor.name]
-        actual = tuple(canonical_default_payload_sha256(record) for record in records)
-        if any(digest != expected for digest in actual):
+        expected = _expected_default_semantics(
+            require_mapping(expected_by_case[descriptor.name], descriptor.name),
+            f"default compatibility {descriptor.name}",
+        )
+        actual = tuple(
+            _actual_default_semantics(record, f"default {descriptor.name} record")
+            for record in records
+        )
+        if any(payload != expected for payload in actual):
             raise SessionContractError(
-                f"default compatibility payload changed for {descriptor.name}: {actual!r}"
+                f"default compatibility semantics changed for {descriptor.name}"
+            )
+        projection_payloads = tuple(
+            decode_lower_hex(
+                record["direct_projection"],
+                f"default {descriptor.name} record[{index}].direct_projection",
+            )
+            for index, record in enumerate(records)
+        )
+        fifo_payloads = tuple(
+            decode_lower_hex(
+                record["native_graph_oracle"],
+                f"default {descriptor.name} record[{index}].native_graph_oracle",
+            )
+            for index, record in enumerate(records)
+        )
+        if any(payload != projection_payloads[0] for payload in projection_payloads[1:]):
+            raise SessionContractError(
+                f"default projection bytes changed across repeats for {descriptor.name}"
+            )
+        if any(payload != fifo_payloads[0] for payload in fifo_payloads[1:]):
+            raise SessionContractError(
+                f"default FIFO bytes changed across repeats for {descriptor.name}"
             )
         results.append(
             {
                 "case": descriptor.name,
-                "input_case_sha256": descriptor.input_case_sha256,
-                "payload_sha256": expected,
+                "projection_wire_hex": projection_payloads[0].hex(),
+                "fifo_wire_hex": fifo_payloads[0].hex(),
             }
         )
     return results
@@ -489,16 +614,18 @@ def validate_controller_result(
         require_exact_keys(default, DEFAULT_RESULT_KEYS, f"default result[{index}]")
         if default["case"] != descriptor.name:
             raise SessionContractError("default compatibility result order changed")
-        if default["input_case_sha256"] != descriptor.input_case_sha256:
-            raise SessionContractError("default compatibility input fingerprint changed")
-        _sha256(default["payload_sha256"], f"default result[{index}].payload_sha256")
+        default_projection = decode_lower_hex(
+            default["projection_wire_hex"],
+            f"default result[{index}].projection_wire_hex",
+        )
+        default_fifo = decode_lower_hex(
+            default["fifo_wire_hex"],
+            f"default result[{index}].fifo_wire_hex",
+        )
 
         case = require_mapping(case_results[index], f"case result[{index}]")
         require_exact_keys(case, CASE_RESULT_KEYS, f"case result[{index}]")
-        if (
-            case["case"] != descriptor.name
-            or case["input_case_sha256"] != descriptor.input_case_sha256
-        ):
+        if case["case"] != descriptor.name:
             raise SessionContractError("session case identity/order changed")
         records = require_list(case["repeats"], f"case result[{index}].repeats")
         if len(records) != repeats:
@@ -527,19 +654,27 @@ def validate_controller_result(
                 (
                     _content_identity(identity),
                     (counts["nodes"], counts["arcs"], counts["levels"]),
-                    session["oracle"]["projection_sha256"],
-                    session["oracle"]["fifo_sha256"],
+                    session["oracle"]["projection_wire_hex"],
+                    session["oracle"]["fifo_wire_hex"],
                 )
             )
         if any(signature != signatures[0] for signature in signatures[1:]):
             raise SessionContractError("fresh repeats changed semantic session output")
+        if bytes.fromhex(signatures[0][2]) != default_projection:
+            raise SessionContractError(
+                "session projection bytes differ from validated default projection"
+            )
+        if bytes.fromhex(signatures[0][3]) != default_fifo:
+            raise SessionContractError(
+                "session FIFO bytes differ from validated default FIFO oracle"
+            )
         semantic_by_case.append(signatures[0])
 
     chain, diamond = semantic_by_case
     if chain[0][0] == diamond[0][0]:
         raise SessionContractError("chain and diamond topology fingerprints unexpectedly match")
     if chain[2] == diamond[2]:
-        raise SessionContractError("chain and diamond projection hashes unexpectedly match")
+        raise SessionContractError("chain and diamond projection bytes unexpectedly match")
     if chain[1] == diamond[1]:
         raise SessionContractError("chain and diamond counts must differ")
     return summary

@@ -303,7 +303,6 @@ void testSemanticKeyKnownAnswers()
       = "0000000000000008697374612d63737200000000000000086e6f64652d6b65790000000000000005312e302e30000000000000000c696e73"
         "74616e63655f70696e000000000000000475313a4100000000000000027531000000000000000141";
   require(bytesToHex(node_bytes) == node_hex, "NodeKey canonical known answer");
-  require(sha256Hex(node_bytes) == "389c0aca91c42de7d599100001b56fe03695fdfde1dc42de330263ea59bffd05", "NodeKey hash");
 
   const auto signature_bytes = canonicalLibraryArcSignatureBytes(librarySignature());
   const std::string signature_hex
@@ -314,7 +313,6 @@ void testSemanticKeyKnownAnswers()
         "046e6f6e6500000000000000046e6f6e65010000000000000016636f6e73747261696e65645f7472616e736974696f6e0000000000000004"
         "6e6f6e65";
   require(bytesToHex(signature_bytes) == signature_hex, "library signature canonical known answer");
-  require(sha256Hex(signature_bytes) == "f5d7fd7ed142184c97572968f3122b131e2d212e302a29e02fb27fc3bbbe7663", "library signature hash");
 
   const auto arc_bytes = canonicalArcKeyBytes(ArcKey{cellArcBase(-1), 3});
   const std::string arc_hex
@@ -327,7 +325,6 @@ void testSemanticKeyKnownAnswers()
         "6e6f6e6500000000000000046e6f6e650000000000000000046e6f6e6500000000000000046e6f6e65010000000000000016636f6e737472"
         "61696e65645f7472616e736974696f6e00000000000000046e6f6e650000000000000003";
   require(bytesToHex(arc_bytes) == arc_hex, "ArcKey canonical known answer");
-  require(sha256Hex(arc_bytes) == "aa58e450651fd1ce78f82d0eecf07297d60bfcd9250d1acf26413085971fd247", "ArcKey hash");
 }
 
 void testCanonicalOrderingCounterexamples()

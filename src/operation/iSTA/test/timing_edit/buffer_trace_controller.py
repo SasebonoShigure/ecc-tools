@@ -78,7 +78,7 @@ def first_difference(left: Any, right: Any, path: str = "$") -> str | None:
 
 
 def trace_batch_count(trace: dict[str, Any]) -> int:
-    require_exact_keys(trace, {"replay", "generation_only", "integrity"}, "trace")
+    require_exact_keys(trace, {"replay", "generation_only"}, "trace")
     replay = trace["replay"]
     if not isinstance(replay, dict):
         raise ControllerError("trace.replay must be an object")
@@ -428,8 +428,6 @@ def replay(args: argparse.Namespace) -> None:
             "derived_timing_freshness": generation_freshness,
             "run": envelope,
             "frozen_replay_and_generation_fields_exact": True,
-            "auxiliary_digest_equal": (
-                trace_value["integrity"] == generated_trace["integrity"]),
         }
 
     prefix_summaries: list[dict[str, Any]] = []

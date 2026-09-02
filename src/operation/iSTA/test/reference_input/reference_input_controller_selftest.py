@@ -4,7 +4,6 @@
 
 import argparse
 import copy
-import hashlib
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
@@ -19,15 +18,12 @@ import reference_input_recompute_transfer as transfer_oracle
 import reference_input_wire_fixture as fixture
 
 _DEEP_CANDIDATE_BYTE_COUNT = 3410
-_DEEP_CANDIDATE_SHA256 = "58cf82c5347b1d6bc8f13447690d73bb826d5ff20fb7b9e0eb3865d48c4bcd65"
 _DEEP_RAW_BYTE_COUNT = 1114
-_DEEP_RAW_SHA256 = "ae73fa8c86ae17fc0a7b2c06cba46813f258f45023591a117f0c93df4fc3a350"
 
 
 def _known_answer_bytes(
     payload_hex: str,
     expected_byte_count: int,
-    expected_sha256: str,
     label: str,
 ) -> bytes:
     if (
@@ -37,11 +33,8 @@ def _known_answer_bytes(
     ):
         raise AssertionError(f"{label} literal is not strict lower hex")
     payload = bytes.fromhex(payload_hex)
-    if (
-        len(payload) != expected_byte_count
-        or hashlib.sha256(payload).hexdigest() != expected_sha256
-    ):
-        raise AssertionError(f"{label} known-answer byte count/SHA-256 differs")
+    if len(payload) != expected_byte_count:
+        raise AssertionError(f"{label} known-answer byte count differs")
     return payload
 
 
@@ -49,13 +42,11 @@ def _deep_wire_bytes() -> tuple[bytes, bytes]:
     candidate = _known_answer_bytes(
         fixture.DEEP_CANDIDATE_HEX,
         _DEEP_CANDIDATE_BYTE_COUNT,
-        _DEEP_CANDIDATE_SHA256,
         "deep candidate",
     )
     raw = _known_answer_bytes(
         fixture.DEEP_RAW_HEX,
         _DEEP_RAW_BYTE_COUNT,
-        _DEEP_RAW_SHA256,
         "deep raw",
     )
     return candidate, raw
@@ -77,7 +68,6 @@ def _valid_record(
             "pristine_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=False,
@@ -86,7 +76,6 @@ def _valid_record(
             "before_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=False,
@@ -94,7 +83,6 @@ def _valid_record(
             "after_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=True,
@@ -110,7 +98,6 @@ def _valid_record(
         "context": dict(contract.CANONICAL_CONTEXT),
         "repeat_index": repeat_index,
         "run_nonce": nonce,
-        "input_case_sha256": descriptor.input_case_sha256,
         "session_token": contract.SESSION_TOKEN,
         "pre_candidate_wire_hex": candidate_bytes.hex(),
         "post_candidate_wire_hex": candidate_bytes.hex(),
@@ -160,7 +147,6 @@ def _deep_record(
             "pristine_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=False,
@@ -170,7 +156,6 @@ def _deep_record(
             "before_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=False,
@@ -179,7 +164,6 @@ def _deep_record(
             "after_typed_bytes_hex": fixture.encode_canary_wire(
                 family,
                 descriptor.name,
-                descriptor.input_case_sha256,
                 repeat_index,
                 nonce,
                 after=True,
@@ -343,7 +327,6 @@ def _test_model_negatives(descriptor: contract.CaseDescriptor) -> None:
     _expect_error("raw-candidate-mismatch", lambda: _validate(record, descriptor, 0, nonce))
 
 
-
 def _test_parallel_closure_reuse() -> None:
     candidate_bytes, raw_bytes = _deep_wire_bytes()
     candidate = contract.candidate_wire.decode_candidate_wire(candidate_bytes)
@@ -371,20 +354,45 @@ def _test_parallel_closure_reuse() -> None:
     transfer_oracle._graph_transfers(candidate, raw_cells, facts)
 
     def reject(label: str, changed_candidate=candidate, changed_cells=raw_cells) -> None:
-        _expect_error(label, lambda: transfer_oracle._graph_transfers(changed_candidate, changed_cells, facts))
+        _expect_error(
+            label, lambda: transfer_oracle._graph_transfers(changed_candidate, changed_cells, facts)
+        )
 
     bad_signature = replace(clone.key.library_arcs[0], arc_index=99)
-    reject("parallel-closure-signature", replace(candidate, arcs=(*candidate.arcs[:3], replace(clone, key=replace(clone.key, library_arcs=(bad_signature,))))))
-    reject("parallel-closure-transfer", replace(candidate, arcs=(*candidate.arcs[:3], replace(clone, transfer=replace(clone.transfer, delay=2.0)))))
+    reject(
+        "parallel-closure-signature",
+        replace(
+            candidate,
+            arcs=(
+                *candidate.arcs[:3],
+                replace(clone, key=replace(clone.key, library_arcs=(bad_signature,))),
+            ),
+        ),
+    )
+    reject(
+        "parallel-closure-transfer",
+        replace(
+            candidate,
+            arcs=(*candidate.arcs[:3], replace(clone, transfer=replace(clone.transfer, delay=2.0))),
+        ),
+    )
     cell_name = candidate.instances[0].cell_name
     raw_cell, payload = raw_cells[cell_name], raw_cells[cell_name].payload
     assert payload is not None
     missing = dict(raw_cells)
-    missing[cell_name] = replace(raw_cell, payload=replace(payload, cell_arcs=(replace(payload.cell_arcs[0], source_port="Y", sink_port="A"),)))
+    missing[cell_name] = replace(
+        raw_cell,
+        payload=replace(
+            payload, cell_arcs=(replace(payload.cell_arcs[0], source_port="Y", sink_port="A"),)
+        ),
+    )
     reject("parallel-closure-missing", changed_cells=missing)
     ambiguous = dict(raw_cells)
-    ambiguous[cell_name] = replace(raw_cell, payload=replace(payload, cell_arcs=(payload.cell_arcs[0], payload.cell_arcs[0])))
+    ambiguous[cell_name] = replace(
+        raw_cell, payload=replace(payload, cell_arcs=(payload.cell_arcs[0], payload.cell_arcs[0]))
+    )
     reject("parallel-closure-ambiguous", changed_cells=ambiguous)
+
 
 def _test_deep_child(descriptor: contract.CaseDescriptor, root: Path) -> None:
     nonce = "4" * 32
@@ -462,18 +470,13 @@ def _summary(
     descriptors: tuple[contract.CaseDescriptor, contract.CaseDescriptor],
 ) -> dict[str, Any]:
     cases = []
-    for case_index, descriptor in enumerate(descriptors):
+    for descriptor in descriptors:
         rows = []
         for repeat_index in range(3):
-            digest = f"{case_index + 1:x}" * 64
-            raw_digest = f"{case_index + 3:x}" * 64
             rows.append(
                 {
                     "repeat_index": repeat_index,
-                    "input_case_sha256": descriptor.input_case_sha256,
                     "session_token": 1,
-                    "candidate_wire_sha256": digest,
-                    "raw_projection_sha256": raw_digest,
                     "touched_families": list(contract.FAMILY_TOKENS),
                 }
             )
@@ -504,20 +507,8 @@ def _test_summary(
             lambda item: item["case_results"][0]["repeats"][1].__setitem__("repeat_index", 0),
         ),
         (
-            "summary-hash-drift",
-            lambda item: item["case_results"][0]["repeats"][1].__setitem__(
-                "candidate_wire_sha256", "9" * 64
-            ),
-        ),
-        (
             "summary-touch-order",
             lambda item: item["case_results"][0]["repeats"][0]["touched_families"].reverse(),
-        ),
-        (
-            "summary-chain-diamond",
-            lambda item: item["case_results"][1]["repeats"][0].__setitem__(
-                "candidate_wire_sha256", "1" * 64
-            ),
         ),
     )
     for name, mutation in mutations:
@@ -540,6 +531,56 @@ def _slot(root: Path, descriptor: contract.CaseDescriptor, index: int) -> contro
         work,
         work / ".result.tmp",
         work / "reference-input-result.json",
+    )
+
+
+def _test_direct_fresh_equality(
+    descriptors: tuple[contract.CaseDescriptor, contract.CaseDescriptor],
+    root: Path,
+) -> None:
+    slots: list[controller.RunSlot] = []
+    validated: list[contract.ValidatedProbe] = []
+    for descriptor in descriptors:
+        for repeat_index in range(3):
+            slot = _slot(root / descriptor.name, descriptor, repeat_index)
+            slots.append(slot)
+            validated.append(
+                _validate(
+                    _valid_record(descriptor, repeat_index, slot.run_nonce),
+                    descriptor,
+                    repeat_index,
+                    slot.run_nonce,
+                )
+            )
+    controller._build_summary(descriptors, 3, tuple(slots), tuple(validated))
+
+    byte_drift = list(validated)
+    byte_drift[1] = replace(
+        byte_drift[1],
+        candidate_bytes=byte_drift[1].candidate_bytes + b"\x00",
+    )
+    _expect_error(
+        "fresh-canonical-byte-drift",
+        lambda: controller._build_summary(descriptors, 3, tuple(slots), tuple(byte_drift)),
+    )
+
+    decoded_drift = list(validated)
+    decoded_drift[1] = replace(decoded_drift[1], raw=validated[3].raw)
+    _expect_error(
+        "fresh-decoded-value-drift",
+        lambda: controller._build_summary(descriptors, 3, tuple(slots), tuple(decoded_drift)),
+    )
+
+    same_candidate = list(validated)
+    for index in range(3, 6):
+        same_candidate[index] = replace(
+            same_candidate[index],
+            candidate=validated[0].candidate,
+            candidate_bytes=validated[0].candidate_bytes,
+        )
+    _expect_error(
+        "chain-diamond-candidate-equality",
+        lambda: controller._build_summary(descriptors, 3, tuple(slots), tuple(same_candidate)),
     )
 
 
@@ -604,6 +645,7 @@ def run_self_test(controller_path: Path, manifest: Path) -> None:
     negative_cases.run_negative_matrix(manifest)
     with tempfile.TemporaryDirectory(prefix="ista-reference-input-selftest-") as directory:
         root = Path(directory)
+        _test_direct_fresh_equality(descriptors, root / "fresh-equality")
         _test_deep_child(descriptors[0], root / "deep-child")
         _test_subprocess_protocol(descriptors[0], root / "protocol")
         _test_atomic(root)
@@ -623,7 +665,6 @@ def _fake_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", required=True)
     parser.add_argument("--rc-corner", required=True)
     parser.add_argument("--repeat-index", type=int, required=True)
-    parser.add_argument("--input-case-sha256", required=True)
     parser.add_argument("--session-token", type=int, required=True)
     parser.add_argument("--run-nonce", required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -650,7 +691,6 @@ def _fake_probe(argv: Sequence[str]) -> int:
             "name": arguments.case_name,
             "top": arguments.top,
             "expected_clock": arguments.expected_clock,
-            "input_case_sha256": arguments.input_case_sha256,
         },
     )()
     record_factory = _deep_record if arguments.mode == "deep-child" else _valid_record

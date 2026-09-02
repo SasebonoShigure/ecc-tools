@@ -20,7 +20,6 @@
 
 import argparse
 import copy
-import hashlib
 import json
 import secrets
 import sys
@@ -45,7 +44,6 @@ from projection_contract import (
     BaselineError,
     CaseDescriptor,
     ProjectionContractError,
-    compute_case_fingerprint,
     load_case_descriptors,
     publish_atomic,
     validate_controller_result,
@@ -72,15 +70,7 @@ _PROJECTION_FIELDS = (
     "decoded_projection",
     "native_graph_oracle",
     "independent_fifo_oracle",
-    "projection_sha256",
-    "oracle_sha256",
-    "database_before_sha256",
-    "database_after_sha256",
 )
-_EXPECTED_CASE_FINGERPRINTS = {
-    "chain": "aaf890bdd02aa7a5179fdb9e1f9488068978115ce4db65bf0899e10afedd5bb1",
-    "diamond": "40083946ec3c41879f80e4d2854705da834485bd2913c7b4ac34963882229b1b",
-}
 
 
 def _valid_record(
@@ -91,8 +81,6 @@ def _valid_record(
     payload_case: str | None = None,
 ) -> dict[str, Any]:
     projection, oracle, node_count, arc_count = _fixture_bytes(payload_case or descriptor.name)
-    projection_sha = hashlib.sha256(projection).hexdigest()
-    oracle_sha = hashlib.sha256(oracle).hexdigest()
     return {
         "schema": PROBE_SCHEMA,
         "run_nonce": nonce,
@@ -100,17 +88,12 @@ def _valid_record(
         "top": descriptor.top,
         "expected_clock": descriptor.expected_clock,
         "repeat_index": repeat_index,
-        "input_case_sha256": descriptor.input_case_sha256,
         "node_count": node_count,
         "arc_count": arc_count,
         "direct_projection": projection.hex(),
         "decoded_projection": projection.hex(),
         "native_graph_oracle": oracle.hex(),
         "independent_fifo_oracle": oracle.hex(),
-        "projection_sha256": projection_sha,
-        "oracle_sha256": oracle_sha,
-        "database_before_sha256": projection_sha,
-        "database_after_sha256": projection_sha,
         "complete": True,
     }
 
@@ -193,12 +176,6 @@ def _test_contract_validation(descriptors: tuple[CaseDescriptor, CaseDescriptor]
             ),
         ),
         (
-            "wrong-fingerprint",
-            lambda item: item["case_results"][0]["repeats"][0].__setitem__(
-                "input_case_sha256", "0" * 64
-            ),
-        ),
-        (
             "wrong-nonce",
             lambda item: item["case_results"][0]["repeats"][0].__setitem__("run_nonce", "bad"),
         ),
@@ -243,30 +220,6 @@ def _test_contract_validation(descriptors: tuple[CaseDescriptor, CaseDescriptor]
             lambda item: item["case_results"][0]["repeats"][0].__setitem__(
                 "independent_fifo_oracle",
                 item["case_results"][1]["repeats"][0]["native_graph_oracle"],
-            ),
-        ),
-        (
-            "projection-hash",
-            lambda item: item["case_results"][0]["repeats"][0].__setitem__(
-                "projection_sha256", "0" * 64
-            ),
-        ),
-        (
-            "oracle-hash",
-            lambda item: item["case_results"][0]["repeats"][0].__setitem__(
-                "oracle_sha256", "0" * 64
-            ),
-        ),
-        (
-            "before-hash",
-            lambda item: item["case_results"][0]["repeats"][0].__setitem__(
-                "database_before_sha256", "0" * 64
-            ),
-        ),
-        (
-            "after-hash",
-            lambda item: item["case_results"][0]["repeats"][0].__setitem__(
-                "database_after_sha256", "0" * 64
             ),
         ),
         (
@@ -358,43 +311,6 @@ def _test_contract_validation(descriptors: tuple[CaseDescriptor, CaseDescriptor]
     )
 
 
-def _test_fingerprint(descriptors: tuple[CaseDescriptor, CaseDescriptor]) -> None:
-    if descriptors[0].input_case_sha256 == descriptors[1].input_case_sha256:
-        raise ProjectionContractError("valid chain/diamond fingerprints unexpectedly match")
-    actual_known = {item.name: item.input_case_sha256 for item in descriptors}
-    if actual_known != _EXPECTED_CASE_FINGERPRINTS:
-        raise ProjectionContractError(
-            f"input-case fingerprint known answers changed: {actual_known!r}"
-        )
-    descriptor = descriptors[0]
-    fields = {
-        "name": descriptor.name,
-        "top": descriptor.top,
-        "verilog": descriptor.verilog,
-        "sdc": descriptor.sdc,
-        "expected_clock": descriptor.expected_clock,
-        "input_hashes": descriptor.input_hashes,
-    }
-    actual = compute_case_fingerprint(**fields)
-    if actual != descriptor.input_case_sha256:
-        raise ProjectionContractError("input-case fingerprint is not repeatable")
-    for field in ("name", "top", "verilog", "sdc", "expected_clock"):
-        changed = dict(fields)
-        changed[field] = f"{changed[field]}_changed"
-        if compute_case_fingerprint(**changed) == actual:
-            raise ProjectionContractError(f"input-case fingerprint ignores {field}")
-    changed_hashes = list(descriptor.input_hashes)
-    changed_hashes[0] = (changed_hashes[0][0], "0" * 64)
-    changed = dict(fields)
-    changed["input_hashes"] = tuple(changed_hashes)
-    if compute_case_fingerprint(**changed) == actual:
-        raise ProjectionContractError("input-case fingerprint ignores input content hashes")
-    _expect_error(
-        "fingerprint-four-inputs",
-        lambda: compute_case_fingerprint(**{**fields, "input_hashes": descriptor.input_hashes[:4]}),
-    )
-
-
 def _slot(root: Path, descriptor: CaseDescriptor, index: int) -> RunSlot:
     nonce = secrets.token_hex(16)
     work = root / f"slot-{index}-{nonce}"
@@ -434,11 +350,9 @@ def _test_subprocess_protocol(descriptor: CaseDescriptor, root: Path) -> None:
         "bad-hex",
         "wrong-top",
         "wrong-clock",
-        "wrong-fingerprint",
         "wrong-nonce",
         "projection-mismatch",
         "oracle-mismatch",
-        "bad-hash",
         "incomplete",
         "direct-final",
     )
@@ -514,7 +428,6 @@ def _test_end_to_end(manifest_path: Path, root: Path) -> None:
 def run_self_test(manifest_path: Path) -> None:
     descriptors = load_case_descriptors(manifest_path)
     _test_contract_validation(descriptors)
-    _test_fingerprint(descriptors)
     with tempfile.TemporaryDirectory(prefix="ista-projection-controller-") as raw_directory:
         root = Path(raw_directory).resolve()
         _test_subprocess_protocol(descriptors[0], root)
@@ -534,7 +447,6 @@ def _fake_parser() -> argparse.ArgumentParser:
     parser.add_argument("--case-name", required=True)
     parser.add_argument("--expected-clock", required=True)
     parser.add_argument("--repeat-index", type=int, required=True)
-    parser.add_argument("--input-case-sha256", required=True)
     parser.add_argument("--run-nonce", required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--result-temp", type=Path, required=True)
@@ -551,8 +463,6 @@ def _fake_probe(argv: Sequence[str]) -> int:
         str(arguments.sdc),
         arguments.expected_clock,
         (),
-        (),
-        arguments.input_case_sha256,
     )
     record = _valid_record(descriptor, arguments.repeat_index, arguments.run_nonce)
     if mode in {"exit0-no-result", "missing-temp"}:
@@ -578,16 +488,12 @@ def _fake_probe(argv: Sequence[str]) -> int:
         record["top"] += "_wrong"
     elif mode == "wrong-clock":
         record["expected_clock"] += "_wrong"
-    elif mode == "wrong-fingerprint":
-        record["input_case_sha256"] = "0" * 64
     elif mode == "wrong-nonce":
         record["run_nonce"] = "0" * 32
     elif mode == "projection-mismatch":
         record["decoded_projection"] = _fixture_bytes("diamond")[0].hex()
     elif mode == "oracle-mismatch":
         record["independent_fifo_oracle"] = _fixture_bytes("diamond")[1].hex()
-    elif mode == "bad-hash":
-        record["projection_sha256"] = "0" * 64
     elif mode == "incomplete":
         record["complete"] = False
     elif mode == "direct-final":

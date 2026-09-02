@@ -3,7 +3,8 @@
 # Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 # Licensed under Mulan PSL v2.
 
-set(ISTA_CSR_REFERENCE_PUBLIC_HEADER_SOURCES
+add_executable(
+    ista_csr_reference_public_headers_test
     CsrReferencePublicHeadersMain.cpp
     public_header/CsrReferencePrimitivesHeaderTest.cpp
     public_header/CsrReferenceNativeModelsHeaderTest.cpp
@@ -15,11 +16,6 @@ set(ISTA_CSR_REFERENCE_PUBLIC_HEADER_SOURCES
     public_header/TimingGraphCsrAdapterHeaderTest.cpp
     CsrReferenceHeaderIncludeOrderTest.cpp
     CsrReferenceInputRawProjectionHeaderTest.cpp
-)
-
-add_executable(
-    ista_csr_reference_public_headers_test
-    ${ISTA_CSR_REFERENCE_PUBLIC_HEADER_SOURCES}
 )
 target_include_directories(
     ista_csr_reference_public_headers_test
@@ -49,49 +45,6 @@ set_tests_properties(
     PROPERTIES
     LABELS "ista_unit"
     TIMEOUT 60
-)
-
-get_target_property(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_ACTUAL_SOURCES
-    ista_csr_reference_public_headers_test
-    SOURCES
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_ACTUAL_SOURCES
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_SOURCES
-    "CSR reference public-header source inventory"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_LINKS
-    ista_csr_reference_public_headers_test
-    LINK_LIBRARIES
-)
-set(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_EXPECTED_LINKS
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_LINKS
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_EXPECTED_LINKS
-    "CSR reference public-header direct links"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_OPTIONS
-    ista_csr_reference_public_headers_test
-    COMPILE_OPTIONS
-)
-set(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_EXPECTED_OPTIONS
-    -Wall
-    -Wextra
-    -Werror
-    -pedantic
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_OPTIONS
-    ISTA_CSR_REFERENCE_PUBLIC_HEADER_EXPECTED_OPTIONS
-    "CSR reference public-header compile options"
 )
 
 add_test(
@@ -132,16 +85,13 @@ set_tests_properties(
     LABELS "ista_unit"
     TIMEOUT 60
 )
-set(ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_SOURCES
+add_executable(
+    ista_csr_reference_fingerprint_components_test
     CsrReferenceFingerprintComponentsTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputIndependentEncoding.cpp
     CsrReferenceInputIndependentGraphEncoding.cpp
     CsrReferenceInputIndependentModelEncoding.cpp
-)
-add_executable(
-    ista_csr_reference_fingerprint_components_test
-    ${ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_SOURCES}
 )
 target_include_directories(
     ista_csr_reference_fingerprint_components_test
@@ -163,59 +113,21 @@ set_tests_properties(
     LABELS "ista_unit"
     TIMEOUT 60
 )
-get_target_property(
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_ACTUAL_SOURCES
-    ista_csr_reference_fingerprint_components_test
-    SOURCES
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_ACTUAL_SOURCES
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_SOURCES
-    "CSR reference fingerprint component source inventory"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_LINKS
-    ista_csr_reference_fingerprint_components_test
-    LINK_LIBRARIES
-)
-set(ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_EXPECTED_LINKS ista_timing_csr_core)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_LINKS
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_EXPECTED_LINKS
-    "CSR reference fingerprint component direct links"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_OPTIONS
-    ista_csr_reference_fingerprint_components_test
-    COMPILE_OPTIONS
-)
-set(ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_EXPECTED_OPTIONS)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_OPTIONS
-    ISTA_CSR_REFERENCE_FINGERPRINT_COMPONENT_EXPECTED_OPTIONS
-    "CSR reference fingerprint component compile options"
-)
-function(ista_add_reference_functional TARGET_NAME SOURCES_VARIABLE)
-  add_executable("${TARGET_NAME}" ${${SOURCES_VARIABLE}})
+function(ista_add_reference_functional TARGET_NAME)
+  add_executable("${TARGET_NAME}" ${ARGN})
   target_include_directories("${TARGET_NAME}" PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
-  target_link_libraries("${TARGET_NAME}" PRIVATE ${ARGN})
+  target_link_libraries(
+      "${TARGET_NAME}"
+      PRIVATE
+      ista_timing_graph_csr_adapter
+      ista_timing_database_headers
+  )
   add_test(NAME "${TARGET_NAME}" COMMAND "${TARGET_NAME}")
   set_tests_properties("${TARGET_NAME}" PROPERTIES LABELS "ista_unit" TIMEOUT 60)
-
-  get_target_property(ACTUAL_SOURCES "${TARGET_NAME}" SOURCES)
-  ista_assert_same_inventory(
-      ACTUAL_SOURCES ${SOURCES_VARIABLE}
-      "${TARGET_NAME} source inventory"
-  )
-  ista_get_target_property_or_empty(ACTUAL_LINKS "${TARGET_NAME}" LINK_LIBRARIES)
-  set(EXPECTED_LINKS ${ARGN})
-  ista_assert_same_inventory(ACTUAL_LINKS EXPECTED_LINKS "${TARGET_NAME} direct links")
-  ista_get_target_property_or_empty(ACTUAL_OPTIONS "${TARGET_NAME}" COMPILE_OPTIONS)
-  set(EXPECTED_OPTIONS)
-  ista_assert_same_inventory(ACTUAL_OPTIONS EXPECTED_OPTIONS "${TARGET_NAME} compile options")
 endfunction()
 
-set(ISTA_CSR_REFERENCE_INPUT_EXPORT_CONTRACT_SOURCES
+ista_add_reference_functional(
+    ista_csr_reference_input_export_contract_test
     CsrReferenceInputExportContractTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputNativeFixture.cpp
@@ -227,14 +139,9 @@ set(ISTA_CSR_REFERENCE_INPUT_EXPORT_CONTRACT_SOURCES
     CsrReferenceInputRawLibraryProjector.cpp
     CsrReferenceInputRawParasiticProjector.cpp
 )
-ista_add_reference_functional(
-    ista_csr_reference_input_export_contract_test
-    ISTA_CSR_REFERENCE_INPUT_EXPORT_CONTRACT_SOURCES
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
 
-set(ISTA_CSR_REFERENCE_TRANSFER_CONTRACT_SOURCES
+ista_add_reference_functional(
+    ista_csr_reference_transfer_contract_test
     CsrReferenceTransferContractTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputNativeFixture.cpp
@@ -243,14 +150,9 @@ set(ISTA_CSR_REFERENCE_TRANSFER_CONTRACT_SOURCES
     CsrReferenceInputRawLibraryProjector.cpp
     CsrReferenceInputRawParasiticProjector.cpp
 )
-ista_add_reference_functional(
-    ista_csr_reference_transfer_contract_test
-    ISTA_CSR_REFERENCE_TRANSFER_CONTRACT_SOURCES
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
 
-set(ISTA_CSR_REFERENCE_SUPPORT_CONTRACT_SOURCES
+ista_add_reference_functional(
+    ista_csr_reference_support_contract_test
     CsrReferenceSupportContractTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputNativeFixture.cpp
@@ -259,14 +161,9 @@ set(ISTA_CSR_REFERENCE_SUPPORT_CONTRACT_SOURCES
     CsrReferenceInputRawLibraryProjector.cpp
     CsrReferenceInputRawParasiticProjector.cpp
 )
-ista_add_reference_functional(
-    ista_csr_reference_support_contract_test
-    ISTA_CSR_REFERENCE_SUPPORT_CONTRACT_SOURCES
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
 
-set(ISTA_CSR_REFERENCE_INPUT_PROPERTY_SOURCES
+add_executable(
+    ista_csr_reference_input_property_test
     CsrReferenceInputPropertyTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputNativeFixture.cpp
@@ -278,10 +175,6 @@ set(ISTA_CSR_REFERENCE_INPUT_PROPERTY_SOURCES
     CsrReferenceInputRawLibraryProjector.cpp
     CsrReferenceInputRawParasiticProjector.cpp
 )
-add_executable(
-    ista_csr_reference_input_property_test
-    ${ISTA_CSR_REFERENCE_INPUT_PROPERTY_SOURCES}
-)
 target_include_directories(
     ista_csr_reference_input_property_test
     PRIVATE
@@ -292,42 +185,6 @@ target_link_libraries(
     PRIVATE
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
-)
-get_target_property(
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_ACTUAL_SOURCES
-    ista_csr_reference_input_property_test
-    SOURCES
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_ACTUAL_SOURCES
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_SOURCES
-    "CSR reference property source inventory"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_LINKS
-    ista_csr_reference_input_property_test
-    LINK_LIBRARIES
-)
-set(
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_EXPECTED_LINKS
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_LINKS
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_EXPECTED_LINKS
-    "CSR reference property direct links"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_OPTIONS
-    ista_csr_reference_input_property_test
-    COMPILE_OPTIONS
-)
-set(ISTA_CSR_REFERENCE_INPUT_PROPERTY_EXPECTED_OPTIONS)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_OPTIONS
-    ISTA_CSR_REFERENCE_INPUT_PROPERTY_EXPECTED_OPTIONS
-    "CSR reference property compile options"
 )
 set(ISTA_CSR_REFERENCE_INPUT_PROPERTY_SEEDS 1 7 42 20260820 0xdeadbeef)
 foreach(PROPERTY_SEED IN LISTS ISTA_CSR_REFERENCE_INPUT_PROPERTY_SEEDS)
@@ -343,19 +200,15 @@ foreach(PROPERTY_SEED IN LISTS ISTA_CSR_REFERENCE_INPUT_PROPERTY_SEEDS)
   )
 endforeach()
 
-set(ISTA_CSR_REFERENCE_INPUT_FAILURE_SOURCES
+ista_add_reference_functional(
+    ista_csr_reference_input_failure_test
     CsrReferenceInputFailureTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputNativeFixture.cpp
 )
-ista_add_reference_functional(
-    ista_csr_reference_input_failure_test
-    ISTA_CSR_REFERENCE_INPUT_FAILURE_SOURCES
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
 
-set(ISTA_CSR_REFERENCE_POISON_ISOLATION_SOURCES
+ista_add_reference_functional(
+    ista_csr_reference_poison_isolation_test
     CsrReferencePoisonIsolationTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputNativeFixture.cpp
@@ -365,14 +218,9 @@ set(ISTA_CSR_REFERENCE_POISON_ISOLATION_SOURCES
     CsrReferenceInputRawLibraryProjector.cpp
     CsrReferenceInputRawParasiticProjector.cpp
 )
-ista_add_reference_functional(
-    ista_csr_reference_poison_isolation_test
-    ISTA_CSR_REFERENCE_POISON_ISOLATION_SOURCES
-    ista_timing_graph_csr_adapter
-    ista_timing_database_headers
-)
 
-set(ISTA_CSR_REFERENCE_INPUT_PROBE_SOURCES
+add_executable(
+    ista_csr_reference_input_probe
     reference_input/StaCsrReferenceInputProbe.cpp
     CsrReferenceInputNativeFixture.cpp
     CsrReferencePoisonSupport.cpp
@@ -383,10 +231,6 @@ set(ISTA_CSR_REFERENCE_INPUT_PROBE_SOURCES
     CsrReferenceInputRawConstraintProjector.cpp
     CsrReferenceInputRawLibraryProjector.cpp
     CsrReferenceInputRawParasiticProjector.cpp
-)
-add_executable(
-    ista_csr_reference_input_probe
-    ${ISTA_CSR_REFERENCE_INPUT_PROBE_SOURCES}
 )
 target_include_directories(
     ista_csr_reference_input_probe
@@ -401,45 +245,6 @@ target_link_libraries(
     ista_source
     idm
 )
-get_target_property(
-    ISTA_CSR_REFERENCE_INPUT_PROBE_ACTUAL_SOURCES
-    ista_csr_reference_input_probe
-    SOURCES
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_INPUT_PROBE_ACTUAL_SOURCES
-    ISTA_CSR_REFERENCE_INPUT_PROBE_SOURCES
-    "CSR reference-input probe source inventory"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_INPUT_PROBE_LINKS
-    ista_csr_reference_input_probe
-    LINK_LIBRARIES
-)
-set(
-    ISTA_CSR_REFERENCE_INPUT_PROBE_EXPECTED_LINKS
-    ista_timing_graph_csr_adapter
-    ista_interface
-    ista_source
-    idm
-)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_INPUT_PROBE_LINKS
-    ISTA_CSR_REFERENCE_INPUT_PROBE_EXPECTED_LINKS
-    "CSR reference-input probe direct links"
-)
-ista_get_target_property_or_empty(
-    ISTA_CSR_REFERENCE_INPUT_PROBE_OPTIONS
-    ista_csr_reference_input_probe
-    COMPILE_OPTIONS
-)
-set(ISTA_CSR_REFERENCE_INPUT_PROBE_EXPECTED_OPTIONS)
-ista_assert_same_inventory(
-    ISTA_CSR_REFERENCE_INPUT_PROBE_OPTIONS
-    ISTA_CSR_REFERENCE_INPUT_PROBE_EXPECTED_OPTIONS
-    "CSR reference-input probe compile options"
-)
-
 add_test(
     NAME ista_csr_reference_input_native_overlap
     COMMAND

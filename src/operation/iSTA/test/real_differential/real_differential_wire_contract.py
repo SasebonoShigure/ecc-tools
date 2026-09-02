@@ -25,7 +25,6 @@ def _load_baseline_error():
 
 
 BaselineError = _load_baseline_error()
-sha256_bytes = model.sha256_bytes
 
 
 class DifferentialContractError(BaselineError):

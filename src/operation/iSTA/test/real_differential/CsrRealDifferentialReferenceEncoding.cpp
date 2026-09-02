@@ -322,11 +322,10 @@ Json fingerprintsToJson(const CsrCurrentFingerprints& fingerprints)
 
 }  // namespace
 
-EncodedSourceWire encodeSnapshotCandidate(const CsrReferenceInput& input)
+std::string encodeSnapshotCandidate(const CsrReferenceInput& input)
 {
   const std::vector<std::uint8_t> bytes = test::canonicalIndependentReferenceInputBytes(input);
-  const std::string_view byte_view(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-  return EncodedSourceWire{bytesToHex(bytes), sha256Hex(byte_view)};
+  return bytesToHex(bytes);
 }
 
 NeutralWire encodeReferenceTiming(const CsrReferenceInput& input, const CsrTimingResult& result)

@@ -39,9 +39,9 @@
 #include <vector>
 
 #include "CsrFifoLevelization.hpp"
-#include "CsrFingerprint.hpp"
 #include "CsrGraphEncoding.hpp"
 #include "CsrNativeGraphTestSupport.hpp"
+#include "CsrReferenceCanonicalEncoder.hpp"
 #include "DataManager.hpp"
 #include "IncrementalStaSession.hpp"
 #include "STAInterface.hpp"
@@ -82,7 +82,6 @@ struct Options
   std::string case_name;
   std::string expected_clock;
   std::uint64_t repeat_index{0};
-  std::string input_case_sha256;
   std::string run_nonce;
   fs::path run_dir;
   fs::path result_temp;
@@ -95,8 +94,6 @@ struct Observation
   std::vector<std::uint8_t> decoded_projection;
   std::vector<std::uint8_t> native_graph_oracle;
   std::vector<std::uint8_t> independent_fifo_oracle;
-  std::string database_before_sha256;
-  std::string database_after_sha256;
   std::size_t node_count{0};
   std::size_t arc_count{0};
 };
@@ -107,8 +104,8 @@ struct SessionOracle
   std::uint64_t node_count{0};
   std::uint64_t edge_count{0};
   std::uint64_t level_count{0};
-  std::string projection_sha256;
-  std::string fifo_sha256;
+  std::vector<std::uint8_t> projection_bytes;
+  std::vector<std::uint8_t> fifo_bytes;
 };
 
 struct SessionRun
@@ -159,8 +156,8 @@ Options parseOptions(int argc, char* argv[])
       throw std::runtime_error("duplicate option: " + name);
   }
   const std::vector<std::string> required = {
-      "--tech-lef",       "--cell-lef",     "--liberty",           "--verilog",   "--sdc",     "--top",         "--case-name",
-      "--expected-clock", "--repeat-index", "--input-case-sha256", "--run-nonce", "--run-dir", "--result-temp",
+      "--tech-lef",       "--cell-lef",     "--liberty",      "--verilog", "--sdc",     "--top",
+      "--case-name",      "--expected-clock", "--repeat-index", "--run-nonce", "--run-dir", "--result-temp",
   };
   for (const std::string& name : required) {
     if (!values.contains(name) || values.at(name).empty())
@@ -181,7 +178,6 @@ Options parseOptions(int argc, char* argv[])
       values.at("--case-name"),
       values.at("--expected-clock"),
       parseIndex(values.at("--repeat-index")),
-      values.at("--input-case-sha256"),
       values.at("--run-nonce"),
       values.at("--run-dir"),
       values.at("--result-temp"),
@@ -209,8 +205,6 @@ void validateOptions(Options& options)
     throw std::runtime_error("top and expected clock must be non-empty");
   if (!isLowerHex(options.run_nonce, 32))
     throw std::runtime_error("run nonce must be 32 lowercase hex characters");
-  if (!isLowerHex(options.input_case_sha256, 64))
-    throw std::runtime_error("input case fingerprint must be a lowercase SHA-256");
   if (!options.run_dir.is_absolute() || !fs::is_directory(options.run_dir))
     throw std::runtime_error("run directory must be an existing absolute directory");
   options.run_dir = fs::canonical(options.run_dir);
@@ -303,7 +297,6 @@ Observation observeDatabase(const ista::Database& database)
   NativeGraphProjectionResult decoded_result = decodeNativeGraphProjection(snapshot);
   const NativeGraphProjection& decoded = requireValue(decoded_result, "native graph decode");
   NativeGraphProjection direct_after = captureDirectNativeGraphProjection(database);
-  std::vector<std::uint8_t> after_bytes = canonicalIndependentNativeGraphProjectionBytes(direct_after);
   if (direct_before != direct_after)
     throw std::runtime_error("database projection changed during export/decode");
   if (direct_before != decoded)
@@ -321,8 +314,6 @@ Observation observeDatabase(const ista::Database& database)
   observation.decoded_projection = canonicalNativeGraphProjectionBytes(decoded);
   observation.native_graph_oracle = canonicalNativeGraphOracleBytes(native_oracle);
   observation.independent_fifo_oracle = canonicalIndependentNativeGraphOracleBytes(fifo.oracle);
-  observation.database_before_sha256 = sha256Hex(observation.direct_projection);
-  observation.database_after_sha256 = sha256Hex(after_bytes);
   observation.node_count = decoded.nodes.size();
   observation.arc_count = decoded.arcs.size();
   if (observation.direct_projection != observation.decoded_projection)
@@ -388,8 +379,8 @@ SessionOracle observeSessionDatabase(const ista::Database& database, std::uint64
   oracle.node_count = static_cast<std::uint64_t>(input.nodes.size());
   oracle.edge_count = static_cast<std::uint64_t>(input.arcs.size());
   oracle.level_count = static_cast<std::uint64_t>(replay.level_offsets.size() - 1);
-  oracle.projection_sha256 = sha256Hex(canonicalIndependentNativeGraphProjectionBytes(direct_before));
-  oracle.fifo_sha256 = sha256Hex(canonicalIndependentNativeGraphOracleBytes(independent.oracle));
+  oracle.projection_bytes = canonicalIndependentNativeGraphProjectionBytes(direct_before);
+  oracle.fifo_bytes = canonicalIndependentNativeGraphOracleBytes(independent.oracle);
   if (oracle.node_count == 0 || oracle.edge_count == 0 || oracle.level_count == 0)
     throw std::runtime_error("session oracle produced an empty graph");
   return oracle;
@@ -496,8 +487,6 @@ std::string toHex(std::span<const std::uint8_t> bytes)
 
 Json makeResult(const Options& options, const Observation& observation)
 {
-  std::string projection_sha = ista::csr::sha256Hex(observation.direct_projection);
-  std::string oracle_sha = ista::csr::sha256Hex(observation.native_graph_oracle);
   return {
       {"schema", "ista-csr-projection-probe/1.0.0"},
       {"run_nonce", options.run_nonce},
@@ -505,17 +494,12 @@ Json makeResult(const Options& options, const Observation& observation)
       {"top", options.top},
       {"expected_clock", options.expected_clock},
       {"repeat_index", options.repeat_index},
-      {"input_case_sha256", options.input_case_sha256},
       {"node_count", observation.node_count},
       {"arc_count", observation.arc_count},
       {"direct_projection", toHex(observation.direct_projection)},
       {"decoded_projection", toHex(observation.decoded_projection)},
       {"native_graph_oracle", toHex(observation.native_graph_oracle)},
       {"independent_fifo_oracle", toHex(observation.independent_fifo_oracle)},
-      {"projection_sha256", projection_sha},
-      {"oracle_sha256", oracle_sha},
-      {"database_before_sha256", observation.database_before_sha256},
-      {"database_after_sha256", observation.database_after_sha256},
       {"complete", true},
   };
 }
@@ -583,8 +567,8 @@ Json sessionJson(const SessionRun& session)
             {"node_count", session.oracle.node_count},
             {"edge_count", session.oracle.edge_count},
             {"level_count", session.oracle.level_count},
-            {"projection_sha256", session.oracle.projection_sha256},
-            {"fifo_sha256", session.oracle.fifo_sha256}}}};
+            {"projection_wire_hex", toHex(session.oracle.projection_bytes)},
+            {"fifo_wire_hex", toHex(session.oracle.fifo_bytes)}}}};
 }
 
 bool sameContentIdentity(const ista::csr::CsrSnapshotIdentity& lhs, const ista::csr::CsrSnapshotIdentity& rhs)
@@ -597,14 +581,13 @@ bool sameContentIdentity(const ista::csr::CsrSnapshotIdentity& lhs, const ista::
 Json makeSessionResult(const Options& options, const SessionRun& first, const SessionRun& second)
 {
   if (first.session_token == second.session_token || !sameContentIdentity(first.active.identity, second.active.identity)
-      || first.active.counts != second.active.counts || first.oracle.projection_sha256 != second.oracle.projection_sha256
-      || first.oracle.fifo_sha256 != second.oracle.fifo_sha256)
-    throw std::runtime_error("same-input sequential session identity, counts, or oracle hashes differ");
+      || first.active.counts != second.active.counts || first.oracle.projection_bytes != second.oracle.projection_bytes
+      || first.oracle.fifo_bytes != second.oracle.fifo_bytes)
+    throw std::runtime_error("same-input sequential session identity, counts, or oracle bytes differ");
   return {{"schema", "ista-csr-session-probe/1.0.0"},
           {"run_nonce", options.run_nonce},
           {"case", options.case_name},
           {"repeat_index", options.repeat_index},
-          {"input_case_sha256", options.input_case_sha256},
           {"full_observation", nullptr},
           {"sessions", Json::array({sessionJson(first), sessionJson(second)})},
           {"complete", true}};

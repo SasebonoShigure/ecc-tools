@@ -112,8 +112,6 @@ def _probe_arguments(slot: RunSlot) -> tuple[str, ...]:
         context["rc_corner"],
         "--repeat-index",
         str(slot.repeat_index),
-        "--input-case-sha256",
-        descriptor.input_case_sha256,
         "--session-token",
         str(contract.SESSION_TOKEN),
         "--run-nonce",
@@ -192,8 +190,10 @@ def _build_summary(
 ) -> dict[str, object]:
     by_slot = {slot: result for slot, result in zip(slots, validated, strict=True)}
     case_results: list[dict[str, object]] = []
+    case_references: list[contract.ValidatedProbe] = []
     for descriptor in descriptors:
         rows: list[dict[str, object]] = []
+        reference: contract.ValidatedProbe | None = None
         for repeat_index in range(repeats):
             slot = next(
                 item
@@ -201,17 +201,42 @@ def _build_summary(
                 if item.descriptor == descriptor and item.repeat_index == repeat_index
             )
             result = by_slot[slot]
+            if reference is None:
+                reference = result
+            else:
+                if (
+                    result.candidate_bytes != reference.candidate_bytes
+                    or result.raw_bytes != reference.raw_bytes
+                ):
+                    raise contract.ReferenceInputContractError(
+                        f"{descriptor.name}: fresh canonical bytes drifted"
+                    )
+                if result.candidate != reference.candidate or result.raw != reference.raw:
+                    raise contract.ReferenceInputContractError(
+                        f"{descriptor.name}: fresh decoded values drifted"
+                    )
             rows.append(
                 {
                     "repeat_index": repeat_index,
-                    "input_case_sha256": descriptor.input_case_sha256,
                     "session_token": contract.SESSION_TOKEN,
-                    "candidate_wire_sha256": result.candidate_wire_sha256,
-                    "raw_projection_sha256": result.raw_projection_sha256,
                     "touched_families": list(result.touched_families),
                 }
             )
+        if reference is None:
+            raise contract.ReferenceInputContractError(
+                f"{descriptor.name}: no validated fresh-process result"
+            )
+        case_references.append(reference)
         case_results.append({"case": descriptor.name, "repeats": rows})
+    if (
+        case_references[0].candidate_bytes == case_references[1].candidate_bytes
+        or case_references[0].raw_bytes == case_references[1].raw_bytes
+        or case_references[0].candidate == case_references[1].candidate
+        or case_references[0].raw == case_references[1].raw
+    ):
+        raise contract.ReferenceInputContractError(
+            "chain and diamond candidate/raw observations must differ"
+        )
     return {
         "schema": contract.CONTROLLER_SCHEMA,
         "requested_repeats": repeats,

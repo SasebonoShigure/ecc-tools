@@ -99,7 +99,6 @@ inline ista::TransType changedTransition(ista::TransType value)
 inline void appendBinding(Writer& writer, std::string_view family, const ReferencePoisonBinding& binding)
 {
   writer.appendString("ista-csr-reference-input-canary/" + std::string(family) + "/1.0.0");
-  writer.appendString(binding.input_case_sha256);
   writer.appendU64(binding.repeat_index);
   writer.appendString(binding.run_nonce);
   writer.appendU64(binding.session_token);

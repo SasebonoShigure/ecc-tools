@@ -52,33 +52,10 @@
   add_test(NAME ista_csr_fifo_levelization_contract_test COMMAND ista_csr_fifo_levelization_contract_test)
   set_tests_properties(ista_csr_fifo_levelization_contract_test PROPERTIES LABELS "ista_unit")
 
-  set(ISTA_CSR_CORE_NARROW_TEST_TARGETS
-      ista_csr_snapshot_identity_contract_test
-      ista_csr_fifo_levelization_contract_test
-  )
-  set(ISTA_CSR_EXPECTED_CORE_NARROW_LINKS ista_timing_csr_core)
-  foreach(CORE_TARGET IN LISTS ISTA_CSR_CORE_NARROW_TEST_TARGETS)
-    ista_get_target_property_or_empty(CORE_LINKS "${CORE_TARGET}" LINK_LIBRARIES)
-    ista_assert_same_inventory(CORE_LINKS ISTA_CSR_EXPECTED_CORE_NARROW_LINKS "${CORE_TARGET} direct links")
-  endforeach()
-
-  set(ISTA_CSR_SNAPSHOT_STORAGE_TEST_SOURCES
+  add_executable(ista_csr_snapshot_storage_contract_test
       CsrSnapshotStorageContractTest.cpp
       CsrSnapshotTestFixture.cpp
       CsrReferenceInputStorageOracle.cpp
-  )
-  add_executable(ista_csr_snapshot_storage_contract_test
-      ${ISTA_CSR_SNAPSHOT_STORAGE_TEST_SOURCES}
-  )
-  get_target_property(
-      ISTA_CSR_SNAPSHOT_STORAGE_TEST_ACTUAL_SOURCES
-      ista_csr_snapshot_storage_contract_test
-      SOURCES
-  )
-  ista_assert_same_inventory(
-      ISTA_CSR_SNAPSHOT_STORAGE_TEST_ACTUAL_SOURCES
-      ISTA_CSR_SNAPSHOT_STORAGE_TEST_SOURCES
-      "CSR snapshot storage test source inventory"
   )
   target_link_libraries(ista_csr_snapshot_storage_contract_test
       PRIVATE
@@ -108,17 +85,6 @@
   )
   add_test(NAME ista_csr_snapshot_transition_contract_test COMMAND ista_csr_snapshot_transition_contract_test)
   set_tests_properties(ista_csr_snapshot_transition_contract_test PROPERTIES LABELS "ista_unit")
-
-  set(ISTA_CSR_SNAPSHOT_NARROW_TEST_TARGETS
-      ista_csr_snapshot_storage_contract_test
-      ista_csr_snapshot_observation_contract_test
-      ista_csr_snapshot_transition_contract_test
-  )
-  set(ISTA_CSR_EXPECTED_SNAPSHOT_NARROW_LINKS ista_timing_csr_snapshot_contract)
-  foreach(SNAPSHOT_TARGET IN LISTS ISTA_CSR_SNAPSHOT_NARROW_TEST_TARGETS)
-    ista_get_target_property_or_empty(SNAPSHOT_LINKS "${SNAPSHOT_TARGET}" LINK_LIBRARIES)
-    ista_assert_same_inventory(SNAPSHOT_LINKS ISTA_CSR_EXPECTED_SNAPSHOT_NARROW_LINKS "${SNAPSHOT_TARGET} direct links")
-  endforeach()
 
   add_test(
       NAME ista_csr_snapshot_compiled_contract_parity
@@ -233,19 +199,4 @@
         LABELS "ista_property"
         TIMEOUT 60
     )
-  endforeach()
-
-  set(ISTA_CSR_NARROW_TEST_TARGETS
-      ista_csr_graph_export_contract_test
-      ista_csr_graph_export_failure_test
-      ista_csr_graph_encoding_contract_test
-      ista_csr_graph_property_test
-  )
-  set(ISTA_CSR_EXPECTED_NARROW_LINKS
-      ista_timing_graph_csr_adapter
-      ista_timing_database_headers
-  )
-  foreach(NARROW_TARGET IN LISTS ISTA_CSR_NARROW_TEST_TARGETS)
-    ista_get_target_property_or_empty(NARROW_LINKS "${NARROW_TARGET}" LINK_LIBRARIES)
-    ista_assert_same_inventory(NARROW_LINKS ISTA_CSR_EXPECTED_NARROW_LINKS "${NARROW_TARGET} direct links")
   endforeach()

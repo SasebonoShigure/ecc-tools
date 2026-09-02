@@ -317,7 +317,6 @@ DecodedSubject decodeSubject(Reader& reader, std::size_t family)
 struct DecodedCanary
 {
   std::string family;
-  std::string input_case_sha256;
   std::uint64_t repeat_index{0};
   std::string run_nonce;
   std::uint64_t session_token{0};
@@ -332,7 +331,6 @@ DecodedCanary decodeCanary(const std::vector<std::uint8_t>& bytes, std::size_t f
   DecodedCanary result;
   result.family = std::string(kReferencePoisonFamilyTokens.at(family));
   require(reader.string() == "ista-csr-reference-input-canary/" + result.family + "/1.0.0", "poison domain differs");
-  result.input_case_sha256 = reader.string();
   result.repeat_index = reader.u64();
   result.run_nonce = reader.string();
   result.session_token = reader.u64();
@@ -442,8 +440,8 @@ void scaffoldSubject(DecodedSubject& subject, std::size_t family)
 }
 void validateScaffold(const DecodedCanary& pristine, const DecodedCanary& before, std::size_t family)
 {
-  require(pristine.family == before.family && pristine.input_case_sha256 == before.input_case_sha256 && pristine.repeat_index == before.repeat_index
-              && pristine.run_nonce == before.run_nonce && pristine.session_token == before.session_token && pristine.subjects.size() == before.subjects.size(),
+  require(pristine.family == before.family && pristine.repeat_index == before.repeat_index && pristine.run_nonce == before.run_nonce
+              && pristine.session_token == before.session_token && pristine.subjects.size() == before.subjects.size(),
           "pristine/scaffold binding or subject inventory drifted");
   for (std::size_t index = 0; index < pristine.subjects.size(); ++index) {
     DecodedSubject expected = pristine.subjects[index];
@@ -459,8 +457,8 @@ enum class RequiredDeltaMode : std::uint8_t
 
 void validateRequiredDelta(const DecodedCanary& before, const DecodedCanary& after, RequiredDeltaMode mode)
 {
-  require(before.family == after.family && before.input_case_sha256 == after.input_case_sha256 && before.repeat_index == after.repeat_index
-              && before.run_nonce == after.run_nonce && before.session_token == after.session_token,
+  require(before.family == after.family && before.repeat_index == after.repeat_index && before.run_nonce == after.run_nonce
+              && before.session_token == after.session_token,
           "poison family binding drifted");
   require(before.subjects.size() == after.subjects.size(), "poison subject count drifted");
   std::size_t changed_leaves = 0;
@@ -597,8 +595,7 @@ void verifyCanaries(const std::vector<ReferencePoisonCanary>& canaries, const Cs
     if (family <= 2 || family == 10 || family >= 15)
       require(canary.pristine_typed_bytes == canary.before_typed_bytes, "non-scaffold family changed between pristine and before");
 
-    require(before.input_case_sha256 == binding.input_case_sha256 && before.repeat_index == binding.repeat_index && before.run_nonce == binding.run_nonce
-                && before.session_token == binding.session_token,
+    require(before.repeat_index == binding.repeat_index && before.run_nonce == binding.run_nonce && before.session_token == binding.session_token,
             "poison binding was not encoded exactly");
     std::vector<std::string> actual_subjects;
     for (const auto& subject : before.subjects)
@@ -671,7 +668,6 @@ int main()
     const std::vector<std::uint8_t> canonical_before = canonicalReferenceInputBytes(pristine);
     const std::vector<std::uint8_t> raw_bytes_before = canonicalIndependentReferenceInputRawBytes(raw_before);
     const ReferencePoisonBinding binding{
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         17,
         "00112233445566778899aabbccddeeff",
         kToken,

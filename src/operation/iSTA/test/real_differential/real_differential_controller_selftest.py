@@ -209,8 +209,12 @@ def _mutate_neg_inf_json(value, _models):
     return _nonfinite(value, b"-Infinity")
 
 
-def _mutate_bad_sha(value, _models):
-    return _set(value, ("source_wires", "pre_poison_raw_sha256"), _flip)
+def _mutate_poison_unchanged(value, _models):
+    return _set(
+        value,
+        ("poison", 0, "after_typed_bytes_hex"),
+        value["poison"][0]["before_typed_bytes_hex"],
+    )
 
 
 def _mutate_bad_pid(value, _models):
@@ -236,7 +240,7 @@ def _mutate_raw_drift(value, _models):
         and payload != bytes.fromhex(original_item["raw_wire_hex"]),
         "raw mutation round-trip differs",
     )
-    item.update(raw_wire_hex=payload.hex(), raw_sha256=hashlib.sha256(payload).hexdigest())
+    item.update(raw_wire_hex=payload.hex())
     restored = copy.deepcopy(result)
     restored["forbidden_projection"]["post_poison"] = original_item
     ensure(restored == value, "raw mutation changed an undeclared record field")
@@ -251,25 +255,19 @@ def _reencode_candidate_mutation(value, transform, models):
     result = copy.deepcopy(value)
     source = result["source_wires"]
     original_source = copy.deepcopy(source)
-    baseline = models[source["snapshot_candidate_sha256"]]
+    baseline = models[source["snapshot_candidate_wire_hex"]]
     changed = transform(baseline)
     payload = encode_full_candidate_wire(changed)
     decoded = decode_candidate_wire(payload)
-    digest = hashlib.sha256(payload).hexdigest()
     ensure(
         decoded == changed
         and changed != baseline
-        and payload != bytes.fromhex(original_source["snapshot_candidate_wire_hex"])
-        and digest != source["snapshot_candidate_sha256"],
+        and payload != bytes.fromhex(original_source["snapshot_candidate_wire_hex"]),
         "candidate mutation strict round-trip differs",
     )
-    source.update(
-        snapshot_candidate_wire_hex=payload.hex(),
-        snapshot_candidate_sha256=digest,
-    )
+    source.update(snapshot_candidate_wire_hex=payload.hex())
     restored = copy.deepcopy(result)
-    for key in ("snapshot_candidate_wire_hex", "snapshot_candidate_sha256"):
-        restored["source_wires"][key] = original_source[key]
+    restored["source_wires"]["snapshot_candidate_wire_hex"] = original_source["snapshot_candidate_wire_hex"]
     ensure(restored == value, "candidate mutation changed an undeclared record field")
     return result
 
@@ -486,7 +484,13 @@ PUBLIC_NEGATIVE_MATRIX = (
         _mutate_neg_inf_json,
         "non-finite",
     ),
-    ("bad_sha", "reference_probe", validate_probe, _mutate_bad_sha, "bad-sha"),
+    (
+        "poison_unchanged",
+        "reference_probe",
+        validate_probe,
+        _mutate_poison_unchanged,
+        "poison",
+    ),
     ("bad_pid", "reference_probe", validate_probe, _mutate_bad_pid, "bad-pid"),
     ("bad_schema", "reference_probe", validate_probe, _mutate_bad_schema, "bad-schema"),
     ("raw_drift", "reference_probe", validate_probe, _mutate_raw_drift, "raw-provenance"),
@@ -599,11 +603,9 @@ def _validate_candidate_roundtrips(records, repeats):
         record = records[case_index * repeats][1]
         source = record["source_wires"]
         payload = bytes.fromhex(source["snapshot_candidate_wire_hex"])
-        digest = hashlib.sha256(payload).hexdigest()
-        ensure(digest == source["snapshot_candidate_sha256"], f"{name} candidate SHA differs")
         decoded = decode_candidate_wire(payload)
         ensure(encode_full_candidate_wire(decoded) == payload, f"{name} full codec differs")
-        models[digest] = decoded
+        models[source["snapshot_candidate_wire_hex"]] = decoded
         payloads.add(payload)
     ensure(len(payloads) == 3 and len(models) == 3, "candidate payloads are not case-distinct")
     return models

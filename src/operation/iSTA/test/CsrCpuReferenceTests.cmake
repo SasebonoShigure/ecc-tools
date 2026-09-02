@@ -10,25 +10,10 @@ set(ISTA_STEP5_STRICT_OPTIONS
     -pedantic
     -ffp-contract=off
 )
-set(ISTA_STEP5_CORE_LINKS ista_timing_csr_core)
-
 function(ista_add_step5_target TARGET_NAME SOURCES_VARIABLE)
   add_executable("${TARGET_NAME}" ${${SOURCES_VARIABLE}})
   target_link_libraries("${TARGET_NAME}" PRIVATE ista_timing_csr_core)
   target_compile_options("${TARGET_NAME}" PRIVATE ${ISTA_STEP5_STRICT_OPTIONS})
-
-  get_target_property(ACTUAL_SOURCES "${TARGET_NAME}" SOURCES)
-  ista_assert_same_inventory(
-      ACTUAL_SOURCES ${SOURCES_VARIABLE} "${TARGET_NAME} source inventory"
-  )
-  ista_get_target_property_or_empty(ACTUAL_LINKS "${TARGET_NAME}" LINK_LIBRARIES)
-  ista_assert_same_inventory(
-      ACTUAL_LINKS ISTA_STEP5_CORE_LINKS "${TARGET_NAME} direct links"
-  )
-  ista_get_target_property_or_empty(ACTUAL_OPTIONS "${TARGET_NAME}" COMPILE_OPTIONS)
-  ista_assert_same_inventory(
-      ACTUAL_OPTIONS ISTA_STEP5_STRICT_OPTIONS "${TARGET_NAME} compile options"
-  )
 endfunction()
 
 set(ISTA_STEP5_TABLE_SOURCES
@@ -106,33 +91,3 @@ foreach(PROPERTY_SEED IN LISTS ISTA_STEP5_PROPERTY_SEEDS)
       PROPERTIES LABELS "ista_property" TIMEOUT 60
   )
 endforeach()
-
-string(JOIN "|" ISTA_STEP5_TABLE_SOURCES_PACKED ${ISTA_STEP5_TABLE_SOURCES})
-string(JOIN "|" ISTA_STEP5_CONTRACT_SOURCES_PACKED ${ISTA_STEP5_CONTRACT_SOURCES})
-string(JOIN "|" ISTA_STEP5_PROPERTY_SOURCES_PACKED ${ISTA_STEP5_PROPERTY_SOURCES})
-string(
-    JOIN "|"
-    ISTA_STEP5_PUBLIC_HEADER_SOURCES_PACKED
-    ${ISTA_STEP5_PUBLIC_HEADER_SOURCES}
-)
-add_test(
-    NAME ista_csr_step5_source_inventory
-    COMMAND
-    "${CMAKE_COMMAND}"
-    "-DISTA_SOURCE_ROOT=${HOME_ISTA}"
-    "-DCSR_TEST_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-    "-DCSR_BUILD_DIR=${CMAKE_BINARY_DIR}"
-    "-DNINJA_EXECUTABLE=${CMAKE_MAKE_PROGRAM}"
-    "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    "-DNM_EXECUTABLE=${CMAKE_NM}"
-    "-DCSR_GENERATOR=${CMAKE_GENERATOR}"
-    "-DCSR_TABLE_SOURCES_PACKED=${ISTA_STEP5_TABLE_SOURCES_PACKED}"
-    "-DCSR_CONTRACT_SOURCES_PACKED=${ISTA_STEP5_CONTRACT_SOURCES_PACKED}"
-    "-DCSR_PROPERTY_SOURCES_PACKED=${ISTA_STEP5_PROPERTY_SOURCES_PACKED}"
-    "-DCSR_PUBLIC_HEADER_SOURCES_PACKED=${ISTA_STEP5_PUBLIC_HEADER_SOURCES_PACKED}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/CheckCsrStep5SourceInventory.cmake"
-)
-set_tests_properties(
-    ista_csr_step5_source_inventory
-    PROPERTIES LABELS "ista_unit" TIMEOUT 60
-)

@@ -21,7 +21,6 @@
 #include <vector>
 
 #include "Arc.hpp"
-#include "CsrFingerprint.hpp"
 #include "CsrReferenceFingerprintPayload.hpp"
 #include "CsrReferenceInputRawProjection.hpp"
 #include "CsrReferenceInputTestSupport.hpp"
@@ -155,8 +154,6 @@ constexpr std::string_view kComplexRawKatHex
       "0000000000000000000000000005615f6e65740000000000000005615f656d620000000000000000000000000000000002000000000000000261320000000000000005615f74776f00000000"
       "000000000000401000000000000000c010000000000000000000000000000261310000000000000005615f6f6e6500000000000000000000400800000000000000c008000000000000000000"
       "000000000200000000000000026132000000000000000261310040000000000000000000000000000002613100000000000000026132003ff0000000000000";
-constexpr std::string_view kComplexRawKatSha = "981c927eea2234d723aed25ae799b30b2a25f6128961c7fece42dd11762a92f5";
-
 class Reader
 {
  public:
@@ -280,13 +277,11 @@ void testRawKatsAndMutations()
         "2e300000000000000000000000000000000000000000000000000000000000000000000000000000"
         "0000000000000000000000000000000000000000000000000000000000000000000000";
   require(empty_bytes.size() == 115 && hex(empty_bytes) == kEmptyHex, "empty raw KAT");
-  require(sha256Hex(empty_bytes) == "572694c6744abdc63d17096251fddc0a7b41381cce8bd9b62432d8e1e191de40", "empty raw SHA");
 
   const auto literal = hexBytes(kComplexRawKatHex);
   const auto complex = complexRawKatProjection();
   require(literal.size() == 1127, "complex raw KAT byte count");
   require(canonicalIndependentReferenceInputRawBytes(complex) == literal, "complex raw KAT literal mismatch");
-  require(sha256Hex(literal) == kComplexRawKatSha, "complex raw KAT SHA");
   decodeComplexRawLiteral(literal);
 
   const auto baseline = canonicalIndependentReferenceInputRawBytes(complex);

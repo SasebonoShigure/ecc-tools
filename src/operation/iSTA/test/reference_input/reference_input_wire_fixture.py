@@ -509,7 +509,6 @@ def _raw_net(writer: CanonicalWriter, net: model.RawNet) -> None:
 def encode_canary_wire(
     family: str,
     case_name: str,
-    input_case_sha256: str,
     repeat_index: int,
     run_nonce: str,
     *,
@@ -524,7 +523,6 @@ def encode_canary_wire(
     family_index = model.CANARY_FAMILY_TOKENS.index(family)
     writer = CanonicalWriter()
     writer.string(f"{CANARY_PREFIX}{family}{CANARY_SUFFIX}")
-    writer.string(input_case_sha256)
     writer.u64(repeat_index)
     writer.string(run_nonce)
     writer.u64(1)

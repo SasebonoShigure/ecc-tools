@@ -34,7 +34,7 @@ using BufferTraceArtifactJsonParseResult = std::variant<BufferTraceArtifact, Buf
 [[nodiscard]] BufferTraceArtifactJsonParseResult parseBufferTraceArtifactJson(std::string_view json_text);
 
 // Writers validate first, emit deterministic compact JSON, and never project
-// generation evidence or integrity metadata into ReplayProgram.
+// generation-only evidence into ReplayProgram.
 [[nodiscard]] std::string replayProgramToJson(const ReplayProgram& program);
 [[nodiscard]] std::string replayTemplateToJson(const ReplayProgram& program);
 [[nodiscard]] std::string bufferTraceArtifactToJson(const BufferTraceArtifact& artifact);

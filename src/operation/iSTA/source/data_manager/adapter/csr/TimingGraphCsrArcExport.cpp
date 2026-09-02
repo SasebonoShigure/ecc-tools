@@ -28,108 +28,12 @@
 #include <utility>
 #include <vector>
 
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "TimingGraphCsrAdapterInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
 namespace ista::csr::detail {
 namespace {
-
-Transition convertTransition(ista::TransType transition)
-{
-  switch (transition) {
-    case ista::TransType::kNone:
-      return Transition::kNone;
-    case ista::TransType::kRise:
-      return Transition::kRise;
-    case ista::TransType::kFall:
-      return Transition::kFall;
-  }
-  malformed();
-}
-
-TimingSense convertSense(ista::TimingArcSense sense)
-{
-  switch (sense) {
-    case ista::TimingArcSense::kNone:
-      return TimingSense::kNoneUsesPositiveFallback;
-    case ista::TimingArcSense::kPositive:
-      return TimingSense::kPositiveUnate;
-    case ista::TimingArcSense::kNegative:
-      return TimingSense::kNegativeUnate;
-    case ista::TimingArcSense::kNonUnate:
-      return TimingSense::kNonUnate;
-  }
-  malformed();
-}
-
-TableVariable convertTableVariable(ista::TimingTableVariableType variable)
-{
-  switch (variable) {
-    case ista::TimingTableVariableType::kNone:
-      return TableVariable::kNone;
-    case ista::TimingTableVariableType::kInputTransition:
-      return TableVariable::kInputTransition;
-    case ista::TimingTableVariableType::kOutputCapacitance:
-      return TableVariable::kOutputCapacitance;
-    case ista::TimingTableVariableType::kConstrainedTransition:
-      return TableVariable::kConstrainedTransition;
-  }
-  malformed();
-}
-
-std::size_t transitionIndex(ista::TransType transition)
-{
-  switch (transition) {
-    case ista::TransType::kRise:
-      return 0;
-    case ista::TransType::kFall:
-      return 1;
-    case ista::TransType::kNone:
-      malformed();
-  }
-  malformed();
-}
-
-TimingTableSignature makeTableSignature(const ista::TimingTable& table)
-{
-  return {true, convertTableVariable(table.get_variable_type1()), convertTableVariable(table.get_variable_type2())};
-}
-
-std::array<TimingTableSignature, kTransitionCount> makeTableSignatures(const std::map<ista::TransType, ista::TimingTable>& tables)
-{
-  std::array<TimingTableSignature, kTransitionCount> result;
-  for (const auto& [transition, table] : tables) {
-    const std::size_t index = transitionIndex(transition);
-    result[index] = makeTableSignature(table);
-  }
-  return result;
-}
-
-LibraryArcSignature makeLibrarySignature(const ista::TimingArc& arc)
-{
-  if (!arc.get_check_table_map().empty())
-    malformed();
-  LibraryArcSignature result;
-  result.library_name = arc.get_library_name();
-  result.arc_index = arc.get_arc_idx();
-  result.sense = convertSense(arc.get_sense());
-  result.trigger_transition = convertTransition(arc.get_trigger_trans_type());
-  result.check_transition = convertTransition(arc.get_check_trans_type());
-  result.sdf_condition = arc.get_sdf_cond();
-  result.delay_tables = makeTableSignatures(arc.get_delay_table_map());
-  result.slew_tables = makeTableSignatures(arc.get_slew_table_map());
-  return result;
-}
-
-std::vector<LibraryArcSignature> makeLibrarySignatures(const ista::TimingCellArc& cell_arc)
-{
-  std::vector<LibraryArcSignature> result;
-  result.reserve(cell_arc.get_timing_arc_list().size());
-  for (const auto& timing_arc : cell_arc.get_timing_arc_list())
-    result.push_back(makeLibrarySignature(timing_arc));
-  return result;
-}
-
 const ista::Pin& requirePin(const GraphBuildState& state, const std::string& name)
 {
   const auto pin = state.database.get_pin_map().find(name);
@@ -146,44 +50,10 @@ NodeId requireNodeId(const GraphBuildState& state, const std::string& name)
   return node->second;
 }
 
-const ista::Instance& requireArcInstance(const GraphBuildState& state, const ista::Arc& arc, const ista::Pin& source, const ista::Pin& sink)
-{
-  if (source.get_is_port() || sink.get_is_port() || source.get_instance_name().empty() || source.get_instance_name() != sink.get_instance_name()
-      || arc.get_owner_name() != source.get_instance_name())
-    malformed();
-  const auto instance = state.database.get_instance_map().find(source.get_instance_name());
-  if (instance == state.database.get_instance_map().end() || instance->first != instance->second.get_instance_name())
-    malformed();
-  const auto source_owner = state.ordered_pin_owners.find(source.get_full_name());
-  const auto sink_owner = state.ordered_pin_owners.find(sink.get_full_name());
-  if (source_owner == state.ordered_pin_owners.end() || sink_owner == state.ordered_pin_owners.end() || source_owner->second != instance->first
-      || sink_owner->second != instance->first) {
-    malformed();
-  }
-  return instance->second;
-}
-
 const ista::TimingCell* findTimingCell(const GraphBuildState& state, const ista::Instance& instance)
 {
   const auto cell = state.database.get_timing_library().get_cell_map().find(instance.get_cell_name());
   return cell == state.database.get_timing_library().get_cell_map().end() ? nullptr : std::addressof(cell->second);
-}
-
-const ista::TimingCellArc& requireBoundCellArc(const ista::Arc& arc, const ista::TimingCell& cell)
-{
-  const ista::TimingCellArc* native_pointer = arc.get_timing_cell_arc();
-  if (native_pointer == nullptr)
-    malformed();
-  const ista::TimingCellArc* matched = nullptr;
-  for (const auto& candidate : cell.get_cell_arc_list()) {
-    if (std::addressof(candidate) == native_pointer) {
-      matched = std::addressof(candidate);
-      break;
-    }
-  }
-  if (matched == nullptr || !matched->get_is_timing_graph_arc())
-    malformed();
-  return *matched;
 }
 
 bool isInputLike(PinDirection direction)
@@ -194,74 +64,6 @@ bool isInputLike(PinDirection direction)
 bool isOutputLike(PinDirection direction)
 {
   return direction == PinDirection::kOutput || direction == PinDirection::kInout;
-}
-
-ArcKeyBase makeCellArcBase(const GraphBuildState& state, const ista::Arc& arc, const ista::Pin& source, const ista::Pin& sink)
-{
-  const auto& instance = requireArcInstance(state, arc, source, sink);
-  const auto* cell = findTimingCell(state, instance);
-  const bool fallback_cell = cell == nullptr || cell->get_cell_arc_list().empty();
-  const bool raw_source_empty = arc.get_library_source_port().empty();
-  const bool raw_sink_empty = arc.get_library_sink_port().empty();
-
-  ArcKeyBase result;
-  result.source = state.snapshot.nodes[requireNodeId(state, source.get_full_name()).value()].key;
-  result.sink = state.snapshot.nodes[requireNodeId(state, sink.get_full_name()).value()].key;
-  result.kind = ArcKind::kCell;
-  result.owner_name = instance.get_instance_name();
-
-  if (arc.get_timing_cell_arc() == nullptr) {
-    if (!fallback_cell || !raw_source_empty || !raw_sink_empty || source.get_full_name() == sink.get_full_name()
-        || !isInputLike(convertPinDirection(source.get_direction())) || !isOutputLike(convertPinDirection(sink.get_direction())))
-      malformed();
-    result.library_source_port = source.get_pin_name();
-    result.library_sink_port = sink.get_pin_name();
-    return result;
-  }
-
-  if (fallback_cell || raw_source_empty || raw_sink_empty)
-    malformed();
-  const auto& cell_arc = requireBoundCellArc(arc, *cell);
-  if (arc.get_library_source_port() != source.get_pin_name() || arc.get_library_sink_port() != sink.get_pin_name()
-      || arc.get_library_source_port() != cell_arc.get_source_port() || arc.get_library_sink_port() != cell_arc.get_sink_port())
-    malformed();
-  result.library_source_port = arc.get_library_source_port();
-  result.library_sink_port = arc.get_library_sink_port();
-  result.library_arcs = makeLibrarySignatures(cell_arc);
-  return result;
-}
-
-ArcKeyBase makeNetArcBase(const GraphBuildState& state, const ista::Arc& arc, const ista::Pin& source, const ista::Pin& sink)
-{
-  if (arc.get_timing_cell_arc() != nullptr || !arc.get_library_source_port().empty() || !arc.get_library_sink_port().empty())
-    malformed();
-  if (source.get_net_name().empty() || source.get_net_name() != sink.get_net_name() || arc.get_owner_name() != source.get_net_name())
-    malformed();
-  const auto net = state.database.get_net_map().find(arc.get_owner_name());
-  if (net == state.database.get_net_map().end() || net->first != net->second.get_net_name())
-    malformed();
-  return {state.snapshot.nodes[requireNodeId(state, source.get_full_name()).value()].key,
-          state.snapshot.nodes[requireNodeId(state, sink.get_full_name()).value()].key,
-          ArcKind::kNet,
-          arc.get_owner_name(),
-          {},
-          {},
-          {}};
-}
-
-ArcKeyBase makeArcBase(const GraphBuildState& state, const ista::Arc& arc)
-{
-  const auto& source = requirePin(state, arc.get_source_pin());
-  const auto& sink = requirePin(state, arc.get_sink_pin());
-  switch (arc.get_type()) {
-    case ista::ArcType::kCell:
-      return makeCellArcBase(state, arc, source, sink);
-    case ista::ArcType::kNet:
-      return makeNetArcBase(state, arc, source, sink);
-    case ista::ArcType::kNone:
-      malformed();
-  }
-  malformed();
 }
 
 using CellArcCounts = std::map<std::pair<std::string, std::string>, std::size_t>;
@@ -352,7 +154,11 @@ void exportArcs(GraphBuildState& state)
   std::vector<ArcKeyBase> bases;
   bases.reserve(state.database.get_arc_list().size());
   for (const auto& arc : state.database.get_arc_list())
-    bases.push_back(makeArcBase(state, arc));
+    bases.push_back(projectCanonicalArcKeyBase(
+        CanonicalArcKeyContext{state.database, state.snapshot.nodes,
+                               state.node_ids_by_full_name,
+                               state.ordered_pin_owners},
+        arc));
   try {
     state.native_arc_keys = assignParallelOrdinals(bases);
   } catch (const std::invalid_argument&) {

@@ -205,6 +205,23 @@ void verifySignatureFailures()
     auto& child = db.get_timing_library().get_cell_map().at("BUF_X1").get_cell_arc_list().at(0).get_timing_arc_list().at(0);
     child.get_delay_table_map().emplace(ista::TransType::kNone, ista::TimingTable{});
   });
+  expectMalformed("unknown timing sense", NativeGraphFixtureCase::kBoundSignature, [](ista::Database& db) {
+    auto& child = db.get_timing_library().get_cell_map().at("BUF_X1").get_cell_arc_list().at(0).get_timing_arc_list().at(0);
+    child.set_sense(static_cast<ista::TimingArcSense>(99));
+  });
+  expectMalformed("unknown trigger transition", NativeGraphFixtureCase::kBoundSignature, [](ista::Database& db) {
+    auto& child = db.get_timing_library().get_cell_map().at("BUF_X1").get_cell_arc_list().at(0).get_timing_arc_list().at(0);
+    child.set_trigger_trans_type(static_cast<ista::TransType>(99));
+  });
+  expectMalformed("unknown check transition", NativeGraphFixtureCase::kBoundSignature, [](ista::Database& db) {
+    auto& child = db.get_timing_library().get_cell_map().at("BUF_X1").get_cell_arc_list().at(0).get_timing_arc_list().at(0);
+    child.set_check_trans_type(static_cast<ista::TransType>(99));
+  });
+  expectMalformed("unknown table variable", NativeGraphFixtureCase::kBoundSignature, [](ista::Database& db) {
+    auto& table = db.get_timing_library().get_cell_map().at("BUF_X1").get_cell_arc_list().at(0).get_timing_arc_list().at(0).get_delay_table_map().at(
+        ista::TransType::kRise);
+    table.set_variable_type1(static_cast<ista::TimingTableVariableType>(99));
+  });
   expectMalformed("graph child check table", NativeGraphFixtureCase::kBoundSignature, [](ista::Database& db) {
     auto& child = db.get_timing_library().get_cell_map().at("BUF_X1").get_cell_arc_list().at(0).get_timing_arc_list().at(0);
     child.get_check_table_map().emplace(ista::TransType::kRise, ista::TimingTable{});

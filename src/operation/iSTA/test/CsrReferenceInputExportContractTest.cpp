@@ -15,6 +15,7 @@
 #include <variant>
 #include <vector>
 
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "CsrFingerprint.hpp"
 #include "CsrReferenceFingerprintPayload.hpp"
 #include "CsrReferenceInputRawProjection.hpp"
@@ -136,6 +137,9 @@ void verifyRichChain()
 {
   constexpr std::uint64_t kToken = 0x1234;
   auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
+  const ReferencedLibraryCellModel focused
+      = detail::projectCanonicalReferencedLibraryCell(
+          fixture.database(), "DFF_X1");
   const CsrReferenceInput first = exportWithoutNativeWrites(fixture, referenceInputTestContext(), kToken, "rich chain");
   const CsrReferenceInput second = exportWithoutNativeWrites(fixture, referenceInputTestContext(), kToken, "rich chain repeat");
   require(canonicalIndependentReferenceInputBytes(first) == canonicalIndependentReferenceInputBytes(second), "rich chain repeat changed the candidate");
@@ -155,6 +159,7 @@ void verifyRichChain()
 
   require(first.referenced_library_cells.size() == 1 && first.referenced_library_cells[0].present, "referenced Liberty closure is incomplete");
   const auto& cell = first.referenced_library_cells[0];
+  require(focused == cell, "focused cell projector differs from full ReferenceInput export");
   require(cell.cell_arcs.size() == 2 && cell.timing_checks.size() == 1, "referenced Liberty arc/check closure has the wrong shape");
   const auto& present_empty = cell.cell_arcs[0].transfer.children[0].delay_tables[0];
   require(present_empty.present && present_empty.values.empty(), "present-empty table collapsed into missing");

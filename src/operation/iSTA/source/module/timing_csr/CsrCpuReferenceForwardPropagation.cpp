@@ -70,29 +70,25 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
   return CsrCpuReferenceStageStatus::kSuccess;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus dynamicPass(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+[[nodiscard]] CsrCpuReferenceStageStatus dynamicPass(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  if (input.out_row_offsets.size() != work.node_count + 1)
-    return CsrCpuReferenceStageStatus::kInvariantViolation;
-
   for (NodeId source : work.result.timing_order) {
     if (source.value() >= work.node_count)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     const std::size_t source_index = static_cast<std::size_t>(source.value());
-    const std::uint64_t begin = input.out_row_offsets[source_index];
-    const std::uint64_t end = input.out_row_offsets[source_index + 1];
-    if (begin > end || end > input.out_arc_ids.size())
-      return CsrCpuReferenceStageStatus::kInvariantViolation;
-
-    for (std::uint64_t offset = begin; offset < end; ++offset) {
-      const ArcId arc_id = input.out_arc_ids[offset];
-      if (arc_id.value() >= input.arcs.size())
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
-      const auto& arc = input.arcs[arc_id.value()];
+    std::optional<CsrCpuReferenceStageStatus> callback_status;
+    const EdgeVisitResult visit = edges.forEachOutgoing(source, [&](const EdgeEntry& entry) {
+      recordStorageVisit(work.telemetry.forward_propagation, entry.storage_kind);
+      const auto payload = edges.arc(entry.arc_id);
+      if (!payload) {
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
+      const ArcSemanticPayload& arc = payload.value();
       if (arc.source != source || arc.sink.value() >= work.node_count)
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
       if (!arc.eligibility.data_slew)
-        continue;
+        return callback_status ? EdgeVisitResult::fail(CsrViewError::kCallbackError) : EdgeVisitResult::continueVisit();
 
       for (AnalysisMode analysis : kAnalyses) {
         for (Transition input_transition : kTransitions) {
@@ -102,23 +98,31 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
           const double source_slew = work.result.data_slews.values[source_lane];
           for (Transition output_transition : kTransitions) {
             CsrDynamicArcValue value;
-            CsrCpuReferenceStageStatus status = evaluateCsrDynamicArc(input, arc_id, analysis, input_transition, output_transition, source_slew, work, value);
-            if (status != CsrCpuReferenceStageStatus::kSuccess)
-              return status;
+            CsrCpuReferenceStageStatus status
+                = evaluateCsrDynamicArc(edges, entry.arc_id, analysis, input_transition, output_transition, source_slew, work, value);
+            if (status != CsrCpuReferenceStageStatus::kSuccess) {
+              callback_status = status;
+              return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+            }
             if (!value.present)
               continue;
             status = updateSinkSlew(work, arc.sink, analysis, output_transition, value.slew);
-            if (status != CsrCpuReferenceStageStatus::kSuccess)
-              return status;
+            if (status != CsrCpuReferenceStageStatus::kSuccess) {
+              callback_status = status;
+              return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+            }
           }
         }
       }
-    }
+      return EdgeVisitResult::continueVisit();
+    });
+    if (visit.control == EdgeVisitControl::kError)
+      return callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation);
   }
   return CsrCpuReferenceStageStatus::kSuccess;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus propagateScalar(NodeId source, ArcId arc_id, const ArcRecord& arc, CsrCpuReferenceWorkState& work)
+[[nodiscard]] CsrCpuReferenceStageStatus propagateScalar(NodeId source, ArcId arc_id, const ArcSemanticPayload& arc, CsrCpuReferenceWorkState& work)
 {
   const std::size_t source_index = static_cast<std::size_t>(source.value());
   const std::size_t sink_index = static_cast<std::size_t>(arc.sink.value());
@@ -202,7 +206,7 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
   return std::isfinite(candidate) ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kNumericFailure;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus propagatePathLane(NodeId source, ArcId arc_id, const ArcRecord& arc, AnalysisMode analysis, PathSource path_source,
+[[nodiscard]] CsrCpuReferenceStageStatus propagatePathLane(NodeId source, ArcId arc_id, const ArcSemanticPayload& arc, AnalysisMode analysis, PathSource path_source,
                                                            Transition input_transition, Transition output_transition, CsrCpuReferenceWorkState& work)
 {
   const std::size_t arc_index = static_cast<std::size_t>(arc_id.value());
@@ -258,45 +262,59 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
   return CsrCpuReferenceStageStatus::kSuccess;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus arrivalAndPathPass(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+[[nodiscard]] CsrCpuReferenceStageStatus arrivalAndPathPass(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
   for (NodeId source : work.result.timing_order) {
-    const std::size_t source_index = static_cast<std::size_t>(source.value());
-    const std::uint64_t begin = input.out_row_offsets[source_index];
-    const std::uint64_t end = input.out_row_offsets[source_index + 1];
-    for (std::uint64_t offset = begin; offset < end; ++offset) {
-      const ArcId arc_id = input.out_arc_ids[offset];
-      const auto& arc = input.arcs[arc_id.value()];
+    std::optional<CsrCpuReferenceStageStatus> callback_status;
+    const EdgeVisitResult visit = edges.forEachOutgoing(source, [&](const EdgeEntry& entry) {
+      recordStorageVisit(work.telemetry.forward_propagation, entry.storage_kind);
+      const auto payload = edges.arc(entry.arc_id);
+      if (!payload) {
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
+      const ArcSemanticPayload& arc = payload.value();
+      if (arc.source != source || arc.sink.value() >= work.node_count) {
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
       if (!arc.eligibility.data_arrival)
-        continue;
+        return EdgeVisitResult::continueVisit();
 
-      CsrCpuReferenceStageStatus status = propagateScalar(source, arc_id, arc, work);
-      if (status != CsrCpuReferenceStageStatus::kSuccess)
-        return status;
+      CsrCpuReferenceStageStatus status = propagateScalar(source, entry.arc_id, arc, work);
+      if (status != CsrCpuReferenceStageStatus::kSuccess) {
+        callback_status = status;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
       for (AnalysisMode analysis : kAnalyses) {
         for (PathSource path_source : kPathSources) {
           for (Transition input_transition : kTransitions) {
             for (Transition output_transition : kTransitions) {
-              status = propagatePathLane(source, arc_id, arc, analysis, path_source, input_transition, output_transition, work);
-              if (status != CsrCpuReferenceStageStatus::kSuccess)
-                return status;
+              status = propagatePathLane(source, entry.arc_id, arc, analysis, path_source, input_transition, output_transition, work);
+              if (status != CsrCpuReferenceStageStatus::kSuccess) {
+                callback_status = status;
+                return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+              }
             }
           }
         }
       }
-    }
+      return EdgeVisitResult::continueVisit();
+    });
+    if (visit.control == EdgeVisitControl::kError)
+      return callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation);
   }
   return CsrCpuReferenceStageStatus::kSuccess;
 }
 
 }  // namespace
 
-CsrCpuReferenceStageStatus propagateCsrCpuReferenceForward(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+CsrCpuReferenceStageStatus propagateCsrCpuReferenceForward(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  CsrCpuReferenceStageStatus status = dynamicPass(input, work);
+  CsrCpuReferenceStageStatus status = dynamicPass(edges, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
-  return arrivalAndPathPass(input, work);
+  return arrivalAndPathPass(edges, work);
 }
 
 }  // namespace ista::csr

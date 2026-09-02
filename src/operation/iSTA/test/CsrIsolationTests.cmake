@@ -22,6 +22,8 @@
       "${ISTA_SOURCE}/module/timing_csr/CsrCpuReferenceArcTransfer.cpp"
       "${ISTA_SOURCE}/module/timing_csr/CsrCpuReferenceForwardPropagation.cpp"
       "${ISTA_SOURCE}/module/timing_csr/CsrCpuReferenceRequiredPropagation.cpp"
+      "${ISTA_SOURCE}/module/timing_csr/FlatCsrEdgeView.cpp"
+      "${ISTA_SOURCE}/module/timing_csr/FlatTimingPayloadView.cpp"
   )
   get_target_property(ISTA_CSR_CORE_ACTUAL_SOURCES ista_timing_csr_core SOURCES)
   ista_assert_same_inventory(
@@ -45,6 +47,12 @@
       "${ISTA_SOURCE}/module/timing_csr/CsrReferenceValidator.hpp"
       "${ISTA_SOURCE}/module/timing_csr/CsrReferenceValidatorDetail.hpp"
       "${ISTA_SOURCE}/module/timing_csr/CsrReferenceInputValidatorInternal.hpp"
+      "${ISTA_SOURCE}/module/timing_csr/ActiveCsrEdgeView.hpp"
+      "${ISTA_SOURCE}/module/timing_csr/TimingPayloadView.hpp"
+      "${ISTA_SOURCE}/module/timing_csr/FlatCsrEdgeView.hpp"
+      "${ISTA_SOURCE}/module/timing_csr/FlatCsrEdgeView.cpp"
+      "${ISTA_SOURCE}/module/timing_csr/FlatTimingPayloadView.hpp"
+      "${ISTA_SOURCE}/module/timing_csr/FlatTimingPayloadView.cpp"
       "${ISTA_SOURCE}/module/timing_csr/CsrFifoLevelization.hpp"
       "${ISTA_SOURCE}/module/timing_csr/CsrFifoLevelization.cpp"
       "${ISTA_SOURCE}/module/timing_csr/CsrReferenceValidator.cpp"
@@ -81,6 +89,8 @@
       "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/CsrCpuReferenceArcTransfer.cpp.o"
       "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/CsrCpuReferenceForwardPropagation.cpp.o"
       "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/CsrCpuReferenceRequiredPropagation.cpp.o"
+      "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/FlatCsrEdgeView.cpp.o"
+      "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/FlatTimingPayloadView.cpp.o"
       "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/__/__/data_manager/adapter/csr/CsrFingerprint.cpp.o"
       "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/__/__/data_manager/adapter/csr/CsrReferenceCanonicalEncoder.cpp.o"
       "src/operation/iSTA/source/module/timing_csr/CMakeFiles/ista_timing_csr_core.dir/__/__/data_manager/adapter/csr/CsrReferenceFingerprintPayload.cpp.o"
@@ -216,6 +226,8 @@
   )
 
   set(ISTA_CSR_ADAPTER_EXPECTED_SOURCES
+      "${ISTA_SOURCE}/data_manager/adapter/csr/CanonicalTimingRecordProjector.cpp"
+      "${ISTA_SOURCE}/data_manager/adapter/csr/CanonicalTimingRecordProjectorInternal.cpp"
       "${ISTA_SOURCE}/data_manager/adapter/csr/CsrGraphEncoding.cpp"
       "${ISTA_SOURCE}/data_manager/adapter/csr/CsrGraphValidator.cpp"
       "${ISTA_SOURCE}/data_manager/adapter/csr/TimingGraphCsrAdapter.cpp"
@@ -241,6 +253,8 @@
       "ista_timing_graph_csr_adapter source inventory"
   )
   set(ISTA_CSR_ADAPTER_EXPECTED_OBJECTS
+      "src/operation/iSTA/source/data_manager/adapter/csr/CMakeFiles/ista_timing_graph_csr_adapter.dir/CanonicalTimingRecordProjector.cpp.o"
+      "src/operation/iSTA/source/data_manager/adapter/csr/CMakeFiles/ista_timing_graph_csr_adapter.dir/CanonicalTimingRecordProjectorInternal.cpp.o"
       "src/operation/iSTA/source/data_manager/adapter/csr/CMakeFiles/ista_timing_graph_csr_adapter.dir/CsrGraphEncoding.cpp.o"
       "src/operation/iSTA/source/data_manager/adapter/csr/CMakeFiles/ista_timing_graph_csr_adapter.dir/CsrGraphValidator.cpp.o"
       "src/operation/iSTA/source/data_manager/adapter/csr/CMakeFiles/ista_timing_graph_csr_adapter.dir/TimingGraphCsrAdapter.cpp.o"
@@ -261,6 +275,9 @@
       "src/operation/iSTA/source/data_manager/adapter/csr/CMakeFiles/ista_timing_graph_csr_adapter.dir/CsrSessionSnapshotAdapter.cpp.o"
   )
   set(ISTA_CSR_ADAPTER_ALLOWED_FILES
+      "${ISTA_SOURCE}/data_manager/adapter/csr/CanonicalTimingRecordProjector.cpp"
+      "${ISTA_SOURCE}/data_manager/adapter/csr/CanonicalTimingRecordProjectorInternal.cpp"
+      "${ISTA_SOURCE}/data_manager/adapter/csr/CanonicalTimingRecordProjectorInternal.hpp"
       "${ISTA_SOURCE}/data_manager/adapter/csr/CsrCaptureMetadata.hpp"
       "${ISTA_SOURCE}/data_manager/adapter/csr/CsrClockSeedExport.cpp"
       "${ISTA_SOURCE}/data_manager/adapter/csr/CsrConstraintExport.cpp"
@@ -390,7 +407,13 @@
       ISTA_CSR_ADAPTER_INTERFACE_INCLUDES ista_timing_graph_csr_adapter INTERFACE_INCLUDE_DIRECTORIES
   )
   set(ISTA_CSR_EXPECTED_EMPTY)
-  set(ISTA_CSR_EXPECTED_CORE_OPTIONS -ffp-contract=off)
+  set(ISTA_CSR_EXPECTED_CORE_OPTIONS
+      -Wall
+      -Wextra
+      -Werror
+      -pedantic
+      -ffp-contract=off
+  )
   set(
       ISTA_CSR_EXPECTED_ADAPTER_LINKS
       ista_timing_csr_core

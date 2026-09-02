@@ -29,6 +29,25 @@
 #include "TimingGraphCsrAdapter.hpp"
 
 namespace ista::csr::detail {
+namespace {
+thread_local std::uint64_t native_full_graph_exports = 0;
+thread_local std::uint64_t native_full_reference_exports = 0;
+}  // namespace
+
+NativeFullExportCounters currentNativeFullExportCounters() noexcept
+{
+  return {native_full_graph_exports, native_full_reference_exports};
+}
+
+void noteNativeFullGraphExport() noexcept
+{
+  ++native_full_graph_exports;
+}
+
+void noteNativeFullReferenceExport() noexcept
+{
+  ++native_full_reference_exports;
+}
 
 CsrReferenceInputExportFailure ReferenceExportProgress::failure(CsrCaptureCode code) const
 {
@@ -208,6 +227,7 @@ namespace ista::csr {
 CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Database& database, const StaAnalysisContext& canonical_context,
                                                                std::uint64_t caller_session_token)
 {
+  detail::noteNativeFullReferenceExport();
   if (caller_session_token == 0)
     throw std::invalid_argument("CSR reference input export requires a nonzero session token");
 

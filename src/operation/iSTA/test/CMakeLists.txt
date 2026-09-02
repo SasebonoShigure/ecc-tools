@@ -201,6 +201,7 @@ if(BUILD_TESTING)
   include("${CMAKE_CURRENT_SOURCE_DIR}/TimingEditTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/TimingEditOracleTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/BufferTraceTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTests.cmake")
 
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceTests.cmake")

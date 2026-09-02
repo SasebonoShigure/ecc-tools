@@ -16,14 +16,32 @@
 // ***************************************************************************************
 #pragma once
 
+#include "ActiveCsrEdgeView.hpp"
 #include "CsrReferenceTypes.hpp"
+#include "TimingPayloadView.hpp"
 
 namespace ista::csr {
+struct CsrCpuReferencePhaseTimings
+{
+  double levelization_ms{0.0};
+  double propagation_ms{0.0};
+};
+
+struct CsrComputationWithTelemetry
+{
+  CsrComputationResult computation;
+  CsrTraversalTelemetry telemetry;
+  CsrCpuReferencePhaseTimings phase_timings;
+};
+
 
 class CsrCpuReferenceBackend final
 {
  public:
   [[nodiscard]] CsrComputationResult compute(const CsrReferenceInput& input) const;
+  [[nodiscard]] CsrComputationResult compute(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads) const;
+  [[nodiscard]] CsrComputationWithTelemetry computeWithTelemetry(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads) const;
+  [[nodiscard]] CsrComputationWithTelemetry computeWithTelemetry(const CsrReferenceInput& input) const;
 };
 
 }  // namespace ista::csr

@@ -24,7 +24,9 @@
 #include <utility>
 #include <vector>
 
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "CsrGraphValidator.hpp"
+#include "CsrReferenceInputAdapterInternal.hpp"
 #include "TimingGraphCsrAdapterInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
@@ -76,14 +78,6 @@ void validateTimingPointCoverage(const ista::Database& database)
   }
 }
 
-const ista::Instance& requireInstance(const ista::Database& database, const ista::Pin& pin)
-{
-  const auto match = database.get_instance_map().find(pin.get_instance_name());
-  if (match == database.get_instance_map().end())
-    malformed();
-  return match->second;
-}
-
 void validateRoleName(const std::string& role, const std::string& instance_name, const OrderedPinOwners& owners)
 {
   if (role.empty())
@@ -112,48 +106,6 @@ OrderedPinOwners indexOrderedPinOwners(const ista::Database& database)
   return owners;
 }
 
-NodeRecord makeNodeRecord(const ista::Database& database, const std::string& map_name, const ista::Pin& pin, const std::set<std::string>& starts,
-                          const std::set<std::string>& ends, const OrderedPinOwners& owners)
-{
-  if (map_name.empty() || pin.get_full_name() != map_name)
-    malformed();
-
-  NodeRecord result;
-  result.direction = convertPinDirection(pin.get_direction());
-  result.net_name = pin.get_net_name();
-  result.is_port = pin.get_is_port();
-  result.is_startpoint = starts.contains(map_name);
-  result.is_endpoint = ends.contains(map_name);
-
-  if (!result.net_name.empty()) {
-    const auto net = database.get_net_map().find(result.net_name);
-    if (net == database.get_net_map().end() || net->first != net->second.get_net_name())
-      malformed();
-  }
-
-  if (result.is_port) {
-    if (pin.get_pin_name() != map_name || !pin.get_instance_name().empty())
-      malformed();
-    result.key = {NodeKind::kPort, map_name, {}, {}};
-    return result;
-  }
-
-  if (pin.get_pin_name().empty() || pin.get_instance_name().empty() || map_name != pin.get_instance_name() + ":" + pin.get_pin_name())
-    malformed();
-  const auto& instance = requireInstance(database, pin);
-  const auto owner = owners.find(map_name);
-  if (owner == owners.end() || owner->second != instance.get_instance_name())
-    malformed();
-
-  result.key = {NodeKind::kInstancePin, map_name, pin.get_instance_name(), pin.get_pin_name()};
-  result.instance_cell = instance.get_cell_name();
-  result.is_sequential = instance.get_is_sequential();
-  result.is_clock_pin = !instance.get_clock_pin_name().empty() && map_name == instance.get_clock_pin_name();
-  result.is_data_pin = !instance.get_data_pin_name().empty() && map_name == instance.get_data_pin_name();
-  result.is_output_pin = !instance.get_output_pin_name().empty() && map_name == instance.get_output_pin_name();
-  return result;
-}
-
 void assignCanonicalNodes(GraphBuildState& state, std::vector<NodeRecord> nodes)
 {
   std::ranges::sort(nodes, [](const NodeRecord& lhs, const NodeRecord& rhs) { return nodeKeyLess(lhs.key, rhs.key); });
@@ -170,30 +122,7 @@ void assignCanonicalNodes(GraphBuildState& state, std::vector<NodeRecord> nodes)
 
 InstanceRecord makeInstanceRecord(const GraphBuildState& state, const std::string& map_name, const ista::Instance& instance)
 {
-  if (map_name != instance.get_instance_name())
-    malformed();
-
-  InstanceRecord result;
-  result.instance_name = map_name;
-  result.cell_name = instance.get_cell_name();
-  result.is_sequential = instance.get_is_sequential();
-  result.has_timing_checks = !instance.get_check_arc_list().empty();
-  result.is_clock_gating = instance.get_is_clock_gating();
-
-  const auto cell = state.database.get_timing_library().get_cell_map().find(result.cell_name);
-  if (cell != state.database.get_timing_library().get_cell_map().end())
-    result.is_macro = cell->second.get_is_macro();
-
-  for (const auto& pin_name : instance.get_pin_name_list()) {
-    const auto pin = state.database.get_pin_map().find(pin_name);
-    const auto id = state.node_ids_by_full_name.find(pin_name);
-    if (pin == state.database.get_pin_map().end() || id == state.node_ids_by_full_name.end() || pin->second.get_is_port()
-        || pin->second.get_instance_name() != map_name)
-      malformed();
-    result.ordered_pins.push_back(id->second);
-  }
-
-  return result;
+  return projectCanonicalInstanceRecord(state.database, map_name, instance, state.node_ids_by_full_name);
 }
 
 }  // namespace
@@ -224,7 +153,8 @@ void exportNodesAndInstances(GraphBuildState& state)
   std::vector<NodeRecord> nodes;
   nodes.reserve(state.database.get_pin_map().size());
   for (const auto& [name, pin] : state.database.get_pin_map())
-    nodes.push_back(makeNodeRecord(state.database, name, pin, starts, ends, state.ordered_pin_owners));
+    nodes.push_back(projectCanonicalNodeRecord(state.database, name, pin, starts, ends,
+                                               state.ordered_pin_owners));
   assignCanonicalNodes(state, std::move(nodes));
 
   for (const auto& [name, instance] : state.database.get_instance_map())
@@ -237,6 +167,7 @@ namespace ista::csr {
 
 CsrGraphExportResult exportCsrGraphSnapshot(const ista::Database& database)
 {
+  detail::noteNativeFullGraphExport();
   try {
     detail::GraphBuildState state(database);
     detail::exportNodesAndInstances(state);

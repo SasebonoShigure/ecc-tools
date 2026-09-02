@@ -89,21 +89,21 @@ void resetClockSoa(ClockResultSoa& clock, std::size_t lane_count)
   return std::all_of(seen.begin(), seen.end(), [](std::uint8_t value) { return value == 1; });
 }
 
-[[nodiscard]] const ClockConstraintModel* findDirectClock(const CsrReferenceInput& input, NodeId node)
+[[nodiscard]] const ClockConstraintModel* findDirectClock(const TimingPayloadView& payloads, NodeId node)
 {
-  for (const auto& clock : input.clocks)
+  for (const auto& clock : payloads.clocks())
     for (const auto& source : clock.ordered_sources)
       if (source.resolved_node == node)
         return &clock;
   return nullptr;
 }
 
-[[nodiscard]] std::optional<ClockTagId> findClockTag(const CsrReferenceInput& input, const std::string& tag)
+[[nodiscard]] std::optional<ClockTagId> findClockTag(const TimingPayloadView& payloads, const std::string& tag)
 {
-  const auto found = std::find(input.clock_tags.begin(), input.clock_tags.end(), tag);
-  if (found == input.clock_tags.end())
+  const auto found = std::find(payloads.clockTags().begin(), payloads.clockTags().end(), tag);
+  if (found == payloads.clockTags().end())
     return std::nullopt;
-  return ClockTagId{static_cast<std::uint64_t>(found - input.clock_tags.begin())};
+  return ClockTagId{static_cast<std::uint64_t>(found - payloads.clockTags().begin())};
 }
 
 void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
@@ -114,9 +114,9 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
   clock.slews.values[lane] = 0.0;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus initializeIdealClocks(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+[[nodiscard]] CsrCpuReferenceStageStatus initializeIdealClocks(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
-  for (const auto& clock : input.clocks) {
+  for (const auto& clock : payloads.clocks()) {
     for (const auto& source : clock.ordered_sources) {
       if (!source.resolved_node)
         continue;
@@ -141,18 +141,18 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
   return CsrCpuReferenceStageStatus::kSuccess;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus initializeStarts(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+[[nodiscard]] CsrCpuReferenceStageStatus initializeStarts(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
-  if (input.start_seeds.size() != input.ordered_start_ids.size())
+  if (payloads.startSeeds().size() != payloads.orderedStartIds().size())
     return CsrCpuReferenceStageStatus::kInvariantViolation;
 
-  for (std::size_t index = 0; index < input.start_seeds.size(); ++index) {
-    const auto& seed = input.start_seeds[index];
+  for (std::size_t index = 0; index < payloads.startSeeds().size(); ++index) {
+    const auto& seed = payloads.startSeeds()[index];
     const std::uint64_t node = seed.seed_node.value();
-    if (node >= work.node_count || input.ordered_start_ids[index] != seed.seed_node)
+    if (node >= work.node_count || payloads.orderedStartIds()[index] != seed.seed_node)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
 
-    const ClockConstraintModel* direct_clock = findDirectClock(input, seed.seed_node);
+    const ClockConstraintModel* direct_clock = findDirectClock(payloads, seed.seed_node);
     for (AnalysisMode analysis : kAnalyses) {
       for (Transition transition : kTransitions) {
         const std::size_t lane = csrNodeLane(node, analysis, transition);
@@ -179,7 +179,7 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
       continue;
     if (*seed.path_source != PathSource::kInput || seed.availability != StartSeedAvailability::kMaterialized)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
-    const std::optional<ClockTagId> clock_tag = findClockTag(input, seed.clock_tag);
+    const std::optional<ClockTagId> clock_tag = findClockTag(payloads, seed.clock_tag);
     if (!clock_tag)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
 
@@ -210,10 +210,10 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
 
 }  // namespace
 
-CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const CsrReferenceInput& input, const CsrFifoLevelization& replay, CsrCpuReferenceWorkState& work)
+CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay, CsrCpuReferenceWorkState& work)
 {
-  work.node_count = input.nodes.size();
-  work.clock_tag_count = input.clock_tags.size();
+  work.node_count = payloads.nodeCount();
+  work.clock_tag_count = payloads.clockTags().size();
   if (!validateReplay(replay, work.node_count) || !checkedMultiply(work.node_count, kAnalysisCount * kTransitionCount, work.node_lane_count)
       || !checkedMultiply(work.node_count, kAnalysisCount * kPathSourceCount * kTransitionCount, work.path_row_count)
       || work.path_row_count == std::numeric_limits<std::size_t>::max())
@@ -240,10 +240,10 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const CsrReferenceInp
   work.path_rows.assign(work.path_row_count, {});
   work.result.paths.row_offsets.assign(work.path_row_count + 1, 0);
 
-  CsrCpuReferenceStageStatus status = initializeIdealClocks(input, work);
+  CsrCpuReferenceStageStatus status = initializeIdealClocks(payloads, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
-  return initializeStarts(input, work);
+  return initializeStarts(payloads, work);
 }
 
 }  // namespace ista::csr

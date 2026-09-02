@@ -23,6 +23,7 @@ set(ISTA_BENCHMARK ${HOME_ISTA}/benchmark)
 add_subdirectory(${ISTA_INTERFACE})
 add_subdirectory(${ISTA_SOURCE})
 add_subdirectory(${ISTA_BENCHMARK}/buffer_trace)
+add_subdirectory(${ISTA_BENCHMARK}/dual_csr)
 add_subdirectory(${ISTA_TEST})
 
 ########################################################

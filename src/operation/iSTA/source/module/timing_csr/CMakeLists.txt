@@ -5,6 +5,8 @@ add_library(ista_timing_csr_core
     ${ISTA_TIMING_CSR_ADAPTER}/CsrFingerprint.cpp
     ${ISTA_TIMING_CSR_ADAPTER}/CsrReferenceCanonicalEncoder.cpp
     ${ISTA_TIMING_CSR_ADAPTER}/CsrReferenceFingerprintPayload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/FlatCsrEdgeView.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/FlatTimingPayloadView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrSnapshotIdentityValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrFifoLevelization.cpp
@@ -27,7 +29,7 @@ target_include_directories(ista_timing_csr_core
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_compile_options(ista_timing_csr_core PRIVATE -ffp-contract=off)
+target_compile_options(ista_timing_csr_core PRIVATE -Wall -Wextra -Werror -pedantic -ffp-contract=off)
 
 # This target is intentionally DB-free.  Do not add ista_data_manager,
 # ista_module, ista_interface, native oracle, or capture metadata dependencies.

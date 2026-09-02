@@ -75,9 +75,19 @@ ista_add_step5_target(
     ISTA_STEP5_PUBLIC_HEADER_SOURCES
 )
 
+set(ISTA_STEP5_GENERIC_VIEW_SOURCES
+    CsrGenericViewContractTest.cpp
+    CsrCpuReferenceTestFixture.cpp
+)
+ista_add_step5_target(
+    ista_csr_generic_view_contract_test
+    ISTA_STEP5_GENERIC_VIEW_SOURCES
+)
+
 foreach(STEP5_UNIT_TARGET IN ITEMS
         ista_csr_table_lookup_contract_test
         ista_csr_cpu_reference_contract_test
+        ista_csr_generic_view_contract_test
         ista_csr_cpu_reference_public_headers_test)
   add_test(NAME "${STEP5_UNIT_TARGET}" COMMAND "${STEP5_UNIT_TARGET}")
   set_tests_properties(
@@ -85,7 +95,7 @@ foreach(STEP5_UNIT_TARGET IN ITEMS
   )
 endforeach()
 
-set(ISTA_STEP5_PROPERTY_SEEDS 1 7 42 20260820 0xdeadbeef)
+set(ISTA_STEP5_PROPERTY_SEEDS 1 7 42 20260901 0xdeadbeef)
 foreach(PROPERTY_SEED IN LISTS ISTA_STEP5_PROPERTY_SEEDS)
   add_test(
       NAME "ista_csr_cpu_reference_property_seed_${PROPERTY_SEED}"

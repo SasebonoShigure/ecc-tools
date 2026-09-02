@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include <algorithm>
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include <cstddef>
 #include <numeric>
 #include <optional>
@@ -421,10 +422,8 @@ void exportEligibility(ReferenceBuildState& state)
   for (std::size_t index = 0; index < state.input.arcs.size(); ++index) {
     ArcRecord& arc = state.input.arcs[index];
     const NodeRecord& sink = requireNode(state, arc.sink);
-    const bool active = !arc.is_disabled && !arc.is_loop_disabled;
-    const bool sequential_clock_sink = arc.kind == ArcKind::kNet && sink.is_sequential && sink.is_clock_pin;
-    arc.eligibility = {active, active && !sequential_clock_sink, active && !(sequential_clock_sink && state.clock_reachable_nodes[arc.sink.value()] != 0),
-                       state.replayed_clock_arcs[index] != 0};
+    arc.eligibility
+        = projectCanonicalArcEligibility(arc, sink, state.clock_reachable_nodes[arc.sink.value()] != 0, state.replayed_clock_arcs[index] != 0);
   }
 }
 

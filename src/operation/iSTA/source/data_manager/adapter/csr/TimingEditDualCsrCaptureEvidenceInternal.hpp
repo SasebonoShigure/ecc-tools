@@ -1,0 +1,23 @@
+// ***************************************************************************************
+// Copyright (c) 2023-2025 Peng Cheng Laboratory
+// Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
+// Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
+// Licensed under Mulan PSL v2.
+// ***************************************************************************************
+#pragma once
+
+#include <optional>
+#include <string>
+
+namespace ista::timing_dual_csr {
+class PendingStructuredBatch;
+namespace detail {
+struct NarrowTimingRecords;
+
+[[nodiscard]] std::optional<std::string>
+validateStructuredNodeModelEvidence(
+    const PendingStructuredBatch& pending,
+    const NarrowTimingRecords& records);
+
+}  // namespace detail
+}  // namespace ista::timing_dual_csr

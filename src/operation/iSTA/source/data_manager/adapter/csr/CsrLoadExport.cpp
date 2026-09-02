@@ -21,6 +21,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include <vector>
 
 #include "CsrReferenceInputAdapterInternal.hpp"
@@ -29,11 +30,6 @@ namespace ista::csr::detail {
 namespace {
 
 using LoadMatrix = ArcOutputLoadMatrix;
-
-bool isOutputLike(PinDirection direction)
-{
-  return direction == PinDirection::kOutput || direction == PinDirection::kInout;
-}
 
 const PortConstraintModel* findPortConstraint(const ReferenceBuildState& state, NodeId node)
 {
@@ -67,40 +63,13 @@ const ReferencedLibraryCellModel& requireReferencedCell(const ReferenceBuildStat
   return state.input.referenced_library_cells[found->second];
 }
 
-void addLoadPin(const ReferenceBuildState& state, const NodeRecord& node, LoadMatrix& load)
-{
-  if (node.is_port) {
-    if (!isOutputLike(node.direction))
-      return;
-    const PortConstraintModel* constraint = findPortConstraint(state, node.id);
-    if (constraint == nullptr || !constraint->output_load)
-      return;
-    for (auto& analysis : load)
-      for (double& transition : analysis) {
-        transition += *constraint->output_load;
-        requireNonnegativeReference(transition);
-      }
-    return;
-  }
-
-  const CellPinCapacitanceModel* capacitance = findPinCapacitance(state, node.id);
-  if (capacitance == nullptr)
-    malformedReferenceInput();
-  for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis) {
-    for (std::size_t transition = 0; transition < kTransitionCount; ++transition) {
-      load[analysis][transition] += capacitance->transition_capacitance[analysis][transition].value_or(capacitance->default_capacitance);
-      requireNonnegativeReference(load[analysis][transition]);
-    }
-  }
-}
-
 std::map<std::string, LoadMatrix> buildNetLoads(const ReferenceBuildState& state)
 {
   std::map<std::string, LoadMatrix> result;
   for (const auto& [map_key, native_net] : state.database.get_net_map()) {
     if (map_key != native_net.get_net_name())
       malformedReferenceInput();
-    LoadMatrix load{};
+    std::map<std::string, CanonicalLoadPinFacts> facts;
     for (const auto& load_pin_name : native_net.get_load_pin_list()) {
       const auto node = resolveNode(state, load_pin_name);
       if (!node)
@@ -108,9 +77,29 @@ std::map<std::string, LoadMatrix> buildNetLoads(const ReferenceBuildState& state
       const NodeRecord& load_node = requireNode(state, *node);
       if (load_node.net_name != map_key)
         malformedReferenceInput();
-      addLoadPin(state, load_node, load);
+      CanonicalLoadPinFacts pin_facts;
+      pin_facts.key = load_node.key;
+      pin_facts.direction = load_node.direction;
+      pin_facts.is_port = load_node.is_port;
+      if (load_node.is_port) {
+        const PortConstraintModel* constraint
+            = findPortConstraint(state, load_node.id);
+        if (constraint != nullptr
+            && (load_node.direction == PinDirection::kOutput
+                || load_node.direction == PinDirection::kInout))
+          pin_facts.port_output_load = constraint->output_load;
+      } else {
+        const CellPinCapacitanceModel* capacitance
+            = findPinCapacitance(state, load_node.id);
+        if (capacitance == nullptr)
+          malformedReferenceInput();
+        pin_facts.cell_pin_capacitance = *capacitance;
+      }
+      if (!facts.emplace(load_pin_name, std::move(pin_facts)).second)
+        malformedReferenceInput();
     }
-    if (!result.emplace(map_key, load).second)
+    if (!result.emplace(map_key, projectCanonicalNoParasiticNetLoad(
+                                     state.database, map_key, facts)).second)
       malformedReferenceInput();
   }
   return result;
@@ -127,8 +116,7 @@ void exportLoads(ReferenceBuildState& state)
   const auto net_loads = buildNetLoads(state);
   for (auto& arc : state.input.arcs) {
     const NodeRecord& sink = requireNode(state, arc.sink);
-    const auto load = net_loads.find(sink.net_name);
-    arc.output_load = load == net_loads.end() ? LoadMatrix{} : load->second;
+    arc.output_load = projectCanonicalNoParasiticOutputLoad(sink.net_name, net_loads);
   }
 }
 

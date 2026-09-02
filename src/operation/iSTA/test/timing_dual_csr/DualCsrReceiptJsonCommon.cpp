@@ -1,0 +1,193 @@
+// ***************************************************************************************
+// Copyright (c) 2023-2025 Peng Cheng Laboratory
+// Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
+// Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
+// Licensed under Mulan PSL v2.
+// ***************************************************************************************
+#include "DualCsrReceiptJsonCommon.hpp"
+
+#include <cmath>
+#include <stdexcept>
+
+#include "TimingSemanticKey.hpp"
+
+namespace ista::timing_dual_csr::test::json_detail {
+
+Json number(double value)
+{
+  if (std::isnan(value))
+    throw std::runtime_error("dual CSR receipt contains NaN");
+  if (std::isinf(value))
+    return {{"kind", std::signbit(value) ? "neg_inf" : "pos_inf"}};
+  return {{"kind", "finite"},
+          {"value", value == 0.0 ? 0.0 : value},
+          {"negative_zero", value == 0.0 && std::signbit(value)}};
+}
+
+Json nodeKey(const csr::NodeKey& value)
+{
+  return {{"kind", csr::token(value.kind)},
+          {"full_name", value.full_name},
+          {"instance_name", value.instance_name},
+          {"pin_name", value.pin_name}};
+}
+
+Json tableSignature(const csr::TimingTableSignature& value)
+{
+  return {{"present", value.present},
+          {"variable1", csr::token(value.variable1)},
+          {"variable2", csr::token(value.variable2)}};
+}
+
+Json librarySignature(const csr::LibraryArcSignature& value)
+{
+  return {{"library_name", value.library_name},
+          {"arc_index", value.arc_index},
+          {"sense", csr::token(value.sense)},
+          {"trigger_transition", csr::token(value.trigger_transition)},
+          {"check_transition", csr::token(value.check_transition)},
+          {"sdf_condition", value.sdf_condition},
+          {"delay_tables", arrayOf(value.delay_tables, tableSignature)},
+          {"slew_tables", arrayOf(value.slew_tables, tableSignature)}};
+}
+
+Json arcKey(const csr::ArcKey& value)
+{
+  return {{"source", nodeKey(value.base.source)},
+          {"sink", nodeKey(value.base.sink)},
+          {"kind", csr::token(value.base.kind)},
+          {"owner_name", value.base.owner_name},
+          {"library_source_port", value.base.library_source_port},
+          {"library_sink_port", value.base.library_sink_port},
+          {"library_arcs", arrayOf(value.base.library_arcs,
+                                    librarySignature)},
+          {"parallel_ordinal", value.parallel_ordinal}};
+}
+
+Json laneMatrix(const csr::OptionalLaneMatrix& value)
+{
+  return arrayOf(value, [](const auto& analysis) {
+    return arrayOf(analysis, [](const auto& lane) {
+      return optionalValue(lane,
+                           [](double present) { return number(present); });
+    });
+  });
+}
+
+Json loadMatrix(const csr::ArcOutputLoadMatrix& value)
+{
+  return arrayOf(value, [](const auto& analysis) {
+    return arrayOf(analysis,
+                   [](double lane) { return number(lane); });
+  });
+}
+
+Json timingTable(const csr::TimingTableModel& value)
+{
+  return {{"present", value.present},
+          {"variable1", csr::token(value.variable1)},
+          {"variable2", csr::token(value.variable2)},
+          {"axes", arrayOf(value.axes, [](const auto& axis) {
+             return arrayOf(axis,
+                            [](double item) { return number(item); });
+           })},
+          {"values", arrayOf(value.values,
+                             [](double item) { return number(item); })}};
+}
+
+Json childArc(const csr::ChildTimingArcModel& value)
+{
+  const auto numbers = [](const auto& values) {
+    return arrayOf(values,
+                   [](double item) { return number(item); });
+  };
+  return {{"signature", librarySignature(value.signature)},
+          {"time_unit_scale", number(value.time_unit_scale)},
+          {"capacitance_unit_scale", number(value.capacitance_unit_scale)},
+          {"slew_derate", number(value.slew_derate)},
+          {"slew_lower_threshold_pct", numbers(value.slew_lower_threshold_pct)},
+          {"slew_upper_threshold_pct", numbers(value.slew_upper_threshold_pct)},
+          {"input_threshold_pct", numbers(value.input_threshold_pct)},
+          {"output_threshold_pct", numbers(value.output_threshold_pct)},
+          {"delay_tables", arrayOf(value.delay_tables, timingTable)},
+          {"slew_tables", arrayOf(value.slew_tables, timingTable)},
+          {"check_tables", arrayOf(value.check_tables, timingTable)}};
+}
+
+Json transfer(const csr::CellTransferModel& value)
+{
+  return {{"delay", number(value.delay)},
+          {"delay_min", number(value.delay_min)},
+          {"delay_max", number(value.delay_max)},
+          {"is_clock_arc", value.is_clock_arc},
+          {"is_disabled", value.is_disabled},
+          {"is_clear_or_preset", value.is_clear_or_preset},
+          {"children", arrayOf(value.children, childArc)}};
+}
+
+Json libraryPort(const csr::LibraryPortModel& value)
+{
+  return {{"name", value.name},
+          {"direction", csr::token(value.direction)},
+          {"is_clock", value.is_clock},
+          {"is_output", value.is_output},
+          {"default_capacitance", number(value.default_capacitance)},
+          {"transition_capacitance", laneMatrix(value.transition_capacitance)}};
+}
+
+Json libraryCell(const csr::ReferencedLibraryCellModel& value)
+{
+  const auto cell_arc = [](const csr::LibraryCellArcModel& arc) {
+    return Json{{"source_port", arc.source_port},
+                {"sink_port", arc.sink_port},
+                {"transfer", transfer(arc.transfer)}};
+  };
+  const auto check = [](const csr::LibraryTimingCheckArcModel& arc) {
+    return Json{{"clock_port", arc.clock_port},
+                {"data_port", arc.data_port},
+                {"kind", csr::token(arc.kind)},
+                {"check_time", number(arc.check_time)},
+                {"clock_transition", csr::token(arc.clock_transition)},
+                {"children", arrayOf(arc.children, childArc)}};
+  };
+  return {{"cell_name", value.cell_name},
+          {"present", value.present},
+          {"library_name", value.library_name},
+          {"is_sequential", value.is_sequential},
+          {"is_clock_gating", value.is_clock_gating},
+          {"is_macro", value.is_macro},
+          {"clock_pin_name", value.clock_pin_name},
+          {"data_pin_name", value.data_pin_name},
+          {"output_pin_name", value.output_pin_name},
+          {"ports", arrayOf(value.ports, libraryPort)},
+          {"cell_arcs", arrayOf(value.cell_arcs, cell_arc)},
+          {"timing_checks", arrayOf(value.timing_checks, check)}};
+}
+
+Json parasitics(const csr::ParasiticModel& value)
+{
+  const auto node = [](const csr::ParasiticNodeModel& item) {
+    return Json{{"map_key", item.map_key},
+                {"embedded_name", item.embedded_name},
+                {"capacitance", number(item.capacitance)},
+                {"x", number(item.x)},
+                {"y", number(item.y)}};
+  };
+  const auto resistor = [](const csr::ParasiticResistorModel& item) {
+    return Json{{"source", item.source},
+                {"sink", item.sink},
+                {"resistance", number(item.resistance)}};
+  };
+  const auto net = [&](const csr::ParasiticNetModel& item) {
+    return Json{{"map_key", item.map_key},
+                {"embedded_name", item.embedded_name},
+                {"lumped_capacitance", number(item.lumped_capacitance)},
+                {"nodes", arrayOf(item.nodes, node)},
+                {"resistors", arrayOf(item.resistors, resistor)}};
+  };
+  return {{"capacitance_unit", value.capacitance_unit},
+          {"resistance_unit", value.resistance_unit},
+          {"nets", arrayOf(value.nets, net)}};
+}
+
+}  // namespace ista::timing_dual_csr::test::json_detail

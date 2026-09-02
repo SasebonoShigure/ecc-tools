@@ -188,7 +188,7 @@ void writeInitializationCache(std::size_t lane, double candidate, AnalysisMode a
     result.timing_arc_delays.values[lane] = candidate;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus initializeNonemptyCell(std::size_t arc_index, const ArcRecord& arc, std::size_t child_begin, ArcResultSoa& result)
+[[nodiscard]] CsrCpuReferenceStageStatus initializeNonemptyCell(std::size_t arc_index, const ArcSemanticPayload& arc, std::size_t child_begin, ArcResultSoa& result)
 {
   if (!arc.output_load)
     return CsrCpuReferenceStageStatus::kInvariantViolation;
@@ -299,73 +299,104 @@ void finalizeScalar(std::size_t arc, ArcResultSoa& result)
 
 }  // namespace
 
-CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  work.arc_count = input.arcs.size();
+  work.arc_count = edges.arcSlotCount();
   if (work.arc_count == std::numeric_limits<std::size_t>::max()
       || !checkedMultiply(work.arc_count, kAnalysisCount * kTransitionCount, work.arc_transition_lane_count)
       || !checkedMultiply(work.arc_transition_lane_count, kTransitionCount, work.arc_io_lane_count))
     return CsrCpuReferenceStageStatus::kInvariantViolation;
 
-  work.timing_arc_count = 0;
-  for (const auto& arc : input.arcs) {
-    if (arc.transfer.children.size() > std::numeric_limits<std::size_t>::max() - work.timing_arc_count)
-      return CsrCpuReferenceStageStatus::kInvariantViolation;
-    work.timing_arc_count += arc.transfer.children.size();
-  }
+  std::vector<std::size_t> child_counts(work.arc_count, 0);
+  std::optional<CsrCpuReferenceStageStatus> callback_status;
+  EdgeVisitResult visit = edges.forEachActiveArc([&](const EdgeEntry& entry) {
+    const auto payload = edges.arc(entry.arc_id);
+    if (!payload || entry.arc_id.value() >= work.arc_count) {
+      callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+      return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+    }
+    const std::size_t count = payload.value().transfer.children.size();
+    if (count > std::numeric_limits<std::size_t>::max() - work.timing_arc_count) {
+      callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+      return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+    }
+    child_counts[entry.arc_id.value()] = count;
+    work.timing_arc_count += count;
+    return EdgeVisitResult::continueVisit();
+  });
+  if (visit.control == EdgeVisitControl::kError)
+    return callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation);
   if (!checkedMultiply(work.timing_arc_count, kAnalysisCount * kTransitionCount * kTransitionCount, work.timing_arc_lane_count))
     return CsrCpuReferenceStageStatus::kInvariantViolation;
 
   auto& result = work.result.arcs;
-  resetRequiredSoa(result.delays, work.arc_count, 0.0);
-  resetRequiredSoa(result.min_delays, work.arc_count, 0.0);
-  resetRequiredSoa(result.max_delays, work.arc_count, 0.0);
-  resetRequiredSoa(result.transition_delays, work.arc_transition_lane_count, 0.0);
+  resetOptionalSoa(result.delays, work.arc_count, 0.0);
+  resetOptionalSoa(result.min_delays, work.arc_count, 0.0);
+  resetOptionalSoa(result.max_delays, work.arc_count, 0.0);
+  resetOptionalSoa(result.transition_delays, work.arc_transition_lane_count, 0.0);
   resetOptionalSoa(result.input_output_delays, work.arc_io_lane_count, 0.0);
   resetOptionalSoa(result.graph_delays, work.arc_io_lane_count, 0.0);
   resetOptionalSoa(result.transition_types, work.arc_count * kTransitionCount, Transition::kNone);
   result.timing_arc_row_offsets.assign(work.arc_count + 1, 0);
-  result.timing_arc_indices.clear();
-  result.timing_arc_indices.reserve(work.timing_arc_count);
+  for (std::size_t arc_index = 0; arc_index < work.arc_count; ++arc_index)
+    result.timing_arc_row_offsets[arc_index + 1] = result.timing_arc_row_offsets[arc_index] + child_counts[arc_index];
+  result.timing_arc_indices.assign(work.timing_arc_count, 0);
   resetOptionalSoa(result.timing_arc_delays, work.timing_arc_lane_count, 0.0);
   resetOptionalSoa(result.timing_arc_fallbacks, work.timing_arc_lane_count, std::uint8_t{0});
 
-  std::size_t child_offset = 0;
-  for (std::size_t arc_index = 0; arc_index < input.arcs.size(); ++arc_index) {
-    const auto& arc = input.arcs[arc_index];
-    result.timing_arc_row_offsets[arc_index] = child_offset;
-    for (const auto& child : arc.transfer.children)
-      result.timing_arc_indices.push_back(child.signature.arc_index);
-
+  callback_status.reset();
+  visit = edges.forEachActiveArc([&](const EdgeEntry& entry) {
+    recordStorageVisit(work.telemetry.arc_initialization, entry.storage_kind);
+    const auto payload = edges.arc(entry.arc_id);
+    if (!payload) {
+      callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+      return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+    }
+    const std::size_t arc_index = entry.arc_id.value();
+    const ArcSemanticPayload& arc = payload.value();
+    const std::size_t child_offset = result.timing_arc_row_offsets[arc_index];
+    for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index)
+      result.timing_arc_indices[child_offset + child_index] = arc.transfer.children[child_index].signature.arc_index;
+    result.delays.presence[arc_index] = 1;
+    result.min_delays.presence[arc_index] = 1;
+    result.max_delays.presence[arc_index] = 1;
+    for (AnalysisMode analysis : kAnalyses)
+      for (Transition transition : kTransitions)
+        result.transition_delays.presence[csrArcTransitionLane(arc_index, analysis, transition)] = 1;
     CsrCpuReferenceStageStatus status = CsrCpuReferenceStageStatus::kSuccess;
     if (arc.kind == ArcKind::kNet) {
       initializeNet(arc_index, result);
     } else if (!arc.output_load) {
-      return CsrCpuReferenceStageStatus::kInvariantViolation;
+      status = CsrCpuReferenceStageStatus::kInvariantViolation;
     } else if (arc.transfer.children.empty()) {
       initializeEmptyCell(arc_index, arc.transfer, result);
     } else {
       status = initializeNonemptyCell(arc_index, arc, child_offset, result);
     }
-    if (status != CsrCpuReferenceStageStatus::kSuccess)
-      return status;
+    if (status != CsrCpuReferenceStageStatus::kSuccess) {
+      callback_status = status;
+      return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+    }
     finalizeScalar(arc_index, result);
-    child_offset += arc.transfer.children.size();
-  }
-  result.timing_arc_row_offsets[work.arc_count] = child_offset;
-  return child_offset == work.timing_arc_count ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kInvariantViolation;
+    return EdgeVisitResult::continueVisit();
+  });
+  return visit.control == EdgeVisitControl::kError ? callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation)
+                                                   : CsrCpuReferenceStageStatus::kSuccess;
 }
 
-CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const CsrReferenceInput& input, ArcId arc_id, AnalysisMode analysis, Transition input_transition,
+CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges, ArcId arc_id, AnalysisMode analysis, Transition input_transition,
                                                  Transition output_transition, double source_slew, CsrCpuReferenceWorkState& work, CsrDynamicArcValue& value)
 {
   value = {};
   if (!std::isfinite(source_slew) || source_slew < 0.0)
     return CsrCpuReferenceStageStatus::kNumericFailure;
-  if (arc_id.value() >= work.arc_count || arc_id.value() >= input.arcs.size())
+  if (arc_id.value() >= work.arc_count)
     return CsrCpuReferenceStageStatus::kInvariantViolation;
   const std::size_t arc_index = static_cast<std::size_t>(arc_id.value());
-  const auto& arc = input.arcs[arc_index];
+  const auto payload = edges.arc(arc_id);
+  if (!payload)
+    return CsrCpuReferenceStageStatus::kInvariantViolation;
+  const ArcSemanticPayload& arc = payload.value();
   const std::size_t io_lane = csrArcIoLane(arc_index, analysis, input_transition, output_transition);
   if (work.result.arcs.input_output_delays.presence[io_lane] == 0)
     return CsrCpuReferenceStageStatus::kSuccess;

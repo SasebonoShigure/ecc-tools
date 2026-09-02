@@ -103,10 +103,10 @@ template <typename T>
   return true;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus seedEndpointRequired(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+[[nodiscard]] CsrCpuReferenceStageStatus seedEndpointRequired(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
   double default_required = 0.0;
-  for (NodeId endpoint : input.ordered_end_ids) {
+  for (NodeId endpoint : payloads.orderedEndIds()) {
     if (endpoint.value() >= work.node_count)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     const double arrival = work.result.nodes.arrivals.values[endpoint.value()];
@@ -118,12 +118,12 @@ template <typename T>
     }
   }
 
-  for (NodeId endpoint : input.ordered_end_ids)
+  for (NodeId endpoint : payloads.orderedEndIds())
     work.result.nodes.requireds.values[endpoint.value()] = default_required;
 
-  for (const auto& endpoint : input.endpoint_required) {
+  for (const auto& endpoint : payloads.endpointRequired()) {
     if (endpoint.node.value() >= work.node_count
-        || std::find(input.ordered_end_ids.begin(), input.ordered_end_ids.end(), endpoint.node) == input.ordered_end_ids.end())
+        || std::find(payloads.orderedEndIds().begin(), payloads.orderedEndIds().end(), endpoint.node) == payloads.orderedEndIds().end())
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     const auto& output_delay = endpoint.output_delay[csrAnalysisIndex(AnalysisMode::kMax)];
     if (!output_delay)
@@ -136,49 +136,57 @@ template <typename T>
   return CsrCpuReferenceStageStatus::kSuccess;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus reverseRequired(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+[[nodiscard]] CsrCpuReferenceStageStatus reverseRequired(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
   for (auto node = work.result.timing_order.rbegin(); node != work.result.timing_order.rend(); ++node) {
     if (node->value() >= work.node_count)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     const std::size_t source = static_cast<std::size_t>(node->value());
-    const std::uint64_t begin = input.out_row_offsets[source];
-    const std::uint64_t end = input.out_row_offsets[source + 1];
-    if (begin > end || end > input.out_arc_ids.size())
-      return CsrCpuReferenceStageStatus::kInvariantViolation;
-
-    for (std::uint64_t offset = begin; offset < end; ++offset) {
-      const ArcId arc_id = input.out_arc_ids[offset];
-      if (arc_id.value() >= work.arc_count || arc_id.value() >= input.arcs.size())
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
-      const auto& arc = input.arcs[arc_id.value()];
+    std::optional<CsrCpuReferenceStageStatus> callback_status;
+    const EdgeVisitResult visit = edges.forEachOutgoing(*node, [&](const EdgeEntry& entry) {
+      recordStorageVisit(work.telemetry.required_propagation, entry.storage_kind);
+      const auto payload = edges.arc(entry.arc_id);
+      if (!payload || entry.arc_id.value() >= work.arc_count) {
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
+      const ArcSemanticPayload& arc = payload.value();
       if (arc.source != *node || arc.sink.value() >= work.node_count)
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
       if (!arc.eligibility.data_arrival)
-        continue;
+        return callback_status ? EdgeVisitResult::fail(CsrViewError::kCallbackError) : EdgeVisitResult::continueVisit();
 
       const double sink_required = work.result.nodes.requireds.values[arc.sink.value()];
       if (!std::isfinite(sink_required)) {
         if (isPositiveInfinity(sink_required))
-          continue;
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
+          return EdgeVisitResult::continueVisit();
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
       }
-      if (work.result.arcs.delays.presence[arc_id.value()] == 0)
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
-      const double delay = work.result.arcs.delays.values[arc_id.value()];
+      if (work.result.arcs.delays.presence[entry.arc_id.value()] == 0) {
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
+      const double delay = work.result.arcs.delays.values[entry.arc_id.value()];
       const double candidate = sink_required - delay;
-      if (!std::isfinite(delay) || !std::isfinite(candidate))
-        return CsrCpuReferenceStageStatus::kNumericFailure;
+      if (!std::isfinite(delay) || !std::isfinite(candidate)) {
+        callback_status = CsrCpuReferenceStageStatus::kNumericFailure;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
 
       double& source_required = work.result.nodes.requireds.values[source];
       if (isPositiveInfinity(source_required)) {
         source_required = candidate;
       } else if (!std::isfinite(source_required)) {
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
       } else if (candidate < source_required) {
         source_required = candidate;
       }
-    }
+      return EdgeVisitResult::continueVisit();
+    });
+    if (visit.control == EdgeVisitControl::kError)
+      return callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation);
   }
   return CsrCpuReferenceStageStatus::kSuccess;
 }
@@ -339,11 +347,11 @@ template <typename T>
   return true;
 }
 
-[[nodiscard]] bool validateArcShape(const CsrCpuReferenceWorkState& work)
+[[nodiscard]] bool validateArcShape(const ActiveCsrEdgeView& edges, const CsrCpuReferenceWorkState& work)
 {
   const auto& arcs = work.result.arcs;
-  if (!validateOptionalSoa(arcs.delays, work.arc_count, true) || !validateOptionalSoa(arcs.min_delays, work.arc_count, true)
-      || !validateOptionalSoa(arcs.max_delays, work.arc_count, true) || !validateOptionalSoa(arcs.transition_delays, work.arc_transition_lane_count, true)
+  if (!validateOptionalSoa(arcs.delays, work.arc_count, false) || !validateOptionalSoa(arcs.min_delays, work.arc_count, false)
+      || !validateOptionalSoa(arcs.max_delays, work.arc_count, false) || !validateOptionalSoa(arcs.transition_delays, work.arc_transition_lane_count, false)
       || !validateOptionalSoa(arcs.input_output_delays, work.arc_io_lane_count, false) || !validateOptionalSoa(arcs.graph_delays, work.arc_io_lane_count, false)
       || !validateOptionalSoa(arcs.transition_types, work.arc_count * kTransitionCount, false) || arcs.timing_arc_row_offsets.size() != work.arc_count + 1
       || arcs.timing_arc_indices.size() != work.timing_arc_count || !validateOptionalSoa(arcs.timing_arc_delays, work.timing_arc_lane_count, false)
@@ -352,6 +360,27 @@ template <typename T>
   if (arcs.timing_arc_row_offsets.empty() || arcs.timing_arc_row_offsets.front() != 0 || arcs.timing_arc_row_offsets.back() != work.timing_arc_count)
     return false;
   for (std::size_t arc = 0; arc < work.arc_count; ++arc) {
+    const std::uint8_t active = edges.isActive(ArcId{arc}) ? 1 : 0;
+    if (arcs.delays.presence[arc] != active || arcs.min_delays.presence[arc] != active || arcs.max_delays.presence[arc] != active)
+      return false;
+    for (std::size_t lane = arc * kAnalysisCount * kTransitionCount; lane < (arc + 1) * kAnalysisCount * kTransitionCount; ++lane)
+      if (arcs.transition_delays.presence[lane] != active || (active == 0 && arcs.transition_delays.values[lane] != 0.0))
+        return false;
+    if (active == 0) {
+      for (std::size_t lane = arc * kTransitionCount; lane < (arc + 1) * kTransitionCount; ++lane)
+        if (arcs.transition_types.presence[lane] != 0 || arcs.transition_types.values[lane] != Transition::kNone)
+          return false;
+      const std::size_t io_begin = arc * kAnalysisCount * kTransitionCount * kTransitionCount;
+      const std::size_t io_end = (arc + 1) * kAnalysisCount * kTransitionCount * kTransitionCount;
+      for (std::size_t lane = io_begin; lane < io_end; ++lane)
+        if (arcs.input_output_delays.presence[lane] != 0 || arcs.input_output_delays.values[lane] != 0.0
+            || arcs.graph_delays.presence[lane] != 0 || arcs.graph_delays.values[lane] != 0.0)
+          return false;
+    }
+    if (active == 0
+        && (arcs.delays.values[arc] != 0.0 || arcs.min_delays.values[arc] != 0.0 || arcs.max_delays.values[arc] != 0.0
+            || arcs.timing_arc_row_offsets[arc] != arcs.timing_arc_row_offsets[arc + 1]))
+      return false;
     if (arcs.timing_arc_row_offsets[arc] > arcs.timing_arc_row_offsets[arc + 1] || !std::isfinite(arcs.delays.values[arc])
         || !std::isfinite(arcs.min_delays.values[arc]) || !std::isfinite(arcs.max_delays.values[arc]))
       return false;
@@ -372,7 +401,7 @@ template <typename T>
   return true;
 }
 
-[[nodiscard]] bool validateFinalShape(const CsrCpuReferenceWorkState& work)
+[[nodiscard]] bool validateFinalShape(const ActiveCsrEdgeView& edges, const CsrCpuReferenceWorkState& work)
 {
   const auto& result = work.result;
   if (result.level_offsets.empty() || result.level_offsets.front() != 0 || result.level_offsets.back() != work.node_count
@@ -380,7 +409,7 @@ template <typename T>
       || result.timing_order != result.level_nodes || !validateNodeShape(work) || !validateClockShape(result.effective_clock, work.node_lane_count)
       || !validateClockShape(result.physical_clock, work.node_lane_count) || result.effective_clock.arrivals.presence != result.physical_clock.arrivals.presence
       || result.effective_clock.slews.presence != result.physical_clock.slews.presence || !validateOptionalSoa(result.data_slews, work.node_lane_count, false)
-      || !validatePathShape(work) || !validateArcShape(work))
+      || !validatePathShape(work) || !validateArcShape(edges, work))
     return false;
   for (std::size_t lane = 0; lane < work.node_lane_count; ++lane)
     if (result.data_slews.presence[lane] != 0 && (!std::isfinite(result.data_slews.values[lane]) || result.data_slews.values[lane] < 0.0))
@@ -390,12 +419,12 @@ template <typename T>
 
 }  // namespace
 
-CsrCpuReferenceStageStatus propagateCsrCpuReferenceRequired(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work)
+CsrCpuReferenceStageStatus propagateCsrCpuReferenceRequired(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
-  CsrCpuReferenceStageStatus status = seedEndpointRequired(input, work);
+  CsrCpuReferenceStageStatus status = seedEndpointRequired(payloads, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
-  status = reverseRequired(input, work);
+  status = reverseRequired(edges, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
   status = finalizeSlacks(work);
@@ -404,7 +433,7 @@ CsrCpuReferenceStageStatus propagateCsrCpuReferenceRequired(const CsrReferenceIn
   status = flattenPaths(work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
-  return validateFinalShape(work) ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kInvariantViolation;
+  return validateFinalShape(edges, work) ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kInvariantViolation;
 }
 
 }  // namespace ista::csr

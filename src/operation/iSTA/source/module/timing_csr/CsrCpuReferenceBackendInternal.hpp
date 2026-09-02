@@ -23,13 +23,16 @@
 #include <vector>
 
 #include "CsrFifoLevelization.hpp"
-#include "CsrReferenceTypes.hpp"
+#include "CsrCpuReferenceBackend.hpp"
 
 namespace ista::csr {
 
 using CsrFifoReplayFunction = CsrFifoLevelization (*)(const CsrReferenceInput&);
+using ActiveCsrFifoReplayFunction = CsrFifoLevelization (*)(const ActiveCsrEdgeView&, const TimingPayloadView&, CsrTraversalTelemetry*);
 
 [[nodiscard]] CsrComputationResult computeCsrCpuReferenceWithReplay(const CsrReferenceInput& input, CsrFifoReplayFunction replay);
+[[nodiscard]] CsrComputationWithTelemetry computeCsrCpuReferenceWithReplay(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+                                                                          ActiveCsrFifoReplayFunction replay);
 
 enum class CsrCpuReferenceStageStatus : std::uint8_t
 {
@@ -63,6 +66,7 @@ struct CsrCpuReferenceWorkState
   std::size_t clock_tag_count{0};
   std::size_t arc_count{0};
   std::size_t arc_transition_lane_count{0};
+  CsrTraversalTelemetry telemetry;
   std::size_t arc_io_lane_count{0};
   std::size_t timing_arc_count{0};
   std::size_t timing_arc_lane_count{0};
@@ -122,13 +126,14 @@ struct CsrDynamicArcValue
          + csrTransitionIndex(output_transition);
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const CsrReferenceInput& input, const CsrFifoLevelization& replay,
+[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay,
                                                                          CsrCpuReferenceWorkState& work);
-[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work);
-[[nodiscard]] CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const CsrReferenceInput& input, ArcId arc_id, AnalysisMode analysis, Transition input_transition,
+[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work);
+[[nodiscard]] CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges, ArcId arc_id, AnalysisMode analysis, Transition input_transition,
                                                                Transition output_transition, double source_slew, CsrCpuReferenceWorkState& work,
                                                                CsrDynamicArcValue& value);
-[[nodiscard]] CsrCpuReferenceStageStatus propagateCsrCpuReferenceForward(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work);
-[[nodiscard]] CsrCpuReferenceStageStatus propagateCsrCpuReferenceRequired(const CsrReferenceInput& input, CsrCpuReferenceWorkState& work);
+[[nodiscard]] CsrCpuReferenceStageStatus propagateCsrCpuReferenceForward(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work);
+[[nodiscard]] CsrCpuReferenceStageStatus propagateCsrCpuReferenceRequired(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+                                                                          CsrCpuReferenceWorkState& work);
 
 }  // namespace ista::csr

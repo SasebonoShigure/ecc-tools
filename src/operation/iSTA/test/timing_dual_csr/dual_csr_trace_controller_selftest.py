@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Executable canaries for the Stage 5 Dual-CSR trace controller."""
+
+import json
+from typing import Callable
+
+from dual_csr_timing_evidence import run_timing_evidence_self_test
+from dual_csr_transaction_validator import (
+    validate_identity_sequences,
+    validate_transaction,
+    validate_traversal_counts,
+)
+from dual_csr_typed_json_validator import run_typed_validator_self_test
+
+Require = Callable[[bool, str], None]
+Difference = Callable[[object, object, str], str | None]
+
+
+def run_controller_self_test(require: Require, difference: Difference,
+                             error_type: type[Exception]) -> None:
+    equal = {"x": [{"kind": "finite", "value": 1.0,
+                     "negative_zero": False}]}
+    within = {"x": [{"kind": "finite", "value": 1.0 + 5.0e-10,
+                      "negative_zero": False}]}
+    require(difference(equal, within, "$") is None,
+            "numeric tolerance rejected an in-range value")
+    outside = json.loads(json.dumps(within))
+    outside["x"][0]["value"] = 1.0 + 3.0e-9
+    require(difference(equal, outside, "$")
+            == "$.x[0].value: 1.0 != 1.000000003",
+            "field comparator did not locate an out-of-range leaf")
+    changed_presence = json.loads(json.dumps(equal))
+    changed_presence["x"][0]["negative_zero"] = True
+    require(difference(equal, changed_presence, "$")
+            == "$.x[0].negative_zero: False != True",
+            "structural boolean mismatch was hidden by numeric tolerance")
+    timing_order = {"timing_order": [["u0:A", "u0:B"]]}
+    swapped_order = {"timing_order": [["u0:B", "u0:A"]]}
+    require(difference(timing_order, swapped_order, "$")
+            == "$.timing_order[0][0]: 'u0:A' != 'u0:B'",
+            "same-level timing-order swap was hidden by the comparator")
+    same_size_semantic_edit = {"edits": [{"original_net": "n0"}]}
+    tampered_semantic_edit = {"edits": [{"original_net": "n1"}]}
+    require(difference(same_size_semantic_edit, tampered_semantic_edit, "$")
+            is not None, "same-size semantic edit tamper was hidden")
+    try:
+        validate_transaction(
+            {}, 1, {}, {}, [], "signature-canary", require, difference,
+        )
+        require(False, "malformed transaction signature canary was accepted")
+    except error_type:
+        pass
+    except TypeError as error:
+        require(False, f"transaction validator call signature drifted: {error}")
+
+    port = {"kind": "port", "full_name": "very_long_port_name",
+            "instance_name": "", "pin_name": ""}
+    pin = {"kind": "instance_pin", "full_name": "a:A",
+           "instance_name": "a", "pin_name": "A"}
+    arc = {"source": port, "sink": pin, "kind": "net", "owner_name": "n",
+           "library_source_port": "", "library_sink_port": "",
+           "library_arcs": [], "parallel_ordinal": 0}
+    ordering_errors: list[str] = []
+    validate_identity_sequences(
+        [port, pin], [arc], [pin, port], [arc], "identity-canary",
+        lambda ok, message: ordering_errors.append(message) if not ok else None)
+    require(not ordering_errors,
+            "typed canonical identity was rejected by generic JSON ordering")
+    duplicate_errors: list[str] = []
+    validate_identity_sequences(
+        [port, port], [arc], [port, port], [arc],
+        "identity-duplicate-canary",
+        lambda ok, message: duplicate_errors.append(message) if not ok else None)
+    require(duplicate_errors, "duplicate semantic identity was accepted")
+
+    structural_visits = {
+        "base_out": {"physical_slots": [0, None]},
+        "aux_out": {"arc_ids": [1]},
+    }
+    valid_visits = {
+        "levelization": {"base_out": 1, "aux_out": 1, "base_in": 2},
+        "arc_initialization": {"base_out": 1, "aux_out": 1, "base_in": 0},
+        "forward_propagation": {"base_out": 2, "aux_out": 2, "base_in": 0},
+        "required_propagation": {"base_out": 1, "aux_out": 1, "base_in": 0},
+    }
+    traversal_errors: list[str] = []
+    validate_traversal_counts(
+        valid_visits, structural_visits, "traversal-canary",
+        lambda ok, message: traversal_errors.append(message) if not ok else None)
+    require(not traversal_errors, "valid structural traversal was rejected")
+    for name, tampered in (
+        ("all-zero", {stage: {key: 0 for key in visits}
+                      for stage, visits in valid_visits.items()}),
+        ("plus-one", {stage: dict(visits)
+                      for stage, visits in valid_visits.items()}),
+    ):
+        if name == "plus-one":
+            tampered["forward_propagation"]["base_out"] += 1
+        errors: list[str] = []
+        validate_traversal_counts(
+            tampered, structural_visits, f"traversal-{name}-canary",
+            lambda ok, message: errors.append(message) if not ok else None)
+        require(errors, f"{name} traversal tamper was accepted")
+
+    run_timing_evidence_self_test(require)
+    run_typed_validator_self_test(require)

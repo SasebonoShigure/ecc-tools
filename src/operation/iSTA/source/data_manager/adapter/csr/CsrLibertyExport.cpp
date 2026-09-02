@@ -22,6 +22,7 @@
 #include <set>
 #include <utility>
 
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "CsrReferenceInputAdapterInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
@@ -39,19 +40,6 @@ std::size_t transitionIndex(ista::TransType transition)
       invalidReferenceTable();
   }
   invalidReferenceTable();
-}
-
-std::size_t analysisIndex(ista::AnalysisType analysis)
-{
-  switch (analysis) {
-    case ista::AnalysisType::kMax:
-      return 0;
-    case ista::AnalysisType::kMin:
-      return 1;
-    case ista::AnalysisType::kNone:
-      malformedReferenceInput();
-  }
-  malformedReferenceInput();
 }
 
 TimingTableSignature tableSignature(const std::map<ista::TransType, ista::TimingTable>& tables, ista::TransType transition)
@@ -90,79 +78,6 @@ void validateChildScalars(const ChildTimingArcModel& child)
   }
 }
 
-LibraryPortModel exportLibraryPort(const ista::TimingCellPort& native_port)
-{
-  LibraryPortModel port;
-  port.name = native_port.get_port_name();
-  port.direction = convertReferencePortDirection(native_port.get_is_input(), native_port.get_is_output());
-  port.is_clock = native_port.get_is_clock();
-  port.is_output = native_port.get_is_output();
-  port.default_capacitance = native_port.get_capacitance();
-  requireNonnegativeReference(port.default_capacitance);
-
-  for (const auto& [analysis, transitions] : native_port.get_trans_capacitance_map()) {
-    const std::size_t analysis_index = analysisIndex(analysis);
-    for (const auto& [transition, value] : transitions) {
-      const std::size_t transition_index = transitionIndex(transition);
-      requireNonnegativeReference(value);
-      port.transition_capacitance[analysis_index][transition_index] = value;
-    }
-  }
-  return port;
-}
-
-LibraryTimingCheckArcModel exportLibraryTimingCheck(const ista::TimingCheckArc& native_check)
-{
-  LibraryTimingCheckArcModel check;
-  check.clock_port = native_check.get_clock_port();
-  check.data_port = native_check.get_data_port();
-  check.kind = convertReferenceTimingCheckKind(native_check.get_check_type());
-  check.check_time = native_check.get_check_time();
-  check.clock_transition = convertReferenceTransition(native_check.get_clock_trans_type());
-  requireFiniteReference(check.check_time);
-  if (check.clock_transition == Transition::kNone)
-    malformedReferenceInput();
-  check.children.reserve(native_check.get_timing_arc_list().size());
-  for (const auto& native_child : native_check.get_timing_arc_list())
-    check.children.push_back(exportReferenceChildTimingArc(native_child));
-  return check;
-}
-
-void assignLibraryRoles(const ista::TimingCell& native_cell, ReferencedLibraryCellModel& cell)
-{
-  const ista::TimingCellArc* selected_clock_arc = nullptr;
-  for (const auto& native_arc : native_cell.get_cell_arc_list()) {
-    if (native_arc.get_is_clock_arc()) {
-      selected_clock_arc = &native_arc;
-      break;
-    }
-  }
-  if (selected_clock_arc != nullptr)
-    cell.output_pin_name = selected_clock_arc->get_sink_port();
-
-  const ista::TimingCheckArc* representative_check = nullptr;
-  for (const auto& native_check : native_cell.get_check_arc_list()) {
-    if (representative_check == nullptr || native_check.get_check_type() == ista::TimingCheckType::kSetup)
-      representative_check = &native_check;
-    if (native_check.get_check_type() == ista::TimingCheckType::kSetup)
-      break;
-  }
-  if (representative_check != nullptr) {
-    cell.clock_pin_name = representative_check->get_clock_port();
-    cell.data_pin_name = representative_check->get_data_port();
-  }
-
-  if (cell.output_pin_name.empty()) {
-    for (const auto& [map_key, native_port] : native_cell.get_port_map()) {
-      static_cast<void>(map_key);
-      if (native_port.get_is_output() && !native_port.get_is_clock()) {
-        cell.output_pin_name = native_port.get_port_name();
-        break;
-      }
-    }
-  }
-}
-
 void exportReferencedCells(ReferenceBuildState& state)
 {
   std::set<std::string, decltype(&referenceByteStringLess)> names(&referenceByteStringLess);
@@ -171,39 +86,9 @@ void exportReferencedCells(ReferenceBuildState& state)
 
   state.input.referenced_library_cells.reserve(names.size());
   for (const auto& cell_name : names) {
-    ReferencedLibraryCellModel cell;
-    cell.cell_name = cell_name;
-    const ista::TimingCell* native_cell = findNativeTimingCell(state, cell_name);
-    if (native_cell != nullptr) {
-      cell.present = true;
-      cell.library_name = native_cell->get_library_name();
-      if (cell.library_name.empty())
-        malformedReferenceInput();
-      cell.is_sequential = native_cell->get_is_sequential();
-      cell.is_clock_gating = native_cell->get_is_clock_gating();
-      cell.is_macro = native_cell->get_is_macro();
-      assignLibraryRoles(*native_cell, cell);
-
-      cell.ports.reserve(native_cell->get_port_map().size());
-      for (const auto& [map_key, native_port] : native_cell->get_port_map()) {
-        if (map_key != native_port.get_port_name())
-          malformedReferenceInput();
-        cell.ports.push_back(exportLibraryPort(native_port));
-      }
-
-      cell.cell_arcs.reserve(native_cell->get_cell_arc_list().size());
-      for (const auto& native_arc : native_cell->get_cell_arc_list()) {
-        if (native_arc.get_source_port().empty() || native_arc.get_sink_port().empty()
-            || native_cell->get_port_map().find(native_arc.get_source_port()) == native_cell->get_port_map().end()
-            || native_cell->get_port_map().find(native_arc.get_sink_port()) == native_cell->get_port_map().end())
-          malformedReferenceInput();
-        cell.cell_arcs.push_back({native_arc.get_source_port(), native_arc.get_sink_port(), exportReferenceCellTransfer(native_arc)});
-      }
-
-      cell.timing_checks.reserve(native_cell->get_check_arc_list().size());
-      for (const auto& native_check : native_cell->get_check_arc_list())
-        cell.timing_checks.push_back(exportLibraryTimingCheck(native_check));
-    }
+    ReferencedLibraryCellModel cell
+        = projectCanonicalReferencedLibraryCell(
+            state.database, cell_name);
 
     const std::size_t index = state.input.referenced_library_cells.size();
     if (!state.referenced_cell_indices_by_name.emplace(cell.cell_name, index).second)
@@ -224,16 +109,11 @@ void refreshInstanceRoles(ReferenceBuildState& state)
 {
   for (auto& instance : state.input.instances) {
     const auto& cell = requireReferencedCell(state, instance.cell_name);
-    instance.is_sequential = cell.present && cell.is_sequential;
-    instance.is_clock_gating = cell.present && cell.is_clock_gating;
-    instance.is_macro = cell.present && cell.is_macro;
+    applyCanonicalInstanceLibraryRoles(cell, instance);
 
     for (NodeId node_id : instance.ordered_pins) {
       NodeRecord& node = state.input.nodes[node_id.value()];
-      node.is_sequential = instance.is_sequential;
-      node.is_clock_pin = cell.present && node.key.pin_name == cell.clock_pin_name;
-      node.is_data_pin = cell.present && node.key.pin_name == cell.data_pin_name;
-      node.is_output_pin = cell.present && node.key.pin_name == cell.output_pin_name;
+      applyCanonicalNodeLibraryRoles(cell, node);
     }
   }
 }
@@ -241,23 +121,11 @@ void refreshInstanceRoles(ReferenceBuildState& state)
 void exportGraphTransfers(ReferenceBuildState& state)
 {
   for (auto& arc : state.input.arcs) {
-    if (arc.kind == ArcKind::kNet) {
-      arc.transfer = {};
-      arc.transfer.delay = 0.0;
-      arc.transfer.delay_min = 0.0;
-      arc.transfer.delay_max = 0.0;
-      continue;
-    }
-
     const ista::Arc& native_arc = requireNativeArc(state, arc);
-    const ista::TimingCellArc* native_cell_arc = native_arc.get_timing_cell_arc();
-    if (native_cell_arc == nullptr) {
-      arc.transfer = {};
-      arc.transfer.is_clock_arc = arc.is_clock_arc;
-      arc.transfer.is_disabled = arc.is_disabled;
-    } else {
-      arc.transfer = exportReferenceCellTransfer(*native_cell_arc);
-    }
+    arc.transfer = projectCanonicalArcTransfer(arc, native_arc);
+
+    if (arc.kind == ArcKind::kNet)
+      continue;
 
     if (arc.transfer.is_clock_arc != arc.is_clock_arc || arc.transfer.is_disabled != arc.is_disabled
         || arc.transfer.children.size() != arc.key.base.library_arcs.size())
@@ -282,22 +150,9 @@ void exportCellPinCapacitances(ReferenceBuildState& state)
   state.input.cell_pin_capacitances.reserve(node_order.size());
   for (std::size_t node_index : node_order) {
     const NodeRecord& node = state.input.nodes[node_index];
-    CellPinCapacitanceModel capacitance;
-    capacitance.node = node.id;
-
-    const auto instance = state.database.get_instance_map().find(node.key.instance_name);
-    if (instance == state.database.get_instance_map().end())
-      malformedReferenceInput();
-    const ista::TimingCell* native_cell = findNativeTimingCell(state, instance->second.get_cell_name());
-    if (native_cell != nullptr) {
-      const auto port = native_cell->get_port_map().find(node.key.pin_name);
-      if (port != native_cell->get_port_map().end()) {
-        const LibraryPortModel exported = exportLibraryPort(port->second);
-        capacitance.default_capacitance = exported.default_capacitance;
-        capacitance.transition_capacitance = exported.transition_capacitance;
-      }
-    }
-
+    CellPinCapacitanceModel capacitance
+        = projectCanonicalCellPinCapacitance(
+            state.database, node.id, node.key);
     const std::size_t cap_index = state.input.cell_pin_capacitances.size();
     state.capacitance_indices_by_node[node.id.value()] = cap_index;
     state.input.cell_pin_capacitances.push_back(std::move(capacitance));

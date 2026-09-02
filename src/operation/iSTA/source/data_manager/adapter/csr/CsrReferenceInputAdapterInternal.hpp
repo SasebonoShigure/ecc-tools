@@ -50,6 +50,19 @@ struct ReferenceExportProgress
   [[nodiscard]] CsrReferenceInputExportFailure failure(CsrCaptureCode code) const;
 };
 
+struct NativeFullExportCounters
+{
+  std::uint64_t graph_exports{0};
+  std::uint64_t reference_exports{0};
+
+  friend bool operator==(const NativeFullExportCounters&,
+                         const NativeFullExportCounters&) = default;
+};
+
+[[nodiscard]] NativeFullExportCounters currentNativeFullExportCounters() noexcept;
+void noteNativeFullGraphExport() noexcept;
+void noteNativeFullReferenceExport() noexcept;
+
 [[noreturn]] void abortReferenceExport(CsrCaptureCode code);
 [[noreturn]] void malformedReferenceInput();
 [[noreturn]] void illegalReferenceNumeric();

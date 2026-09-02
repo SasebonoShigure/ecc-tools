@@ -16,6 +16,9 @@
 // ***************************************************************************************
 #include "CsrCpuReferenceBackend.hpp"
 
+#include <chrono>
+#include "FlatCsrEdgeView.hpp"
+#include "FlatTimingPayloadView.hpp"
 #include <cassert>
 #include <utility>
 
@@ -33,48 +36,147 @@ namespace {
   return CsrComputationResult{CsrComputationCode::kInvariantViolation};
 }
 
+using SteadyClock = std::chrono::steady_clock;
+
+double elapsedMilliseconds(SteadyClock::time_point start)
+{
+  return std::chrono::duration<double, std::milli>(
+             SteadyClock::now() - start)
+      .count();
+}
+
 }  // namespace
 
-CsrComputationResult computeCsrCpuReferenceWithReplay(const CsrReferenceInput& input, CsrFifoReplayFunction replay)
+CsrComputationWithTelemetry computeCsrCpuReferenceWithReplay(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads, ActiveCsrFifoReplayFunction replay)
 {
   assert(replay != nullptr);
 
-  if (!validateReferenceInput(input).empty())
-    return CsrComputationResult{CsrComputationCode::kInvariantViolation};
+  CsrComputationWithTelemetry output;
+  if (edges.nodeCount() != payloads.nodeCount()) {
+    output.computation = CsrComputationResult{CsrComputationCode::kInvariantViolation};
+    return output;
+  }
 
-  if (!input.unsupported_reasons.empty())
-    return CsrComputationResult{CsrReferenceSupportResult{input.unsupported_reasons}};
+  if (!payloads.unsupportedReasons().empty()) {
+    output.computation = CsrComputationResult{CsrReferenceSupportResult{payloads.unsupportedReasons()}};
+    return output;
+  }
 
-  CsrFifoLevelization fifo = replay(input);
-  if (!fifo.complete)
-    return CsrComputationResult{CsrComputationCode::kCycle};
+  const auto levelization_started = SteadyClock::now();
+  CsrFifoLevelization fifo = replay(edges, payloads, &output.telemetry);
+  output.phase_timings.levelization_ms
+      = elapsedMilliseconds(levelization_started);
+  if (fifo.view_error) {
+    output.computation = CsrComputationResult{CsrComputationCode::kInvariantViolation};
+    return output;
+  }
+  if (!fifo.complete) {
+    output.computation = CsrComputationResult{CsrComputationCode::kCycle};
+    return output;
+  }
 
+  const auto propagation_started = SteadyClock::now();
   CsrCpuReferenceWorkState work;
-  work.result.schema_version = input.schema_version;
-  work.result.source_identity = input.source_identity;
+  work.telemetry = output.telemetry;
+  work.result.schema_version = payloads.schemaVersion();
+  work.result.source_identity = payloads.sourceIdentity();
 
-  CsrCpuReferenceStageStatus status = initializeCsrCpuReferenceResult(input, fifo, work);
+  CsrCpuReferenceStageStatus status = initializeCsrCpuReferenceResult(payloads, fifo, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
-    return stageFailure(status);
+    output.computation = stageFailure(status);
 
-  status = initializeCsrCpuReferenceArcs(input, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess) {
+    output.phase_timings.propagation_ms
+        = elapsedMilliseconds(propagation_started);
+    return output;
+  }
+  status = initializeCsrCpuReferenceArcs(edges, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
-    return stageFailure(status);
+    output.computation = stageFailure(status);
 
-  status = propagateCsrCpuReferenceForward(input, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess) {
+    output.phase_timings.propagation_ms
+        = elapsedMilliseconds(propagation_started);
+    return output;
+  }
+  status = propagateCsrCpuReferenceForward(edges, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
-    return stageFailure(status);
+    output.computation = stageFailure(status);
 
-  status = propagateCsrCpuReferenceRequired(input, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess) {
+    output.phase_timings.propagation_ms
+        = elapsedMilliseconds(propagation_started);
+    return output;
+  }
+  status = propagateCsrCpuReferenceRequired(edges, payloads, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
-    return stageFailure(status);
+    output.computation = stageFailure(status);
+  else
+    output.computation = CsrComputationResult{std::move(work.result)};
 
-  return CsrComputationResult{std::move(work.result)};
+  output.phase_timings.propagation_ms
+      = elapsedMilliseconds(propagation_started);
+  output.telemetry = work.telemetry;
+  return output;
 }
 
 CsrComputationResult CsrCpuReferenceBackend::compute(const CsrReferenceInput& input) const
 {
-  return computeCsrCpuReferenceWithReplay(input, &replayFifoLevelization);
+  if (!validateReferenceInput(input).empty())
+    return CsrComputationResult{CsrComputationCode::kInvariantViolation};
+  return computeWithTelemetry(input).computation;
+}
+
+CsrComputationResult CsrCpuReferenceBackend::compute(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads) const
+{
+  return computeWithTelemetry(edges, payloads).computation;
+}
+
+CsrComputationWithTelemetry CsrCpuReferenceBackend::computeWithTelemetry(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads) const
+{
+  return computeCsrCpuReferenceWithReplay(edges, payloads, static_cast<ActiveCsrFifoReplayFunction>(&replayFifoLevelization));
+}
+CsrComputationResult computeCsrCpuReferenceWithReplay(const CsrReferenceInput& input, CsrFifoReplayFunction replay)
+{
+  assert(replay != nullptr);
+  if (!validateReferenceInput(input).empty())
+    return CsrComputationResult{CsrComputationCode::kInvariantViolation};
+  if (!input.unsupported_reasons.empty())
+    return CsrComputationResult{CsrReferenceSupportResult{input.unsupported_reasons}};
+  CsrFifoLevelization fifo = replay(input);
+  if (!fifo.complete)
+    return CsrComputationResult{CsrComputationCode::kCycle};
+  FlatCsrEdgeView edges(input);
+  FlatTimingPayloadView payloads(input);
+  CsrCpuReferenceWorkState work;
+  work.result.schema_version = input.schema_version;
+  work.result.source_identity = input.source_identity;
+  CsrCpuReferenceStageStatus status = initializeCsrCpuReferenceResult(payloads, fifo, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess)
+    return stageFailure(status);
+  status = initializeCsrCpuReferenceArcs(edges, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess)
+    return stageFailure(status);
+  status = propagateCsrCpuReferenceForward(edges, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess)
+    return stageFailure(status);
+  status = propagateCsrCpuReferenceRequired(edges, payloads, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess)
+    return stageFailure(status);
+  return CsrComputationResult{std::move(work.result)};
+}
+
+
+CsrComputationWithTelemetry CsrCpuReferenceBackend::computeWithTelemetry(const CsrReferenceInput& input) const
+{
+  CsrComputationWithTelemetry output;
+  if (!validateReferenceInput(input).empty()) {
+    output.computation = CsrComputationResult{CsrComputationCode::kInvariantViolation};
+    return output;
+  }
+  FlatCsrEdgeView edges(input);
+  FlatTimingPayloadView payloads(input);
+  return computeWithTelemetry(edges, payloads);
 }
 
 }  // namespace ista::csr

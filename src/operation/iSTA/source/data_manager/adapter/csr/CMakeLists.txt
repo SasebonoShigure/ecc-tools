@@ -1,4 +1,6 @@
 set(ISTA_TIMING_GRAPH_CSR_ADAPTER_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/CanonicalTimingRecordProjector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CanonicalTimingRecordProjectorInternal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrGraphEncoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrGraphValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingGraphCsrAdapter.cpp
@@ -34,4 +36,12 @@ target_link_libraries(ista_timing_graph_csr_adapter
     ista_timing_csr_snapshot_contract
     PRIVATE
     ista_timing_database_headers
+)
+
+target_compile_options(ista_timing_graph_csr_adapter PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+    -pedantic
+    -ffp-contract=off
 )

@@ -85,9 +85,19 @@ def run_controller_self_test(require: Require, difference: Difference,
     }
     traversal_errors: list[str] = []
     validate_traversal_counts(
-        valid_visits, structural_visits, "traversal-canary",
+        valid_visits, structural_visits, "full_stage5", "traversal-canary",
         lambda ok, message: traversal_errors.append(message) if not ok else None)
     require(not traversal_errors, "valid structural traversal was rejected")
+    mixed_visits = {stage: dict(visits)
+                    for stage, visits in valid_visits.items()}
+    mixed_visits["levelization"] = {
+        "base_out": 0, "aux_out": 0, "base_in": 0}
+    mixed_errors: list[str] = []
+    validate_traversal_counts(
+        mixed_visits, structural_visits, "mixed_stage6",
+        "mixed-traversal-canary",
+        lambda ok, message: mixed_errors.append(message) if not ok else None)
+    require(not mixed_errors, "valid mixed traversal was rejected")
     for name, tampered in (
         ("all-zero", {stage: {key: 0 for key in visits}
                       for stage, visits in valid_visits.items()}),
@@ -98,9 +108,17 @@ def run_controller_self_test(require: Require, difference: Difference,
             tampered["forward_propagation"]["base_out"] += 1
         errors: list[str] = []
         validate_traversal_counts(
-            tampered, structural_visits, f"traversal-{name}-canary",
+            tampered, structural_visits, "full_stage5",
+            f"traversal-{name}-canary",
             lambda ok, message: errors.append(message) if not ok else None)
         require(errors, f"{name} traversal tamper was accepted")
+    mixed_full_errors: list[str] = []
+    validate_traversal_counts(
+        valid_visits, structural_visits, "mixed_stage6",
+        "mixed-full-levelizer-canary",
+        lambda ok, message:
+            mixed_full_errors.append(message) if not ok else None)
+    require(mixed_full_errors, "mixed mode accepted full-levelizer visits")
 
     run_timing_evidence_self_test(require)
     run_typed_validator_self_test(require)

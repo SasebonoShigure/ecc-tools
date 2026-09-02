@@ -62,33 +62,6 @@ void resetClockSoa(ClockResultSoa& clock, std::size_t lane_count)
   resetOptionalSoa(clock.predecessor_transitions, lane_count, Transition::kNone);
 }
 
-[[nodiscard]] bool validateReplay(const CsrFifoLevelization& replay, std::size_t node_count)
-{
-  if (!replay.complete || replay.level_nodes.size() != node_count || replay.node_to_level.size() != node_count || replay.level_offsets.empty()
-      || replay.level_offsets.front() != 0 || replay.level_offsets.back() != node_count)
-    return false;
-
-  if (node_count == 0)
-    return replay.level_offsets.size() == 1;
-  if (replay.level_offsets.size() < 2)
-    return false;
-
-  std::vector<std::uint8_t> seen(node_count, 0);
-  for (std::size_t level = 0; level + 1 < replay.level_offsets.size(); ++level) {
-    const std::uint64_t begin = replay.level_offsets[level];
-    const std::uint64_t end = replay.level_offsets[level + 1];
-    if (begin >= end || end > node_count)
-      return false;
-    for (std::uint64_t position = begin; position < end; ++position) {
-      const std::uint64_t node = replay.level_nodes[position].value();
-      if (node >= node_count || seen[node] != 0 || replay.node_to_level[node] != level + 1)
-        return false;
-      seen[node] = 1;
-    }
-  }
-  return std::all_of(seen.begin(), seen.end(), [](std::uint8_t value) { return value == 1; });
-}
-
 [[nodiscard]] const ClockConstraintModel* findDirectClock(const TimingPayloadView& payloads, NodeId node)
 {
   for (const auto& clock : payloads.clocks())
@@ -214,7 +187,7 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadVi
 {
   work.node_count = payloads.nodeCount();
   work.clock_tag_count = payloads.clockTags().size();
-  if (!validateReplay(replay, work.node_count) || !checkedMultiply(work.node_count, kAnalysisCount * kTransitionCount, work.node_lane_count)
+  if (!checkedMultiply(work.node_count, kAnalysisCount * kTransitionCount, work.node_lane_count)
       || !checkedMultiply(work.node_count, kAnalysisCount * kPathSourceCount * kTransitionCount, work.path_row_count)
       || work.path_row_count == std::numeric_limits<std::size_t>::max())
     return CsrCpuReferenceStageStatus::kInvariantViolation;

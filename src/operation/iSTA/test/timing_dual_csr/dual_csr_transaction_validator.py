@@ -5,6 +5,10 @@ import copy
 import json
 from typing import Any, Callable
 from dual_csr_descriptor_replay_validator import validate_descriptor_replay
+from dual_csr_execution_shape_validator import (
+    validate_execution_levels,
+    validate_mixed_execution,
+)
 from dual_csr_reference_replay_validator import validate_reference_replay
 from dual_csr_resolver_semantics_validator import validate_resolver_semantics
 from dual_csr_arc_group_validator import validate_arc_group_semantics
@@ -392,7 +396,10 @@ def _validate_descriptor(value: object, index: int, session: int,
 
 
 def validate_traversal_counts(value: object, structural: dict[str, Any],
-                              label: str, require: Require) -> None:
+                              latest_mode: str, label: str,
+                              require: Require) -> None:
+    require(latest_mode in {"full_stage5", "mixed_stage6"},
+            f"{label} execution mode is invalid")
     stages = _object(value, {"levelization", "arc_initialization",
                              "forward_propagation", "required_propagation"},
                      label, require)
@@ -405,9 +412,13 @@ def validate_traversal_counts(value: object, structural: dict[str, Any],
                       for slot in structural["base_out"]["physical_slots"])
     aux_active = len(structural["aux_out"]["arc_ids"])
     active = base_active + aux_active
+    full_levelization = {"base_out": base_active, "aux_out": aux_active,
+                         "base_in": active}
+    mixed_levelization = {"base_out": 0, "aux_out": 0, "base_in": 0}
     expected = {
-        "levelization": {"base_out": base_active, "aux_out": aux_active,
-                         "base_in": active},
+        "levelization": (mixed_levelization
+                         if latest_mode == "mixed_stage6"
+                         else full_levelization),
         "arc_initialization": {"base_out": base_active, "aux_out": aux_active,
                                "base_in": 0},
         "forward_propagation": {"base_out": 2 * base_active,
@@ -418,7 +429,7 @@ def validate_traversal_counts(value: object, structural: dict[str, Any],
     require(stages == expected, f"{label} does not match structural visits")
 
 
-def _normalize_plan(value: dict[str, Any]) -> dict[str, Any]:
+def normalize_plan(value: dict[str, Any]) -> dict[str, Any]:
     plan = copy.deepcopy(value)
     state = plan["baseline"]["canonical_pre_state"]
     state["active_arcs"] = state.pop("arcs")
@@ -495,6 +506,71 @@ def _validate_audit(value: object, descriptor: dict[str, Any], label: str,
             f"{label} arc tie-break count differs")
 
 
+def _validate_execution_trace(value: object, generation: int,
+                              descriptor_node_bounds: list[tuple[int, int, int]],
+                              final_node_count: int,
+                              final_traversal: dict[str, Any], label: str,
+                              require: Require) -> list[str]:
+    records = _array(value, label, require)
+    require(len(records) == generation,
+            f"{label} must contain one record per generation")
+    require(len(descriptor_node_bounds) == generation,
+            f"{label} descriptor node-count history differs")
+    modes: list[str] = []
+    keys = {"generation", "mode", "levels", "traversal",
+            "full_levelizer_entry_delta", "fallback_count",
+            "supplied_levels_validated", "mixed"}
+    for index, raw in enumerate(records):
+        item = _object(raw, keys, f"{label}[{index}]", require)
+        require(item["generation"] == index + 1,
+                f"{label}[{index}].generation differs")
+        mode = item["mode"]
+        require(mode in {"full_stage5", "mixed_stage6"},
+                f"{label}[{index}].mode differs")
+        modes.append(mode)
+        node_count = validate_execution_levels(
+            item["levels"], f"{label}[{index}].levels", require)
+        last_nodes, current_nodes, new_nodes = descriptor_node_bounds[index]
+        require(node_count == current_nodes,
+                f"{label}[{index}] node extent differs from descriptor.after")
+        level_count = len(item["levels"]["level_offsets"]) - 1
+        _count(item["full_levelizer_entry_delta"],
+               f"{label}[{index}].full_levelizer_entry_delta", require)
+        _count(item["fallback_count"],
+               f"{label}[{index}].fallback_count", require)
+        traversal = _object(item["traversal"], {
+            "levelization", "arc_initialization", "forward_propagation",
+            "required_propagation"}, f"{label}[{index}].traversal", require)
+        for stage, visits in traversal.items():
+            entry = _object(visits, {"base_out", "aux_out", "base_in"},
+                            f"{label}[{index}].traversal.{stage}", require)
+            for key in entry:
+                _count(entry[key],
+                       f"{label}[{index}].traversal.{stage}.{key}", require)
+        if mode == "full_stage5":
+            require(item["full_levelizer_entry_delta"] == 1
+                    and item["fallback_count"] == 0
+                    and item["supplied_levels_validated"] is False
+                    and item["mixed"] is None,
+                    f"{label}[{index}] full execution evidence differs")
+        else:
+            zero_visits = {"base_out": 0, "aux_out": 0, "base_in": 0}
+            require(item["full_levelizer_entry_delta"] == 0
+                    and item["fallback_count"] == 0
+                    and item["supplied_levels_validated"] is True
+                    and traversal["levelization"] == zero_visits,
+                    f"{label}[{index}] mixed execution evidence differs")
+            validate_mixed_execution(
+                item["mixed"], last_nodes, node_count, new_nodes,
+                level_count, f"{label}[{index}].mixed", require)
+    if records:
+        require(len(records[-1]["levels"]["level_nodes"]) == final_node_count,
+                f"{label} final node extent differs")
+        require(records[-1]["traversal"] == final_traversal,
+                f"{label} final traversal differs")
+    return modes
+
+
 def validate_transaction(value: object, generation: int,
                          structural: dict[str, Any],
                          functional: dict[str, Any],
@@ -502,11 +578,11 @@ def validate_transaction(value: object, generation: int,
                          require: Require, difference: Difference) -> None:
     keys = {"session_token", "generation", "resolver", "arc_group_index",
             "identity", "descriptor_trace", "semantic_trace",
-            "traversal_telemetry", "update_telemetry", "evidence",
+            "traversal_telemetry", "execution_trace", "update_telemetry", "evidence",
             "baseline_reference_input"}
     item = _object(value, keys, label, require)
     session = _count(item["session_token"], f"{label}.session_token", require)
-    require(session > 0 and item["generation"] == generation,
+    require(session > 0 and generation > 0 and item["generation"] == generation,
             f"{label} session/generation differs")
     require(item["arc_group_index"] == structural["arc_group_index"],
             f"{label}.arc_group_index differs from published structure")
@@ -514,8 +590,6 @@ def validate_transaction(value: object, generation: int,
                                  f"{label}.arc_group_index", require)
     require(item["update_telemetry"] == structural["update_telemetry"],
             f"{label}.update_telemetry differs from published structure")
-    validate_traversal_counts(item["traversal_telemetry"], structural,
-                              f"{label}.traversal_telemetry", require)
     require(item["traversal_telemetry"] == item["update_telemetry"]["traversal"],
             f"{label}.traversal_telemetry differs from updater evidence")
     _validate_resolver(item["resolver"], structural, f"{label}.resolver", require)
@@ -533,6 +607,19 @@ def validate_transaction(value: object, generation: int,
         previous = _validate_descriptor(
             descriptor, index, session, previous,
             f"{label}.descriptor_trace[{index}]", require, reference_chain)
+    descriptor_node_bounds = [
+        (descriptor["before"]["node_slots"],
+         descriptor["after"]["node_slots"],
+         len(descriptor["node_appends"]))
+        for descriptor in descriptors
+    ]
+    execution_modes = _validate_execution_trace(
+        item["execution_trace"], generation, descriptor_node_bounds,
+        structural["high_water"]["node_slots"], item["traversal_telemetry"],
+        f"{label}.execution_trace", require)
+    validate_traversal_counts(item["traversal_telemetry"], structural,
+                              execution_modes[-1],
+                              f"{label}.traversal_telemetry", require)
     validate_descriptor_replay(
         descriptors, structural, functional, item["resolver"],
         item["baseline_reference_input"], expected_batches,
@@ -546,7 +633,7 @@ def validate_transaction(value: object, generation: int,
     require(previous == structural["high_water"],
             f"{label} final descriptor high-water differs")
     semantic = _array(item["semantic_trace"], f"{label}.semantic_trace", require)
-    expected = [_normalize_plan(batch) for batch in expected_batches]
+    expected = [normalize_plan(batch) for batch in expected_batches]
     mismatch = difference(semantic, expected, f"{label}.semantic_trace")
     require(mismatch is None, f"{label} normalized semantic trace differs: {mismatch}")
     validate_resolver_semantics(item["resolver"], functional, structural,
@@ -555,10 +642,14 @@ def validate_transaction(value: object, generation: int,
     evidence = _object(item["evidence"], {"phase_trace", "capture_audits",
         "operation_counters", "incremental_batch_executed", "propagation_scope",
         "native_final_rollback_completed"}, f"{label}.evidence", require)
-    phases = ["pre_candidate_prepare", "candidate_apply_execute",
-              "post_candidate_capture", "dual_csr_update", "full_levelization",
-              "full_propagation", "intrinsic_verify", "publish"]
-    require(evidence["phase_trace"] == phases * generation
+    expected_phases: list[str] = []
+    for mode in execution_modes:
+        expected_phases.extend([
+            "pre_candidate_prepare", "candidate_apply_execute",
+            "post_candidate_capture", "dual_csr_update",
+            "mixed_levelization" if mode == "mixed_stage6" else "full_levelization",
+            "full_propagation", "intrinsic_verify", "publish"])
+    require(evidence["phase_trace"] == expected_phases
             + ["native_final_rollback"], f"{label}.evidence phase trace differs")
     audits = _array(evidence["capture_audits"],
                     f"{label}.evidence.capture_audits", require)

@@ -10,6 +10,7 @@ add_library(ista_timing_csr_core
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrSnapshotIdentityValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrFifoLevelization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrFifoLevelizationValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceInputValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceConstraintValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceNativeModelValidator.cpp

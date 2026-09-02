@@ -57,6 +57,16 @@ constexpr std::array<DualCsrReceiptPhase, 8> kBatchPhases{
     DualCsrReceiptPhase::kIntrinsicVerify,
     DualCsrReceiptPhase::kPublish};
 
+DualCsrReceiptPhase expectedBatchPhase(
+    const CommittedDualCsrAnalysisState& committed,
+    std::size_t batch, std::size_t phase)
+{
+  if (phase == 4 && committed.execution_trace.at(batch).mode()
+                        == LevelizationExecutionMode::kMixedStage6)
+    return DualCsrReceiptPhase::kMixedLevelization;
+  return kBatchPhases.at(phase);
+}
+
 bool auditMatches(const NarrowCaptureAudit& audit,
                   const DualCsrBatchDescriptor& descriptor)
 {
@@ -88,15 +98,19 @@ DualCsrViolations validateEvidence(
     reject(errors, DualCsrViolationCode::kGeneration,
            "transaction.phase_trace",
            "successful run must contain eight phases per batch and one final rollback");
+  } else if (committed.execution_trace.size() != generation) {
+    reject(errors, DualCsrViolationCode::kGeneration,
+           "transaction.execution_trace",
+           "phase validation requires one execution record per batch");
   } else {
     for (std::uint64_t batch = 0; batch < generation; ++batch)
       for (std::size_t phase = 0; phase < kBatchPhases.size(); ++phase)
         if (evidence.phase_trace[
                 batch * kBatchPhases.size() + phase]
-            != kBatchPhases[phase])
+            != expectedBatchPhase(committed, batch, phase))
           reject(errors, DualCsrViolationCode::kConflict,
                  "transaction.phase_trace",
-                 "batch phase order differs from the frozen runtime order");
+                 "batch phase order or levelization mode differs from the committed execution trace");
   }
   if (evidence.capture_audits.size() != generation)
     reject(errors, DualCsrViolationCode::kGeneration,
@@ -252,6 +266,7 @@ DualCsrExactReceiptAttempt finalizeDualCsrExactReceipt(
       .descriptor_trace = committed.descriptor_trace,
       .semantic_trace = committed.semantic_trace,
       .traversal_telemetry = committed.traversal_telemetry,
+      .execution_trace = committed.execution_trace,
       .update_telemetry = committed.graph.telemetry,
       .evidence = std::move(evidence)};
   attempt.receipt = DualCsrExactReceipt{

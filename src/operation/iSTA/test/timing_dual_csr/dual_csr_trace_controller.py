@@ -21,7 +21,7 @@ from dual_csr_trace_controller_selftest import run_controller_self_test
 from dual_csr_transaction_validator import validate_transaction as validate_full_transaction
 
 WIRE_SCHEMA = "ista-dual-csr-trace-process/1.0.0"
-EXACT_SCHEMA = "ista-dual-csr-exact-receipt/1.3.0"
+EXACT_SCHEMA = "ista-dual-csr-exact-receipt/1.4.0"
 ABS_TOLERANCE = 1.0e-9
 REL_TOLERANCE = 1.0e-9
 

@@ -17,6 +17,7 @@
 #pragma once
 
 #include "ActiveCsrEdgeView.hpp"
+#include "CsrFifoLevelization.hpp"
 #include "CsrReferenceTypes.hpp"
 #include "TimingPayloadView.hpp"
 
@@ -40,7 +41,11 @@ class CsrCpuReferenceBackend final
  public:
   [[nodiscard]] CsrComputationResult compute(const CsrReferenceInput& input) const;
   [[nodiscard]] CsrComputationResult compute(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads) const;
+  [[nodiscard]] CsrComputationResult compute(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+                                             const CsrFifoLevelization& levels) const;
   [[nodiscard]] CsrComputationWithTelemetry computeWithTelemetry(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads) const;
+  [[nodiscard]] CsrComputationWithTelemetry computeWithTelemetry(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+                                                                 const CsrFifoLevelization& levels) const;
   [[nodiscard]] CsrComputationWithTelemetry computeWithTelemetry(const CsrReferenceInput& input) const;
 };
 

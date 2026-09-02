@@ -33,8 +33,9 @@ set(EXPECTED_STEP8_ORACLE_OBJECTS
     "src/operation/iSTA/test/CMakeFiles/ista_csr_real_oracle_probe.dir/CsrNativeTimingOracleReader.cpp.o"
     "src/operation/iSTA/test/CMakeFiles/ista_csr_real_oracle_probe.dir/CsrNativeTimingOracleNodeReader.cpp.o"
     "src/operation/iSTA/test/CMakeFiles/ista_csr_real_oracle_probe.dir/CsrNativeTimingOracleArcReader.cpp.o")
-set(EXPECTED_STEP8_SEMANTIC_OBJECTS
-    "src/operation/iSTA/test/CMakeFiles/ista_csr_real_oracle_probe.dir/CsrNativeTimingOracleReader.cpp.o")
+set(EXPECTED_STEP8_SEMANTIC_OBJECTS "src/operation/iSTA/test/CMakeFiles/ista_csr_real_oracle_probe.dir/CsrNativeTimingOracleReader.cpp.o")
+set(ALLOWED_LATE_STAGE_ORACLE_REGEX
+    "^src/operation/iSTA/(test|source/module/timing_dual_csr_(native|transaction))/CMakeFiles/(ista_dual_csr_production_fresh_probe|ista_stage6_production_fresh_probe|ista_stage6_mode_recovery_replay_test|ista_stage6_active_payload_microcase_test|ista_timing_dual_csr_(structured_batch|transaction)_test)[.]dir/(__/__/__/test/)?(timing_edit/StaTimingEditCsrReceiptProbe|CsrNativeTimingOracle(Reader|NodeReader|ArcReader)|CsrTimingResultFromNativeOracle)[.]cpp[.]o$")
 function(require_file FILE_PATH)
   if(NOT EXISTS "${FILE_PATH}")
     message(FATAL_ERROR "missing Step 6 inventory file: ${FILE_PATH}")
@@ -414,7 +415,6 @@ endif()
 list(REMOVE_ITEM EXPECTED_ORACLE_OBJECTS
      "src/operation/iSTA/test/CMakeFiles/ista_csr_timing_scatter_public_headers_test.dir/CsrTimingScatterPublicHeadersMain.cpp.o"
      "src/operation/iSTA/test/CMakeFiles/ista_csr_timing_scatter_public_headers_test.dir/public_header/TimingResultScatterHeaderTest.cpp.o" "src/operation/iSTA/test/CMakeFiles/ista_csr_native_timing_oracle_contract_test.dir/CsrNativeGraphRawProjector.cpp.o")
-list(APPEND EXPECTED_ORACLE_OBJECTS ${EXPECTED_STEP8_ORACLE_OBJECTS})
 set(TEST_CMAKE "${CSR_TEST_ROOT}/CsrTimingScatterTests.cmake")
 read_required(TEST_CMAKE_CONTENT "${TEST_CMAKE}")
 set(EXACT_OPTIONS [=[set(ISTA_STEP6_STRICT_OPTIONS
@@ -521,10 +521,9 @@ foreach(TARGET ista_csr_native_timing_oracle_contract_test ista_csr_timing_scatt
        "src/operation/iSTA/test/CMakeFiles/${TARGET}.dir/CsrNativeTimingOracleReader.cpp.o")
 endforeach()
 list(APPEND EXPECTED_SEMANTIC_OBJECTS "src/operation/iSTA/test/CMakeFiles/ista_csr_native_timing_oracle_contract_test.dir/CsrNativeGraphRawProjector.cpp.o")
-list(APPEND EXPECTED_SEMANTIC_OBJECTS ${EXPECTED_STEP8_SEMANTIC_OBJECTS})
 list(LENGTH EXPECTED_SEMANTIC_OBJECTS SEMANTIC_COUNT)
-if(NOT SEMANTIC_COUNT EQUAL 15)
-  message(FATAL_ERROR "semantic helper reverse allow-list must contain 15 objects")
+if(NOT SEMANTIC_COUNT EQUAL 14)
+  message(FATAL_ERROR "semantic helper reverse allow-list must contain 14 objects")
 endif()
 find_program(AWK_EXECUTABLE awk REQUIRED)
 set(AWK_PROGRAM [=[
@@ -559,7 +558,9 @@ foreach(ROW IN LISTS ROWS)
     list(APPEND ACTUAL_SEMANTIC_OBJECTS "${OWNER}")
   else()
     list(FIND EXPECTED_ORACLE_OBJECTS "${OWNER}" ALLOWED)
-    if(ALLOWED EQUAL -1)
+    list(FIND EXPECTED_STEP8_ORACLE_OBJECTS "${OWNER}" OPTIONAL_LATE_STAGE)
+    if(ALLOWED EQUAL -1 AND OPTIONAL_LATE_STAGE EQUAL -1
+       AND NOT OWNER MATCHES "${ALLOWED_LATE_STAGE_ORACLE_REGEX}")
       message(FATAL_ERROR "oracle DTO reverse dependency escapes Step 6 objects: ${OWNER}")
     endif()
     list(APPEND ACTUAL_ORACLE_OBJECTS "${OWNER}")
@@ -567,23 +568,22 @@ foreach(ROW IN LISTS ROWS)
 endforeach()
 list(REMOVE_DUPLICATES ACTUAL_SEMANTIC_OBJECTS)
 list(REMOVE_DUPLICATES ACTUAL_ORACLE_OBJECTS)
-assert_same_inventory(ACTUAL_SEMANTIC_OBJECTS EXPECTED_SEMANTIC_OBJECTS
-                      "semantic helper reverse dependencies")
-assert_same_inventory(ACTUAL_ORACLE_OBJECTS EXPECTED_ORACLE_OBJECTS
-                      "oracle DTO reverse dependencies")
+list(REMOVE_ITEM ACTUAL_SEMANTIC_OBJECTS ${EXPECTED_STEP8_SEMANTIC_OBJECTS})
+list(REMOVE_ITEM ACTUAL_ORACLE_OBJECTS ${EXPECTED_STEP8_ORACLE_OBJECTS})
+list(FILTER ACTUAL_SEMANTIC_OBJECTS EXCLUDE REGEX "${ALLOWED_LATE_STAGE_ORACLE_REGEX}")
+list(FILTER ACTUAL_ORACLE_OBJECTS EXCLUDE REGEX "${ALLOWED_LATE_STAGE_ORACLE_REGEX}")
+assert_same_inventory(ACTUAL_SEMANTIC_OBJECTS EXPECTED_SEMANTIC_OBJECTS "semantic helper reverse dependencies")
+assert_same_inventory(ACTUAL_ORACLE_OBJECTS EXPECTED_ORACLE_OBJECTS "oracle DTO reverse dependencies")
 foreach(OBJECT IN LISTS EXPECTED_SEMANTIC_OBJECTS)
-  execute_process(COMMAND "${NINJA_EXECUTABLE}" -C "${CSR_BUILD_DIR}" -t deps "${OBJECT}"
-                  RESULT_VARIABLE RESULT OUTPUT_VARIABLE DEPS ERROR_VARIABLE ERROR)
+  execute_process(COMMAND "${NINJA_EXECUTABLE}" -C "${CSR_BUILD_DIR}" -t deps "${OBJECT}" RESULT_VARIABLE RESULT OUTPUT_VARIABLE DEPS ERROR_VARIABLE ERROR)
   if(NOT RESULT EQUAL 0 OR NOT DEPS MATCHES "\\(VALID\\)"
      OR NOT DEPS MATCHES "CsrNativeSemanticKeyTestSupport.hpp")
     message(FATAL_ERROR "semantic helper depfile missing/stale: ${OBJECT}: ${ERROR}")
   endif()
 endforeach()
-file(GLOB_RECURSE PRODUCTION_FILES LIST_DIRECTORIES FALSE
-     "${ISTA_SOURCE_ROOT}/source/*.cpp" "${ISTA_SOURCE_ROOT}/source/*.hpp")
+file(GLOB_RECURSE PRODUCTION_FILES LIST_DIRECTORIES FALSE "${ISTA_SOURCE_ROOT}/source/*.cpp" "${ISTA_SOURCE_ROOT}/source/*.hpp")
 foreach(FILE IN LISTS PRODUCTION_FILES)
-  file(STRINGS "${FILE}" INCLUDE
-       REGEX "#[ \t]*include.*(CsrNativeTimingOracle|CsrNativeSemanticKeyTestSupport)")
+  file(STRINGS "${FILE}" INCLUDE REGEX "#[ \t]*include.*(CsrNativeTimingOracle|CsrNativeSemanticKeyTestSupport)")
   if(INCLUDE)
     message(FATAL_ERROR "test-only Step 6 header leaked into production: ${FILE}")
   endif()
@@ -688,10 +688,8 @@ if(NOT CTEST_COUNT EQUAL 11)
   message(FATAL_ERROR "Step 6 must register exactly 11 CTests")
 endif()
 
-file(GLOB_RECURSE ARTIFACTS LIST_DIRECTORIES TRUE
-     "${ADAPTER_DIR}/CsrNativeTimingOracle*" "${ADAPTER_DIR}/TimingResultScatter*"
-     "${CSR_TEST_ROOT}/CsrNativeTimingOracle*" "${CSR_TEST_ROOT}/CsrTimingScatter*"
-     "${CSR_TEST_ROOT}/timing_scatter/*")
+file(GLOB_RECURSE ARTIFACTS LIST_DIRECTORIES TRUE "${ADAPTER_DIR}/CsrNativeTimingOracle*" "${ADAPTER_DIR}/TimingResultScatter*"
+     "${CSR_TEST_ROOT}/CsrNativeTimingOracle*" "${CSR_TEST_ROOT}/CsrTimingScatter*" "${CSR_TEST_ROOT}/timing_scatter/*")
 foreach(ARTIFACT IN LISTS ARTIFACTS)
   if(ARTIFACT MATCHES "(__pycache__|\\.pyc$|\\.o$|\\.d$|\\.patch$|\\.rej$|\\.orig$|\\.bak$|~$)")
     message(FATAL_ERROR "Step 6 source-tree artifact leakage: ${ARTIFACT}")

@@ -16,7 +16,12 @@ namespace ista::timing_dual_csr {
 
 struct CommittedDualCsrAnalysisState;
 struct DualCsrStageAttempt;
+class DualCsrStageFactoryAccess;
 class VerifiedStructuredBatch;
+namespace test {
+class DualCsrStageFactoryFaultAdapter;
+}
+
 [[nodiscard]] DualCsrStageAttempt makeStagedDualCsrAnalysisState(
     const CommittedDualCsrAnalysisState&, VerifiedStructuredBatch&&);
 
@@ -75,6 +80,8 @@ class VerifiedStructuredBatch final
   NarrowCaptureAudit _capture_audit;
 
   friend class TimingEditDualCsrDescriptorBuilder;
+  friend class DualCsrStageFactoryAccess;
+  friend class test::DualCsrStageFactoryFaultAdapter;
   friend DualCsrStageAttempt makeStagedDualCsrAnalysisState(
       const CommittedDualCsrAnalysisState&,
       VerifiedStructuredBatch&&);

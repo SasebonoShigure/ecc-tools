@@ -321,7 +321,12 @@ foreach(SLOW_FILE IN LISTS SLOW_ORACLE_FILES)
   endforeach()
 endforeach()
 
-assert_quote_includes("${CORE_DIR}/CsrCpuReferenceBackend.hpp" CsrReferenceTypes.hpp)
+assert_quote_includes(
+    "${CORE_DIR}/CsrCpuReferenceBackend.hpp"
+    ActiveCsrEdgeView.hpp
+    CsrFifoLevelization.hpp
+    CsrReferenceTypes.hpp
+    TimingPayloadView.hpp)
 assert_quote_includes("${CORE_DIR}/CsrTableLookup.hpp" CsrReferenceNativeModels.hpp)
 
 set(OUTCOME_TEST "${CSR_TEST_ROOT}/CsrCpuReferenceOutcomeContract.cpp")
@@ -337,7 +342,6 @@ foreach(STEP5_TEST_FILE IN LISTS EXPECTED_TEST_FILES)
                    "non-outcome Step 5 test")
   endif()
 endforeach()
-
 set(TABLE_HEADER "${CORE_DIR}/CsrTableLookup.hpp")
 set(TABLE_SOURCE "${CORE_DIR}/CsrTableLookup.cpp")
 set(BACKEND_HEADER "${CORE_DIR}/CsrCpuReferenceBackend.hpp")
@@ -350,18 +354,16 @@ read_required(BACKEND_SOURCE_CONTENT "${BACKEND_SOURCE}")
 read_required(BACKEND_INTERNAL_CONTENT "${BACKEND_INTERNAL}")
 require_literal_count(TABLE_HEADER_CONTENT "lookupCsrTimingTable(" 1 "table public declaration")
 require_literal_count(TABLE_SOURCE_CONTENT "lookupCsrTimingTable(" 1 "table production definition")
-require_literal_count(
-    BACKEND_HEADER_CONTENT "CsrComputationResult compute(" 1 "backend public declaration")
-require_literal_count(
-    BACKEND_SOURCE_CONTENT "CsrCpuReferenceBackend::compute(" 1 "backend public definition")
-require_literal_count(
-    BACKEND_INTERNAL_CONTENT "computeCsrCpuReferenceWithReplay(" 1 "backend seam declaration")
+require_literal_count(BACKEND_HEADER_CONTENT "CsrComputationResult compute(" 3 "backend public declarations")
+require_literal_count(BACKEND_SOURCE_CONTENT "CsrCpuReferenceBackend::compute(" 3 "backend public definitions")
+require_literal_count(BACKEND_INTERNAL_CONTENT "computeCsrCpuReferenceWithReplay(" 2 "backend seam declarations")
 set(EXPECTED_WRAPPER [=[CsrComputationResult CsrCpuReferenceBackend::compute(const CsrReferenceInput& input) const
 {
-  return computeCsrCpuReferenceWithReplay(input, &replayFifoLevelization);
+  if (!validateReferenceInput(input).empty())
+    return CsrComputationResult{CsrComputationCode::kInvariantViolation};
+  return computeWithTelemetry(input).computation;
 }]=])
 require_literal_count(BACKEND_SOURCE_CONTENT "${EXPECTED_WRAPPER}" 1 "backend exact wrapper")
-
 set(ALL_PRODUCTION_CONTENT)
 foreach(PRODUCTION_FILE IN LISTS EXPECTED_PRODUCTION_FILES)
   read_required(PRODUCTION_CONTENT "${PRODUCTION_FILE}")
@@ -377,8 +379,7 @@ foreach(PRODUCTION_FILE IN LISTS EXPECTED_PRODUCTION_FILES)
     require_absent("${PRODUCTION_FILE}" "${PROHIBITED_TOKEN}" "Step 5 production")
   endforeach()
 endforeach()
-require_literal_count(
-    ALL_PRODUCTION_CONTENT "validateReferenceInput(" 1 "Step 5 production input-validator call")
+require_literal_count(ALL_PRODUCTION_CONTENT "validateReferenceInput(" 3 "production input-validator calls")
 require_literal_count(
     ALL_PRODUCTION_CONTENT "&replayFifoLevelization" 1 "Step 5 production FIFO address-take")
 require_literal_count(
@@ -391,7 +392,6 @@ if(VALIDATE_POSITION EQUAL -1
    OR REPLAY_POSITION LESS SUPPORT_POSITION)
   message(FATAL_ERROR "backend ordering must be validate -> support -> replay")
 endif()
-
 set(INIT_SOURCE "${CORE_DIR}/CsrCpuReferenceResultInitialization.cpp")
 set(ARC_SOURCE "${CORE_DIR}/CsrCpuReferenceArcTransfer.cpp")
 set(FORWARD_SOURCE "${CORE_DIR}/CsrCpuReferenceForwardPropagation.cpp")

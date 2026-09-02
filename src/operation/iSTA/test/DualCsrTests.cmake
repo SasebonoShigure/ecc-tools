@@ -100,6 +100,7 @@ ista_assert_same_inventory(
 file(REAL_PATH "${CMAKE_CURRENT_LIST_DIR}/../benchmark/dual_csr"
      ISTA_DUAL_CSR_RUNTIME_SOURCE_DIR)
 set(ISTA_DUAL_CSR_RUNTIME_EXPECTED_SOURCES
+    "${ISTA_DUAL_CSR_RUNTIME_SOURCE_DIR}/CpuIncrementalLevelizationRunner.cpp"
     "${ISTA_DUAL_CSR_RUNTIME_SOURCE_DIR}/DualCsrTraceBaseline.cpp"
     "${ISTA_DUAL_CSR_RUNTIME_SOURCE_DIR}/DualCsrNativeCandidateCarrier.cpp"
     "${ISTA_DUAL_CSR_RUNTIME_SOURCE_DIR}/DualCsrTraceReplayer.cpp"

@@ -11,6 +11,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -20,10 +21,13 @@
 
 #include "CsrCpuReferenceBackend.hpp"
 #include "DataManager.hpp"
+#include "DualCsrArcGroupIndexValidation.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrExactReceipt.hpp"
+#include "DualCsrStageFactoryFaultAdapter.hpp"
 #include "DualCsrStructuredBatchTestSupport.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
+#include "DualCsrUpdater.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
 
 namespace ista::timing_dual_csr::test {
@@ -106,6 +110,15 @@ DualCsrVerifiedStage verifiedStage(
                      ? std::string{}
                      : ": " + attempt.violations.front().field + " "
                            + attempt.violations.front().message));
+  const auto& trace = attempt.staged->state().execution_trace;
+  require(trace.size() == 1
+              && trace.front().mode()
+                     == LevelizationExecutionMode::kFullStage5
+              && trace.front().fullLevelizerEntryDelta() == 1
+              && trace.front().fallbackCount() == 0
+              && !trace.front().suppliedLevelsValidated()
+              && !trace.front().mixed().has_value(),
+          "Stage 5 full factory did not seal a real full execution record");
   return std::move(*attempt.staged);
 }
 
@@ -113,23 +126,14 @@ CommittedDualCsrAnalysisState freshEquivalent(
     const CommittedDualCsrAnalysisState& committed,
     std::uint64_t session)
 {
-  CommittedDualCsrAnalysisState rebuilt = committed;
-  rebuilt.graph.session_token
-      = timing_edit::TimingEditSessionToken{session};
-  rebuilt.arc_group_index.session_token
-      = timing_edit::TimingEditSessionToken{session};
-  rebuilt.graph.reference_payload.source_identity.session_token = session;
-  rebuilt.timing.values.source_identity.session_token = session;
+  auto rebind = rebindRecoveredAggregateSession(
+      committed, committed.graph.session_token,
+      timing_edit::TimingEditSessionToken{session});
+  require(rebind.success(),
+          "typed recovery aggregate rebind was rejected");
+  CommittedDualCsrAnalysisState rebuilt
+      = std::move(*rebind.rebound);
   ++rebuilt.graph.telemetry.full_rebuild_count;
-  for (auto& descriptor : rebuilt.descriptor_trace) {
-    descriptor.session_token
-        = timing_edit::TimingEditSessionToken{session};
-    auto& source = descriptor.reference_payload.source_identity;
-    if (source) {
-      source->expected.session_token = session;
-      source->replacement.session_token = session;
-    }
-  }
   const auto violations = validateCommittedDualCsrAnalysisState(rebuilt);
   require(violations.empty(),
           "fresh equivalent aggregate was invalid"
@@ -232,6 +236,262 @@ void verifiedCapabilityAndPublishContracts()
   }
 }
 
+void mixedFactoryAndAtomicityContracts()
+{
+  {
+    timing_edit::test::installNativeTransactionBaseline();
+    timing_edit::test::GuardedTestSession session;
+    const StructuredFixture fixture
+        = structured_support::makeStructuredFixture(
+            STADM.getDatabase(), session.token());
+    const auto initial = initialAggregate(fixture);
+    auto verified = structured_support::captureAndBuildVerifiedBatch(
+        session, fixture);
+    auto attempt = makeMixedLevelizedDualCsrAnalysisState(
+        initial, std::move(verified));
+    auto* staged = std::get_if<DualCsrVerifiedStage>(&attempt);
+    require(staged != nullptr,
+            "valid structured batch did not produce a mixed verified stage");
+    const auto& state = staged->state();
+    require(state.execution_trace.size() == 1,
+            "mixed stage did not append exactly one execution record");
+    const auto& trace = state.execution_trace.front();
+    require(trace.mode() == LevelizationExecutionMode::kMixedStage6
+                && trace.fullLevelizerEntryDelta() == 0
+                && trace.fallbackCount() == 0
+                && trace.suppliedLevelsValidated()
+                && trace.mixed().has_value(),
+            "mixed stage execution record has the wrong mode boundary");
+    const auto& mixed = *trace.mixed();
+    require(mixed.n_last_nodes == initial.graph.nodes.size()
+                && mixed.n_current_nodes == state.graph.nodes.size()
+                && mixed.n_new_nodes > 0
+                && mixed.kahn_processed_count
+                       == mixed.mixed_vertex_count
+                && mixed.reconstructed_level_count
+                       == trace.levels().level_offsets.size() - 1,
+            "mixed execution record lost its real generation or Kahn boundary");
+    require(validateCommittedDualCsrAnalysisState(state).empty(),
+            "mixed verified stage is not a valid detached aggregate");
+
+    DualCsrTransactionCoordinator coordinator(initial);
+    const auto before = coordinator.committed();
+    const auto rejected = coordinator.publish(
+        std::move(*staged), DualCsrPublishFailpoint::kBeforeSwap);
+    require(rejected.code == DualCsrTransactionCode::kPreSwapFault
+                && !rejected.published && !rejected.poisoned
+                && coordinator.committed() == before,
+            "pre-swap mixed failure changed the committed aggregate");
+    require(session.closeAndRelease().ok(),
+            "mixed pre-swap session close failed");
+  }
+
+  {
+    timing_edit::test::installNativeTransactionBaseline();
+    timing_edit::test::GuardedTestSession session;
+    const StructuredFixture fixture
+        = structured_support::makeStructuredFixture(
+            STADM.getDatabase(), session.token());
+    const auto initial = initialAggregate(fixture);
+    auto verified = structured_support::captureAndBuildVerifiedBatch(
+        session, fixture);
+    auto malformed = initial;
+    malformed.generation = timing_edit::TransactionGeneration{1};
+    const auto before = malformed;
+    auto attempt = makeMixedLevelizedDualCsrAnalysisState(
+        malformed, std::move(verified));
+    const auto* failure = std::get_if<DualCsrStageFailure>(&attempt);
+    require(failure != nullptr
+                && failure->origin
+                       == DualCsrStageFailureOrigin::kExactBefore
+                && !failure->violations.empty()
+                && malformed == before,
+            "malformed exact-before was erased into a mixed failure or mutated");
+    require(session.closeAndRelease().ok(),
+            "mixed typed-failure session close failed");
+  }
+}
+
+void mixedFactoryFailureInputContracts()
+{
+  {
+    std::optional<CommittedDualCsrAnalysisState> generation_one;
+    timing_edit::TimingEditSessionToken source_token;
+    {
+      timing_edit::test::installNativeTransactionBaseline();
+      timing_edit::test::GuardedTestSession source_session;
+      const StructuredFixture source_fixture
+          = structured_support::makeStructuredFixture(
+              STADM.getDatabase(), source_session.token());
+      const auto source_initial = initialAggregate(source_fixture);
+      auto advance = structured_support::captureAndBuildVerifiedBatch(
+          source_session, source_fixture);
+      auto advance_attempt = makeMixedLevelizedDualCsrAnalysisState(
+          source_initial, std::move(advance));
+      const auto* advanced
+          = std::get_if<DualCsrVerifiedStage>(&advance_attempt);
+      require(advanced != nullptr,
+              "stale exact-before fixture did not produce generation one");
+      generation_one = advanced->state();
+      source_token = source_session.token();
+      require(source_session.closeAndRelease().ok(),
+              "stale source session close failed");
+    }
+
+    timing_edit::test::installNativeTransactionBaseline();
+    timing_edit::test::GuardedTestSession stale_session;
+    const StructuredFixture stale_fixture
+        = structured_support::makeStructuredFixture(
+            STADM.getDatabase(), stale_session.token());
+    const auto stale_initial = initialAggregate(stale_fixture);
+    auto stale = structured_support::captureAndBuildVerifiedBatch(
+        stale_session, stale_fixture);
+    auto rebound = rebindRecoveredAggregateSession(
+        std::move(*generation_one), source_token,
+        stale_session.token());
+    require(rebound.success(),
+            "generation-one fixture did not rebind to stale session");
+    const auto before = *rebound.rebound;
+    auto attempt = makeMixedLevelizedDualCsrAnalysisState(
+        *rebound.rebound, std::move(stale));
+    const auto* failure = std::get_if<DualCsrStageFailure>(&attempt);
+    const DualCsrViolations expected{{
+        DualCsrViolationCode::kExpectedValue,
+        "stage.exact_before",
+        "verified capability is not bound to the exact committed aggregate"}};
+    require(failure != nullptr
+                && failure->origin
+                       == DualCsrStageFailureOrigin::kExactBefore
+                && failure->violations == expected
+                && *rebound.rebound == before
+                && validateCommittedDualCsrAnalysisState(stale_initial)
+                       .empty(),
+            "valid stale exact-before lost its typed failure or mutated input");
+    require(stale_session.closeAndRelease().ok(),
+            "stale exact-before session close failed");
+  }
+
+  {
+    timing_edit::test::installNativeTransactionBaseline();
+    timing_edit::test::GuardedTestSession session;
+    const StructuredFixture fixture
+        = structured_support::makeStructuredFixture(
+            STADM.getDatabase(), session.token());
+    const auto initial = initialAggregate(fixture);
+    auto verified = structured_support::captureAndBuildVerifiedBatch(
+        session, fixture);
+    auto injected_descriptor = verified.descriptor();
+    DualCsrStageFactoryFaultAdapter::corruptIndexDelta(
+        injected_descriptor);
+    const auto expected = validateDualCsrArcGroupIndexDelta(
+        initial.graph, initial.arc_group_index, injected_descriptor);
+    require(!expected.empty(),
+            "wrong-index input did not fail the real delta validator");
+    DualCsrStageFactoryFaultAdapter::corruptIndexDelta(verified);
+    const auto before = initial;
+    auto attempt = makeMixedLevelizedDualCsrAnalysisState(
+        initial, std::move(verified));
+    const auto* failure = std::get_if<DualCsrStageFailure>(&attempt);
+    require(failure != nullptr
+                && failure->origin
+                       == DualCsrStageFailureOrigin::kIndexDelta
+                && failure->violations == expected && initial == before,
+            "wrong-index failure was erased, changed, or mutated committed");
+    require(session.closeAndRelease().ok(),
+            "wrong-index session close failed");
+  }
+
+  {
+    timing_edit::test::installNativeTransactionBaseline();
+    timing_edit::test::GuardedTestSession session;
+    const StructuredFixture fixture
+        = structured_support::makeStructuredFixture(
+            STADM.getDatabase(), session.token());
+    const auto initial = initialAggregate(fixture);
+    auto verified = structured_support::captureAndBuildVerifiedBatch(
+        session, fixture);
+    auto injected_descriptor = verified.descriptor();
+    require(DualCsrStageFactoryFaultAdapter::corruptUpdaterDescriptor(
+                injected_descriptor),
+            "updater-conflict fixture has no appended node");
+    require(validateDualCsrArcGroupIndexDelta(
+                initial.graph, initial.arc_group_index,
+                injected_descriptor)
+                .empty(),
+            "updater-conflict input failed before the updater boundary");
+    const auto expected_attempt = DualCsrUpdater::stage(
+        initial.graph, initial.arc_group_index, injected_descriptor);
+    require(!expected_attempt.success()
+                && !expected_attempt.violations.empty(),
+            "updater-conflict input did not fail the real updater");
+    require(DualCsrStageFactoryFaultAdapter::corruptUpdaterDescriptor(
+                verified),
+            "verified updater-conflict fixture has no appended node");
+    const auto before = initial;
+    auto attempt = makeMixedLevelizedDualCsrAnalysisState(
+        initial, std::move(verified));
+    const auto* failure = std::get_if<DualCsrStageFailure>(&attempt);
+    require(failure != nullptr
+                && failure->origin == DualCsrStageFailureOrigin::kUpdater
+                && failure->violations == expected_attempt.violations
+                && initial == before,
+            "updater failure was erased, changed, or mutated committed");
+    require(session.closeAndRelease().ok(),
+            "updater-conflict session close failed");
+  }
+
+  {
+    timing_edit::test::installNativeTransactionBaseline();
+    timing_edit::test::GuardedTestSession session;
+    const StructuredFixture fixture
+        = structured_support::makeStructuredFixture(
+            STADM.getDatabase(), session.token());
+    const auto initial = initialAggregate(fixture);
+    auto verified = structured_support::captureAndBuildVerifiedBatch(
+        session, fixture);
+    require(DualCsrStageFactoryFaultAdapter::corruptIntrinsicTimingInput(
+                verified),
+            "intrinsic fixture lacks an unconstrained output endpoint");
+    require(validateDualCsrArcGroupIndexDelta(
+                initial.graph, initial.arc_group_index,
+                verified.descriptor())
+                .empty(),
+            "intrinsic input failed before the updater boundary");
+    const auto expected_update = DualCsrUpdater::stage(
+        initial.graph, initial.arc_group_index,
+        verified.descriptor());
+    require(expected_update.success(),
+            "finite intrinsic input did not pass the real updater"
+                + (expected_update.violations.empty()
+                       ? std::string{}
+                       : ": " + expected_update.violations.front().field
+                             + " " + expected_update.violations.front().message));
+    DualCsrEdgeViewImpl edges(*expected_update.state);
+    DualCsrTimingPayloadViewImpl payloads(*expected_update.state);
+    csr::CsrCpuReferenceBackend backend;
+    const auto backend_output = backend.computeWithTelemetry(edges, payloads);
+    require(std::get_if<csr::CsrTimingResult>(
+                &backend_output.computation.outcome)
+                == nullptr,
+            "finite intrinsic input did not fail the real CPU backend");
+    const DualCsrViolations expected{{
+        DualCsrViolationCode::kTimingResult,
+        "stage.mixed_cpu",
+        "external-level full CPU propagation did not produce timing"}};
+    const auto before = initial;
+    auto attempt = makeMixedLevelizedDualCsrAnalysisState(
+        initial, std::move(verified));
+    const auto* failure = std::get_if<DualCsrStageFailure>(&attempt);
+    require(failure != nullptr
+                && failure->origin
+                       == DualCsrStageFailureOrigin::kTimingIntrinsic
+                && failure->violations == expected && initial == before,
+            "intrinsic failure was erased, changed, or mutated committed");
+    require(session.closeAndRelease().ok(),
+            "intrinsic timing session close failed");
+  }
+}
+
 void recoveryContracts()
 {
   timing_edit::test::installNativeTransactionBaseline();
@@ -304,31 +564,12 @@ void recoveryContracts()
                .success(),
           "recovery accepted a wrapped full-rebuild counter");
 
-  auto rebuilt = freshEquivalent(
+  auto clone_rebind_bypass = freshEquivalent(
       coordinator.committed(), session.token().value() + 3000);
-  auto attempt = makeDualCsrVerifiedRecovery(
-      coordinator.committed(), std::move(rebuilt));
-  require(attempt.success(),
-          "semantically equivalent recovery was rejected");
-  const auto recovered = coordinator.recover(
-      std::move(*attempt.recovery));
-  require(recovered.ok() && recovered.published
-              && !recovered.poisoned && !coordinator.poisoned(),
-          "verified recovery did not clear poison");
-
-  auto healthy_rebuild = freshEquivalent(
-      coordinator.committed(), session.token().value() + 4000);
-  auto healthy_attempt = makeDualCsrVerifiedRecovery(
-      coordinator.committed(), std::move(healthy_rebuild));
-  require(healthy_attempt.success(),
-          "healthy recovery capability fixture was invalid");
-  const auto before = coordinator.committed();
-  const auto rejected = coordinator.recover(
-      std::move(*healthy_attempt.recovery));
-  require(rejected.code
-              == DualCsrTransactionCode::kRecoveryNotPoisoned
-              && coordinator.committed() == before,
-          "healthy coordinator accepted recovery");
+  const auto bypass = makeDualCsrVerifiedRecovery(
+      coordinator.committed(), std::move(clone_rebind_bypass));
+  require(!bypass.success() && coordinator.poisoned(),
+          "legacy clone/rebind recovery bypassed persisted mode replay");
   require(session.closeAndRelease().ok(),
           "transaction recovery session close failed");
 }
@@ -415,6 +656,8 @@ int main()
   try {
     ista::timing_edit::test::NativeTransactionRuntime runtime;
     ista::timing_dual_csr::test::verifiedCapabilityAndPublishContracts();
+    ista::timing_dual_csr::test::mixedFactoryAndAtomicityContracts();
+    ista::timing_dual_csr::test::mixedFactoryFailureInputContracts();
     ista::timing_dual_csr::test::recoveryContracts();
     ista::timing_dual_csr::test::splitReceiptContracts();
   } catch (const std::exception& error) {

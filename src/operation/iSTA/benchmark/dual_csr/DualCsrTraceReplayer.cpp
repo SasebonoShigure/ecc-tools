@@ -19,6 +19,7 @@
 
 #include "BufferTraceTypes.hpp"
 #include "CsrReferenceInputAdapterInternal.hpp"
+#include "CpuIncrementalLevelizationRunner.hpp"
 #include "DualCsrBaselineFactoryInstrumentationInternal.hpp"
 #include "DualCsrNativeCandidateCarrierInternal.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
@@ -362,10 +363,11 @@ void requireResourceDeclarations(
 
 }  // namespace
 
-DualCsrTraceRunResult DualCsrTraceReplayer::replayPrefix(
+DualCsrTraceRunResult replayPrefixWithMode(
     const DualCsrTraceContext& context,
     const buffer_trace::ReplayProgram& program,
-    std::size_t prefix_batches)
+    std::size_t prefix_batches,
+    LevelizationExecutionMode mode)
 {
   const auto& trace_batches = batches(program);
   if (prefix_batches == 0 || prefix_batches > trace_batches.size())
@@ -460,26 +462,45 @@ DualCsrTraceRunResult DualCsrTraceReplayer::replayPrefix(
       evidence.phase_trace.push_back(
           DualCsrReceiptPhase::kPostCandidateCapture);
 
-      DualCsrStageAttempt staged = makeStagedDualCsrAnalysisState(
-          committed, std::move(verified));
-      batch_timing.dual_csr_update_ms = staged.timings.dual_csr_update_ms;
-      batch_timing.full_levelization_ms = staged.timings.full_levelization_ms;
-      batch_timing.full_propagation_ms = staged.timings.full_propagation_ms;
-      batch_timing.invariant_ms = staged.timings.invariant_ms;
-      batch_timing.verify_ms = staged.timings.verify_ms;
-      if (!staged.success())
-        fail(DualCsrTraceFailureCode::kStageRejected,
-             "Dual-CSR update or direct-view CPU/full timing failed");
+      std::optional<DualCsrVerifiedStage> verified_stage;
+      DualCsrStageTimings stage_timings;
+      if (mode == LevelizationExecutionMode::kMixedStage6) {
+        auto staged = CpuIncrementalLevelizationRunner::run(
+            committed, std::move(verified));
+        if (!staged.success() || !staged.phase_timings)
+          fail(DualCsrTraceFailureCode::kStageRejected,
+               "Dual-CSR update or mixed levelization failed");
+        stage_timings = *staged.phase_timings;
+        verified_stage.emplace(std::move(*staged.staged()));
+      } else {
+        DualCsrStageAttempt staged = makeStagedDualCsrAnalysisState(
+            committed, std::move(verified));
+        if (!staged.success())
+          fail(DualCsrTraceFailureCode::kStageRejected,
+               "Dual-CSR update or direct-view CPU/full timing failed");
+        stage_timings = staged.timings;
+        verified_stage.emplace(std::move(*staged.staged));
+      }
+      batch_timing.dual_csr_update_ms = stage_timings.dual_csr_update_ms;
+      batch_timing.full_levelization_ms = stage_timings.full_levelization_ms;
+      batch_timing.mixed_build_ms = stage_timings.mixed_build_ms;
+      batch_timing.mixed_kahn_ms = stage_timings.mixed_kahn_ms;
+      batch_timing.reconstruct_ms = stage_timings.reconstruct_ms;
+      batch_timing.full_propagation_ms = stage_timings.full_propagation_ms;
+      batch_timing.invariant_ms = stage_timings.invariant_ms;
+      batch_timing.verify_ms = stage_timings.verify_ms;
       evidence.phase_trace.push_back(DualCsrReceiptPhase::kDualCsrUpdate);
       evidence.phase_trace.push_back(
-          DualCsrReceiptPhase::kFullLevelization);
+          mode == LevelizationExecutionMode::kMixedStage6
+              ? DualCsrReceiptPhase::kMixedLevelization
+              : DualCsrReceiptPhase::kFullLevelization);
       evidence.phase_trace.push_back(
           DualCsrReceiptPhase::kFullPropagation);
       evidence.phase_trace.push_back(
           DualCsrReceiptPhase::kIntrinsicVerify);
 
       const auto publish_started = SteadyClock::now();
-      const auto status = coordinator.publish(std::move(*staged.staged));
+      const auto status = coordinator.publish(std::move(*verified_stage));
       batch_timing.publish_ms
           = elapsedMilliseconds(publish_started);
       if (!status.ok() || !status.published || status.poisoned)
@@ -549,12 +570,39 @@ DualCsrTraceRunResult DualCsrTraceReplayer::replayPrefix(
               = std::move(resource_observations)}};
 }
 
+DualCsrTraceRunResult DualCsrTraceReplayer::replayPrefix(
+    const DualCsrTraceContext& context,
+    const buffer_trace::ReplayProgram& program,
+    std::size_t prefix_batches)
+{
+  return replayPrefixWithMode(context, program, prefix_batches,
+                              LevelizationExecutionMode::kFullStage5);
+}
+
+DualCsrTraceRunResult DualCsrTraceReplayer::replayMixedPrefix(
+    const DualCsrTraceContext& context,
+    const buffer_trace::ReplayProgram& program,
+    std::size_t prefix_batches)
+{
+  return replayPrefixWithMode(context, program, prefix_batches,
+                              LevelizationExecutionMode::kMixedStage6);
+}
+
 DualCsrTraceRunResult replayDualCsrTracePrefix(
     const DualCsrTraceContext& context,
     const buffer_trace::ReplayProgram& program,
     std::size_t prefix_batches)
 {
   return DualCsrTraceReplayer::replayPrefix(
+      context, program, prefix_batches);
+}
+
+DualCsrTraceRunResult replayMixedDualCsrTracePrefix(
+    const DualCsrTraceContext& context,
+    const buffer_trace::ReplayProgram& program,
+    std::size_t prefix_batches)
+{
+  return DualCsrTraceReplayer::replayMixedPrefix(
       context, program, prefix_batches);
 }
 

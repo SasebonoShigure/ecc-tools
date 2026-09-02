@@ -82,11 +82,12 @@ void addFanoutSink(Database& database, const std::string& sink_name)
   net.get_load_pin_list().push_back(sink_name);
 
   Arc arc = database.get_arc_list().front();
-  arc.set_arc_name("n0:in->" + sink_name);
+  const std::string source = arc.get_source_pin();
+  arc.set_arc_name("n0:" + source + "->" + sink_name);
   arc.set_sink_pin(sink_name);
   database.get_arc_list().push_back(std::move(arc));
   const std::size_t index = database.get_arc_list().size() - 1;
-  database.get_outgoing_arc_list_map().at("in").push_back(index);
+  database.get_outgoing_arc_list_map().at(source).push_back(index);
   database.get_incoming_arc_list_map()[sink_name].push_back(index);
 
   const auto failure = timing_edit::validateNativeDatabase(database);

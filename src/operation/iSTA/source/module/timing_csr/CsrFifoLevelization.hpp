@@ -45,6 +45,51 @@ struct CsrFifoLevelization
   friend bool operator==(const CsrFifoLevelization&, const CsrFifoLevelization&) = default;
 };
 
+class CsrFullLevelizerEntryDelta final
+{
+ public:
+  CsrFullLevelizerEntryDelta(const CsrFullLevelizerEntryDelta&) = delete;
+  CsrFullLevelizerEntryDelta& operator=(const CsrFullLevelizerEntryDelta&) = delete;
+  CsrFullLevelizerEntryDelta(CsrFullLevelizerEntryDelta&& other) noexcept;
+  CsrFullLevelizerEntryDelta& operator=(CsrFullLevelizerEntryDelta&&) = delete;
+
+  [[nodiscard]] std::uint64_t value() const noexcept { return _value; }
+
+ private:
+  explicit CsrFullLevelizerEntryDelta(std::uint64_t value) noexcept : _value(value) {}
+
+  std::uint64_t _value{0};
+
+  friend class CsrFullLevelizerOperationGuard;
+};
+
+class CsrFullLevelizerOperationGuard final
+{
+ public:
+  CsrFullLevelizerOperationGuard(const CsrFullLevelizerOperationGuard&) = delete;
+  CsrFullLevelizerOperationGuard& operator=(const CsrFullLevelizerOperationGuard&) = delete;
+  CsrFullLevelizerOperationGuard(CsrFullLevelizerOperationGuard&& other) noexcept;
+  CsrFullLevelizerOperationGuard& operator=(CsrFullLevelizerOperationGuard&&) = delete;
+
+  [[nodiscard]] CsrFullLevelizerEntryDelta finish() &&;
+
+ private:
+  CsrFullLevelizerOperationGuard(const std::uint64_t* counter, std::uint64_t start_count) noexcept
+      : _counter(counter), _start_count(start_count)
+  {
+  }
+
+  const std::uint64_t* _counter{nullptr};
+  std::uint64_t _start_count{0};
+
+  friend CsrFullLevelizerOperationGuard beginCsrFullLevelizerOperation() noexcept;
+};
+
+// Begins a same-thread observation window over actual generic full-levelizer
+// entries. Neither the guard nor the resulting move-only delta can be forged
+// through public construction.
+[[nodiscard]] CsrFullLevelizerOperationGuard beginCsrFullLevelizerOperation() noexcept;
+
 // Precondition: validateReferenceInput(input) is empty. This helper deliberately
 // does not guard malformed CSR indices; every production caller must visibly
 [[nodiscard]] CsrFifoLevelization replayFifoLevelization(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,

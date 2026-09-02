@@ -23,9 +23,18 @@ class DualCsrTraceReplayer final
       const DualCsrTraceContext& context,
       const buffer_trace::ReplayProgram& program,
       std::size_t prefix_batches);
+  [[nodiscard]] static DualCsrTraceRunResult replayMixedPrefix(
+      const DualCsrTraceContext& context,
+      const buffer_trace::ReplayProgram& program,
+      std::size_t prefix_batches);
 };
 
 [[nodiscard]] DualCsrTraceRunResult replayDualCsrTracePrefix(
+    const DualCsrTraceContext& context,
+    const buffer_trace::ReplayProgram& program,
+    std::size_t prefix_batches);
+
+[[nodiscard]] DualCsrTraceRunResult replayMixedDualCsrTracePrefix(
     const DualCsrTraceContext& context,
     const buffer_trace::ReplayProgram& program,
     std::size_t prefix_batches);

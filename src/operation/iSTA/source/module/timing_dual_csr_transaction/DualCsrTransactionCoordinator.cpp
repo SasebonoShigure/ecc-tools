@@ -7,35 +7,17 @@
 #include "DualCsrTransactionCoordinator.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include <variant>
 
-#include "../../data_manager/adapter/csr/DualCsrSemanticIdentity.hpp"
-#include "../../data_manager/adapter/csr/TimingEditDualCsrDescriptorBuilder.hpp"
-#include "NarrowCaptureAuditValidation.hpp"
-#include "CsrCpuReferenceBackend.hpp"
 #include "DualCsrArcGroupResolverValidation.hpp"
-#include "DualCsrEdgeViewImpl.hpp"
-#include "DualCsrTimingPayloadViewImpl.hpp"
-#include "DualCsrUpdater.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
-
-using SteadyClock = std::chrono::steady_clock;
-
-double elapsedMilliseconds(SteadyClock::time_point start)
-{
-  return std::chrono::duration<double, std::milli>(
-             SteadyClock::now() - start)
-      .count();
-}
 
 void rejectViolation(DualCsrViolations& errors, DualCsrViolationCode code,
                      std::string field, std::string message)
@@ -47,46 +29,19 @@ bool prefixMatches(const CommittedDualCsrAnalysisState& committed,
                    const CommittedDualCsrAnalysisState& staged)
 {
   if (staged.descriptor_trace.size() != committed.descriptor_trace.size() + 1
-      || staged.semantic_trace.size() != committed.semantic_trace.size() + 1)
+      || staged.semantic_trace.size() != committed.semantic_trace.size() + 1
+      || staged.execution_trace.size()
+             != committed.execution_trace.size() + 1)
     return false;
   return std::equal(committed.descriptor_trace.begin(),
                     committed.descriptor_trace.end(),
                     staged.descriptor_trace.begin())
          && std::equal(committed.semantic_trace.begin(),
                        committed.semantic_trace.end(),
-                       staged.semantic_trace.begin());
-}
-
-bool baselineMatches(const CommittedDualCsrAnalysisState& committed,
-                     const timing_edit::PreparedBatch& batch)
-{
-  if (!committed.semantic_trace.empty())
-    return batch.baseline() == committed.semantic_trace.front().baseline;
-  return committed.generation.value() == 0
-         && committed.identity.generation
-                == timing_edit::TransactionGeneration{0}
-         && committed.identity.current_fingerprints
-                == batch.baseline().fingerprints
-         && committed.identity.canonical_pre_state
-                == batch.baseline().canonical_pre_state;
-}
-
-timing_edit::DesignEditPlan semanticPlan(
-    const timing_edit::PreparedBatch& batch)
-{
-  return {.schema_version = timing_edit::kDesignEditPlanSchema,
-          .baseline = batch.baseline(),
-          .expected_generation = batch.expectedGeneration(),
-          .edits = batch.normalizedEdits()};
-}
-
-std::vector<std::uint8_t> activeArcMask(const DualCsrState& graph)
-{
-  std::vector<std::uint8_t> mask;
-  mask.reserve(graph.arc_slots.size());
-  for (const auto& slot : graph.arc_slots)
-    mask.push_back(slot.active ? 1U : 0U);
-  return mask;
+                       staged.semantic_trace.begin())
+         && std::equal(committed.execution_trace.begin(),
+                       committed.execution_trace.end(),
+                       staged.execution_trace.begin());
 }
 
 void clearSession(csr::CsrSnapshotIdentity& identity) noexcept
@@ -168,141 +123,11 @@ bool recoverySemanticsMatch(
          && current.semantic_trace == rebuilt.semantic_trace
          && sessionNeutralDescriptors(current.descriptor_trace)
                 == sessionNeutralDescriptors(rebuilt.descriptor_trace)
-         && current.traversal_telemetry == rebuilt.traversal_telemetry;
+         && current.traversal_telemetry == rebuilt.traversal_telemetry
+         && current.execution_trace == rebuilt.execution_trace;
 }
 
 }  // namespace
-
-DualCsrStageAttempt makeStagedDualCsrAnalysisState(
-    const CommittedDualCsrAnalysisState& committed,
-    VerifiedStructuredBatch&& verified_batch)
-{
-  DualCsrStageAttempt attempt;
-  timing_edit::PreparedBatch prepared_batch
-      = std::move(verified_batch._prepared_batch);
-  timing_edit::TimingEditResolverState staged_resolver
-      = std::move(verified_batch._staged_resolver);
-  DualCsrBatchDescriptor descriptor
-      = std::move(verified_batch._descriptor);
-  ExpectedBeforeBinding expected_before
-      = std::move(verified_batch._expected_before);
-  NarrowCaptureAudit capture_audit
-      = std::move(verified_batch._capture_audit);
-  const std::uint64_t expected = committed.generation.value();
-  attempt.violations = validateCommittedDualCsrAnalysisState(committed);
-  if (!attempt.violations.empty())
-    return attempt;
-  if (expected == std::numeric_limits<std::uint64_t>::max()
-      || prepared_batch.sealed()
-      || prepared_batch.targetPostCommittedIdentity()
-      || expected_before.graph() != committed.graph
-      || expected_before.resolver() != committed.resolver
-      || expected_before.arcGroupIndex() != committed.arc_group_index
-      || expected_before.identity() != committed.identity
-      || prepared_batch.sessionToken() != committed.graph.session_token
-      || prepared_batch.expectedGeneration() != committed.generation
-      || prepared_batch.targetGeneration()
-             != timing_edit::TransactionGeneration{expected + 1}
-      || prepared_batch.expectedPreCommittedIdentity() != committed.identity
-      || prepared_batch.policyReceipt().disposition
-             != timing_edit::EditDisposition::kSupported
-      || !baselineMatches(committed, prepared_batch)
-      || descriptor.session_token != prepared_batch.sessionToken()
-      || descriptor.expected_generation
-             != prepared_batch.expectedGeneration()
-      || descriptor.target_generation
-             != prepared_batch.targetGeneration()
-      || descriptor.before != prepared_batch.slotPlan().before
-      || descriptor.after != prepared_batch.slotPlan().after
-      || staged_resolver.highWater() != descriptor.after
-      || !validateNarrowCaptureAudit(
-          capture_audit,
-          NarrowCaptureAuditExpectation{
-              descriptor.after, descriptor.logical_deactivations.size()})) {
-    rejectViolation(attempt.violations, DualCsrViolationCode::kGeneration,
-                    "stage",
-                    "verified batch and exact committed state do not form the next generation");
-    return attempt;
-  }
-  try {
-    if (committed.resolver.stage(prepared_batch) != staged_resolver) {
-      rejectViolation(attempt.violations,
-                      DualCsrViolationCode::kConflict,
-                      "stage.resolver",
-                      "verified staged resolver is not the exact batch transition");
-      return attempt;
-    }
-  } catch (const std::invalid_argument& error) {
-    rejectViolation(attempt.violations, DualCsrViolationCode::kConflict,
-                    "stage.resolver", error.what());
-    return attempt;
-  }
-
-  const auto update_started = SteadyClock::now();
-  DualCsrIndexedUpdateAttempt graph_attempt = DualCsrUpdater::stage(
-      committed.graph, committed.arc_group_index, descriptor);
-  if (!graph_attempt.success()) {
-    attempt.violations = std::move(graph_attempt.violations);
-    return attempt;
-  }
-  attempt.timings.dual_csr_update_ms
-      = elapsedMilliseconds(update_started);
-  DualCsrArcGroupIndex arc_group_index
-      = std::move(*graph_attempt.arc_group_index);
-  const auto invariant_started = SteadyClock::now();
-  attempt.violations = validateDualCsrArcGroupResolverTransition(
-      committed.arc_group_index, arc_group_index, descriptor,
-      staged_resolver);
-  attempt.timings.invariant_ms
-      = elapsedMilliseconds(invariant_started);
-  if (!attempt.violations.empty())
-    return attempt;
-  DualCsrState graph = std::move(*graph_attempt.state);
-  csr::CsrCpuReferenceBackend backend;
-  DualCsrEdgeViewImpl edges(graph);
-  DualCsrTimingPayloadViewImpl payloads(graph);
-  auto computation = backend.computeWithTelemetry(edges, payloads);
-  attempt.timings.full_levelization_ms
-      = computation.phase_timings.levelization_ms;
-  attempt.timings.full_propagation_ms
-      = computation.phase_timings.propagation_ms;
-  auto* values = std::get_if<csr::CsrTimingResult>(
-      &computation.computation.outcome);
-  if (values == nullptr) {
-    rejectViolation(attempt.violations,
-                    DualCsrViolationCode::kTimingResult,
-                    "stage.full_cpu",
-                    "direct-view full CPU computation did not produce timing");
-    return attempt;
-  }
-  DualCsrTimingResult timing{std::move(*values), activeArcMask(graph)};
-  graph.telemetry.traversal = computation.telemetry;
-
-  timing_edit::CommittedEditIdentity identity
-      = deriveDualCsrCommittedIdentity(graph, staged_resolver);
-  timing_edit::DesignEditPlan semantic_batch = semanticPlan(prepared_batch);
-
-  CommittedDualCsrAnalysisState staged{
-      .graph = std::move(graph),
-      .timing = std::move(timing),
-      .resolver = std::move(staged_resolver),
-      .arc_group_index = std::move(arc_group_index),
-      .identity = std::move(identity),
-      .generation = descriptor.target_generation,
-      .descriptor_trace = committed.descriptor_trace,
-      .semantic_trace = committed.semantic_trace,
-      .traversal_telemetry = computation.telemetry};
-  staged.descriptor_trace.push_back(std::move(descriptor));
-  staged.semantic_trace.push_back(std::move(semantic_batch));
-  const auto verify_started = SteadyClock::now();
-  attempt.violations = validateCommittedDualCsrAnalysisState(staged);
-  attempt.timings.verify_ms
-      = elapsedMilliseconds(verify_started);
-  if (attempt.violations.empty())
-    attempt.staged.emplace(
-        DualCsrVerifiedStage(committed, std::move(staged)));
-  return attempt;
-}
 
 DualCsrRecoveryAttempt makeDualCsrVerifiedRecovery(
     const CommittedDualCsrAnalysisState& poisoned_committed,
@@ -326,6 +151,12 @@ DualCsrRecoveryAttempt makeDualCsrVerifiedRecovery(
   attempt.violations.insert(attempt.violations.end(),
       std::make_move_iterator(rebuilt_binding_errors.begin()),
       std::make_move_iterator(rebuilt_binding_errors.end()));
+  if (!poisoned_committed.execution_trace.empty()
+      || !rebuilt.execution_trace.empty())
+    rejectViolation(
+        attempt.violations, DualCsrViolationCode::kConflict,
+        "recovery.mode_replay_required",
+        "aggregates with persisted execution modes must use the mode-dispatched recovery replay capability");
   if (poisoned_committed.graph.session_token
           == rebuilt.graph.session_token
       || !recoverySemanticsMatch(poisoned_committed, rebuilt))
@@ -400,6 +231,9 @@ DualCsrTransactionStatus DualCsrTransactionCoordinator::recover(
   if (!(verified._expected_poisoned == _committed))
     return reject(DualCsrTransactionCode::kTraceMismatch);
 
+  if (!_committed.execution_trace.empty()
+      || !verified._state.execution_trace.empty())
+    return reject(DualCsrTransactionCode::kTraceMismatch);
   CommittedDualCsrAnalysisState rebuilt = std::move(verified._state);
   if (!validateCommittedDualCsrAnalysisState(rebuilt).empty())
     return reject(DualCsrTransactionCode::kInvalidStagedState);

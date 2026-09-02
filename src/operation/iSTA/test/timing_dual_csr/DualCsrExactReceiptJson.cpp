@@ -44,6 +44,8 @@ std::string_view phaseToken(DualCsrReceiptPhase value)
       return "dual_csr_update";
     case DualCsrReceiptPhase::kFullLevelization:
       return "full_levelization";
+    case DualCsrReceiptPhase::kMixedLevelization:
+      return "mixed_levelization";
     case DualCsrReceiptPhase::kFullPropagation:
       return "full_propagation";
     case DualCsrReceiptPhase::kIntrinsicVerify:
@@ -378,6 +380,76 @@ Json counters(const DualCsrOperationCounters& value)
           {"candidate_rollbacks", value.candidate_rollbacks}};
 }
 
+std::string_view executionModeToken(LevelizationExecutionMode value)
+{
+  if (value == LevelizationExecutionMode::kFullStage5)
+    return "full_stage5";
+  if (value == LevelizationExecutionMode::kMixedStage6)
+    return "mixed_stage6";
+  throw std::invalid_argument("unknown levelization execution mode");
+}
+
+Json levelization(const csr::CsrFifoLevelization& value)
+{
+  return {{"complete", value.complete},
+          {"level_offsets", scalarArray(value.level_offsets)},
+          {"level_nodes", arrayOf(value.level_nodes, [](csr::NodeId node) {
+             return Json(node.value());
+           })},
+          {"node_to_level", scalarArray(value.node_to_level)},
+          {"view_error", value.view_error ? Json("present") : Json(nullptr)}};
+}
+
+Json mixedTrace(const MixedLevelizationDeterministicTrace& value)
+{
+  return {{"n_last_nodes", value.n_last_nodes},
+          {"n_current_nodes", value.n_current_nodes},
+          {"n_new_nodes", value.n_new_nodes},
+          {"n_old_levels", value.n_old_levels},
+          {"mixed_vertex_count", value.mixed_vertex_count},
+          {"actual_eligible_arc_visits", value.actual_eligible_arc_visits},
+          {"old_old", value.old_old},
+          {"old_new", value.old_new},
+          {"new_old", value.new_old},
+          {"new_new", value.new_new},
+          {"mapped_actual_arc_candidates",
+           value.mapped_actual_arc_candidates},
+          {"unique_actual_endpoint_pairs",
+           value.unique_actual_endpoint_pairs},
+          {"actual_parallel_duplicates_collapsed",
+           value.actual_parallel_duplicates_collapsed},
+          {"proxy_alias_duplicates_collapsed",
+           value.proxy_alias_duplicates_collapsed},
+          {"unique_precedence_edges", value.unique_precedence_edges},
+          {"virtual_chain_edges", value.virtual_chain_edges},
+          {"base_out", value.base_out},
+          {"aux_out", value.aux_out},
+          {"kahn_processed_count", value.kahn_processed_count},
+          {"max_frontier", value.max_frontier},
+          {"reconstructed_level_count",
+           value.reconstructed_level_count},
+          {"actual_cycle_classifier_runs",
+           value.actual_cycle_classifier_runs},
+          {"actual_cycle_classifier_arc_visits",
+           value.actual_cycle_classifier_arc_visits},
+          {"fallback_count", value.fallback_count}};
+}
+
+Json executionTrace(const LevelizationExecutionTrace& value)
+{
+  return {{"generation", value.generation().value()},
+          {"mode", executionModeToken(value.mode())},
+          {"levels", levelization(value.levels())},
+          {"traversal", traversal(value.traversal())},
+          {"full_levelizer_entry_delta",
+           value.fullLevelizerEntryDelta()},
+          {"fallback_count", value.fallbackCount()},
+          {"supplied_levels_validated",
+           value.suppliedLevelsValidated()},
+          {"mixed", value.mixed() ? mixedTrace(*value.mixed())
+                                  : Json(nullptr)}};
+}
+
 Json evidence(const DualCsrTransactionEvidence& value)
 {
   return {{"phase_trace", arrayOf(value.phase_trace,
@@ -435,6 +507,8 @@ nlohmann::json exactReceiptToJson(const DualCsrExactReceipt& receipt)
         {"semantic_trace",
          arrayOf(transaction.semantic_trace, semantic_json::semanticPlan)},
         {"traversal_telemetry", traversal(transaction.traversal_telemetry)},
+        {"execution_trace",
+         arrayOf(transaction.execution_trace, executionTrace)},
         {"update_telemetry", telemetry(transaction.update_telemetry)},
         {"evidence", evidence(transaction.evidence)}}}};
 }

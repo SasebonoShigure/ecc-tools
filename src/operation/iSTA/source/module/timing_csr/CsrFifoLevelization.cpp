@@ -19,12 +19,54 @@
 #include "FlatCsrEdgeView.hpp"
 #include "FlatTimingPayloadView.hpp"
 #include <algorithm>
+#include <limits>
 #include <queue>
+#include <stdexcept>
+#include <utility>
 
 namespace ista::csr {
+namespace {
+
+thread_local std::uint64_t full_levelizer_entry_count = 0;
+
+void recordFullLevelizerEntry()
+{
+  if (full_levelizer_entry_count == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("full levelizer entry counter overflow");
+  ++full_levelizer_entry_count;
+}
+
+}  // namespace
+
+CsrFullLevelizerEntryDelta::CsrFullLevelizerEntryDelta(CsrFullLevelizerEntryDelta&& other) noexcept
+    : _value(std::exchange(other._value, 0))
+{
+}
+
+CsrFullLevelizerOperationGuard::CsrFullLevelizerOperationGuard(CsrFullLevelizerOperationGuard&& other) noexcept
+    : _counter(std::exchange(other._counter, nullptr)), _start_count(other._start_count)
+{
+}
+
+CsrFullLevelizerEntryDelta CsrFullLevelizerOperationGuard::finish() &&
+{
+  if (_counter == nullptr || _counter != &full_levelizer_entry_count)
+    throw std::logic_error("full levelizer operation guard finished outside its originating thread or more than once");
+  if (*_counter < _start_count)
+    throw std::logic_error("full levelizer entry counter regressed");
+  const std::uint64_t delta = *_counter - _start_count;
+  _counter = nullptr;
+  return CsrFullLevelizerEntryDelta(delta);
+}
+
+CsrFullLevelizerOperationGuard beginCsrFullLevelizerOperation() noexcept
+{
+  return CsrFullLevelizerOperationGuard(&full_levelizer_entry_count, full_levelizer_entry_count);
+}
 
 CsrFifoLevelization replayFifoLevelization(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads, CsrTraversalTelemetry* telemetry)
 {
+  recordFullLevelizerEntry();
   CsrFifoLevelization replay;
   if (edges.nodeCount() != payloads.nodeCount()) {
     replay.view_error = CsrViewError::kMalformedAdjacency;

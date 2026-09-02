@@ -209,6 +209,7 @@ if(BUILD_TESTING)
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceInputIsolationTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrTimingScatterTests.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/CsrIsolationTests.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/IncrementalLevelizationTests.cmake")
 
   add_executable(ista_full_baseline_probe
       baseline/StaFullBaselineProbe.cpp

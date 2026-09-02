@@ -9,8 +9,10 @@
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <variant>
 
 #include "CommittedDualCsrAnalysisState.hpp"
+#include "MixedLevelizationTypes.hpp"
 
 namespace ista::timing_dual_csr {
 
@@ -49,7 +51,40 @@ struct DualCsrTransactionStatus
   friend bool operator==(const DualCsrTransactionStatus&,
                          const DualCsrTransactionStatus&) = default;
 };
+
+enum class DualCsrStageFailureOrigin : std::uint8_t
+{
+  kExactBefore,
+  kCapability,
+  kIndexDelta,
+  kUpdater,
+  kStateValidation,
+  kTimingIntrinsic
+};
+
+struct DualCsrStageFailure
+{
+  DualCsrStageFailureOrigin origin{DualCsrStageFailureOrigin::kExactBefore};
+  DualCsrViolations violations;
+
+  friend bool operator==(const DualCsrStageFailure&,
+                         const DualCsrStageFailure&) = default;
+};
+
+struct DualCsrStageTimings
+{
+  double dual_csr_update_ms{0.0};
+  double full_levelization_ms{0.0};
+  double mixed_build_ms{0.0};
+  double mixed_kahn_ms{0.0};
+  double reconstruct_ms{0.0};
+  double full_propagation_ms{0.0};
+  double invariant_ms{0.0};
+  double verify_ms{0.0};
+};
+
 class DualCsrTransactionCoordinator;
+class DualCsrStageFactoryAccess;
 struct DualCsrStageAttempt;
 class VerifiedStructuredBatch;
 
@@ -65,24 +100,33 @@ class DualCsrVerifiedStage final
   {
     return _state;
   }
+  [[nodiscard]] const DualCsrStageTimings& timings() const noexcept
+  {
+    return _timings;
+  }
 
  private:
   DualCsrVerifiedStage(CommittedDualCsrAnalysisState expected_committed,
-                       CommittedDualCsrAnalysisState state)
+                       CommittedDualCsrAnalysisState state,
+                       DualCsrStageTimings timings)
       : _expected_committed(std::move(expected_committed)),
-        _state(std::move(state))
+        _state(std::move(state)),
+        _timings(timings)
   {
   }
 
   CommittedDualCsrAnalysisState _expected_committed;
   CommittedDualCsrAnalysisState _state;
+  DualCsrStageTimings _timings;
 
   friend DualCsrStageAttempt makeStagedDualCsrAnalysisState(
       const CommittedDualCsrAnalysisState&, VerifiedStructuredBatch&&);
+  friend class DualCsrStageFactoryAccess;
   friend class DualCsrTransactionCoordinator;
 };
 
 struct DualCsrRecoveryAttempt;
+class DualCsrVerifiedModeRecovery;
 class DualCsrVerifiedRecovery final
 {
  public:
@@ -125,20 +169,12 @@ struct DualCsrRecoveryAttempt
   }
 };
 
-struct DualCsrStageTimings
-{
-  double dual_csr_update_ms{0.0};
-  double full_levelization_ms{0.0};
-  double full_propagation_ms{0.0};
-  double invariant_ms{0.0};
-  double verify_ms{0.0};
-};
-
 struct DualCsrStageAttempt
 {
   std::optional<DualCsrVerifiedStage> staged;
   DualCsrViolations violations;
   DualCsrStageTimings timings;
+  std::optional<DualCsrStageFailureOrigin> failure_origin;
 
   [[nodiscard]] bool success() const noexcept
   {
@@ -149,6 +185,35 @@ struct DualCsrStageAttempt
 [[nodiscard]] DualCsrStageAttempt makeStagedDualCsrAnalysisState(
     const CommittedDualCsrAnalysisState& committed,
     VerifiedStructuredBatch&& verified_batch);
+
+using MixedDualCsrStageAttempt = std::variant<
+    DualCsrVerifiedStage, DualCsrStageFailure,
+    timing_incremental_levelization::MixedLevelizationFailure>;
+
+[[nodiscard]] MixedDualCsrStageAttempt
+makeMixedLevelizedDualCsrAnalysisState(
+    const CommittedDualCsrAnalysisState& exact_committed_before,
+    VerifiedStructuredBatch&& verified_batch);
+
+struct DualCsrRecoveredAggregateRebindAttempt
+{
+  std::optional<CommittedDualCsrAnalysisState> rebound;
+  DualCsrViolations violations;
+
+  [[nodiscard]] bool success() const noexcept
+  {
+    return rebound.has_value() && violations.empty();
+  }
+};
+
+// The only recovery boundary allowed to change a committed aggregate's
+// session identity. It validates the complete old binding before changing
+// every graph/timing/index/descriptor occurrence as one detached value.
+[[nodiscard]] DualCsrRecoveredAggregateRebindAttempt
+rebindRecoveredAggregateSession(
+    CommittedDualCsrAnalysisState recovered,
+    timing_edit::TimingEditSessionToken old_token,
+    timing_edit::TimingEditSessionToken new_token);
 
 [[nodiscard]] DualCsrRecoveryAttempt makeDualCsrVerifiedRecovery(
     const CommittedDualCsrAnalysisState& poisoned_committed,
@@ -179,6 +244,8 @@ class DualCsrTransactionCoordinator final
       DualCsrPublishFailpoint failpoint = DualCsrPublishFailpoint::kNone);
   [[nodiscard]] DualCsrTransactionStatus recover(
       DualCsrVerifiedRecovery rebuilt);
+  [[nodiscard]] DualCsrTransactionStatus recover(
+      DualCsrVerifiedModeRecovery rebuilt);
 
  private:
   [[nodiscard]] DualCsrTransactionStatus reject(

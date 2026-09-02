@@ -1,7 +1,11 @@
 add_library(ista_timing_dual_csr_transaction
     ${CMAKE_CURRENT_SOURCE_DIR}/CommittedDualCsrAnalysisState.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrModeRecoveryReplay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrRecoveryRebind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrStageFactory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTransactionCoordinator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrExactReceipt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/LevelizationExecutionTrace.cpp
 )
 
 target_include_directories(ista_timing_dual_csr_transaction
@@ -14,6 +18,7 @@ target_link_libraries(ista_timing_dual_csr_transaction
     ista_timing_dual_csr
     ista_timing_dual_csr_native
     ista_timing_edit_contract
+    ista_timing_incremental_levelization
     PRIVATE
     ista_timing_edit_transaction
 )
@@ -69,4 +74,7 @@ if(BUILD_TESTING)
     )
     add_test(NAME ista_timing_dual_csr_transaction_test
              COMMAND ista_timing_dual_csr_transaction_test)
+    set_tests_properties(ista_timing_dual_csr_transaction_test PROPERTIES
+        LABELS "ista_unit;ista_timing_dual_csr;ista_transaction;ista_incremental_levelization;ista_timing_incremental_levelization"
+    )
 endif()

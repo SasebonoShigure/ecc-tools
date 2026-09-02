@@ -11,6 +11,7 @@ PHASE_TIMING_KEYS = {
     "generation_before", "generation_after", "pre_candidate_prepare_ms",
     "candidate_apply_execute_ms", "post_candidate_capture_ms",
     "dual_csr_update_ms", "full_levelization_ms", "full_propagation_ms",
+    "mixed_build_ms", "mixed_kahn_ms", "reconstruct_ms",
     "invariant_ms", "verify_ms", "publish_ms",
 }
 DURATION_KEYS = PHASE_TIMING_KEYS - {"generation_before", "generation_after"}

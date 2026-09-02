@@ -47,6 +47,7 @@ void CommittedDualCsrAnalysisState::swap(
   swap(descriptor_trace, other.descriptor_trace);
   swap(semantic_trace, other.semantic_trace);
   swap(traversal_telemetry, other.traversal_telemetry);
+  swap(execution_trace, other.execution_trace);
 }
 
 void swap(CommittedDualCsrAnalysisState& lhs,
@@ -94,6 +95,10 @@ DualCsrViolations validateCommittedDualCsrAnalysisState(
     reject(errors, DualCsrViolationCode::kGeneration,
            "aggregate.semantic_trace",
            "semantic trace length must equal committed generation");
+  if (state.execution_trace.size() != generation)
+    reject(errors, DualCsrViolationCode::kGeneration,
+           "aggregate.execution_trace",
+           "execution trace length must equal committed generation");
 
   std::optional<timing_edit::BaselineSemanticIdentity> trace_baseline;
   std::optional<timing_edit::AppendOnlyHighWater> prior_after;
@@ -139,6 +144,48 @@ DualCsrViolations validateCommittedDualCsrAnalysisState(
       reject(errors, DualCsrViolationCode::kGeneration,
              "aggregate.trace[" + std::to_string(index) + "]",
              "descriptor and semantic generations differ");
+  }
+  for (std::size_t index = 0; index < state.execution_trace.size();
+       ++index) {
+    const auto& execution = state.execution_trace[index];
+    const auto target = timing_edit::TransactionGeneration{index + 1};
+    bool mixed_boundary_differs = false;
+    if (index < state.descriptor_trace.size()
+        && execution.mode() == LevelizationExecutionMode::kMixedStage6) {
+      const auto& descriptor = state.descriptor_trace[index];
+      const auto& mixed = execution.mixed();
+      mixed_boundary_differs
+          = !mixed.has_value()
+            || mixed->n_last_nodes != descriptor.before.node_slots
+            || mixed->n_current_nodes != descriptor.after.node_slots
+            || mixed->n_new_nodes != descriptor.node_appends.size();
+    }
+    const bool descriptor_binding_differs
+        = index < state.descriptor_trace.size()
+          && (state.descriptor_trace[index].target_generation
+                  != execution.generation()
+              || execution.levels().level_nodes.size()
+                     != state.descriptor_trace[index].after.node_slots
+              || execution.levels().node_to_level.size()
+                     != state.descriptor_trace[index].after.node_slots
+              || mixed_boundary_differs);
+    if (execution.generation() != target
+        || !validateLevelizationExecutionTraceShape(execution)
+        || descriptor_binding_differs)
+      reject(errors, DualCsrViolationCode::kGeneration,
+             "aggregate.execution_trace[" + std::to_string(index) + "]",
+             "execution record mode, generation, descriptor boundary, or deterministic shape is invalid");
+  }
+  if (!state.execution_trace.empty()) {
+    const auto& latest = state.execution_trace.back();
+    if (latest.levels().level_offsets != state.timing.values.level_offsets
+        || latest.levels().level_nodes != state.timing.values.level_nodes
+        || latest.levels().node_to_level
+               != state.timing.values.node_to_level
+        || latest.traversal() != state.traversal_telemetry)
+      reject(errors, DualCsrViolationCode::kTimingResult,
+             "aggregate.execution_trace.latest",
+             "latest execution levels or traversal differ from committed timing");
   }
   if (prior_after && *prior_after != state.graph.high_water)
     reject(errors, DualCsrViolationCode::kHighWater,

@@ -13,6 +13,7 @@
 #include "DualCsrArcGroupIndex.hpp"
 #include "DualCsrDescriptors.hpp"
 #include "DualCsrTimingResultValidator.hpp"
+#include "LevelizationExecutionTrace.hpp"
 #include "TimingEditResolver.hpp"
 
 namespace ista::timing_dual_csr {
@@ -28,6 +29,7 @@ struct CommittedDualCsrAnalysisState
   std::vector<DualCsrBatchDescriptor> descriptor_trace;
   std::vector<timing_edit::DesignEditPlan> semantic_trace;
   csr::CsrTraversalTelemetry traversal_telemetry;
+  std::vector<LevelizationExecutionTrace> execution_trace{};
 
   void swap(CommittedDualCsrAnalysisState& other) noexcept;
 
@@ -52,6 +54,8 @@ static_assert(std::is_nothrow_swappable_v<
               std::vector<DualCsrBatchDescriptor>>);
 static_assert(std::is_nothrow_swappable_v<
               std::vector<timing_edit::DesignEditPlan>>);
+static_assert(std::is_nothrow_swappable_v<
+              std::vector<LevelizationExecutionTrace>>);
 static_assert(noexcept(std::declval<CommittedDualCsrAnalysisState&>().swap(
     std::declval<CommittedDualCsrAnalysisState&>())));
 

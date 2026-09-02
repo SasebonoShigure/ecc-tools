@@ -44,6 +44,9 @@ struct DualCsrBatchPhaseTimings
   double post_candidate_capture_ms{0.0};
   double dual_csr_update_ms{0.0};
   double full_levelization_ms{0.0};
+  double mixed_build_ms{0.0};
+  double mixed_kahn_ms{0.0};
+  double reconstruct_ms{0.0};
   double full_propagation_ms{0.0};
   double invariant_ms{0.0};
   double verify_ms{0.0};

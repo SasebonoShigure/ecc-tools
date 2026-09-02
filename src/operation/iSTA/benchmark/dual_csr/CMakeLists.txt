@@ -1,4 +1,5 @@
 set(ISTA_DUAL_CSR_TRACE_RUNTIME_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/CpuIncrementalLevelizationRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTraceBaseline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrNativeCandidateCarrier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTraceReplayer.cpp

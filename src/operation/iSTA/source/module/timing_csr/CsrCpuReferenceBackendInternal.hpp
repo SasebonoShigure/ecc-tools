@@ -126,6 +126,8 @@ struct CsrDynamicArcValue
          + csrTransitionIndex(output_transition);
 }
 
+// Precondition: the backend boundary has accepted replay through
+// validateCsrFifoLevelization().
 [[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay,
                                                                          CsrCpuReferenceWorkState& work);
 [[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work);

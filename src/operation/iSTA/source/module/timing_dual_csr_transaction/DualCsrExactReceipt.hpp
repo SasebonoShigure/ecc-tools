@@ -18,7 +18,7 @@
 namespace ista::timing_dual_csr {
 
 inline constexpr auto kDualCsrExactReceiptSchema
-    = "ista-dual-csr-exact-receipt/1.3.0";
+    = "ista-dual-csr-exact-receipt/1.4.0";
 
 enum class DualCsrReceiptPhase : std::uint8_t
 {
@@ -27,6 +27,7 @@ enum class DualCsrReceiptPhase : std::uint8_t
   kPostCandidateCapture,
   kDualCsrUpdate,
   kFullLevelization,
+  kMixedLevelization,
   kFullPropagation,
   kIntrinsicVerify,
   kPublish,
@@ -118,6 +119,7 @@ struct DualCsrTransactionReceipt
   std::vector<DualCsrBatchDescriptor> descriptor_trace;
   std::vector<timing_edit::DesignEditPlan> semantic_trace;
   csr::CsrTraversalTelemetry traversal_telemetry;
+  std::vector<LevelizationExecutionTrace> execution_trace;
   DualCsrTelemetry update_telemetry;
   DualCsrTransactionEvidence evidence;
 

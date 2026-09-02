@@ -1,6 +1,7 @@
 add_subdirectory(${ISTA_MODULE}/timing_csr)
 add_subdirectory(${ISTA_MODULE}/timing_csr_snapshot)
 add_subdirectory(${ISTA_MODULE}/timing_edit_contract)
+add_subdirectory(${ISTA_MODULE}/timing_incremental_levelization)
 add_subdirectory(${ISTA_MODULE}/timing_dual_csr)
 add_subdirectory(${ISTA_MODULE}/timing_dual_csr_native)
 add_subdirectory(${ISTA_MODULE}/timing_dual_csr_transaction)

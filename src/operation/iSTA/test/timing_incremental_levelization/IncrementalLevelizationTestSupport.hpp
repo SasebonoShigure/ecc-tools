@@ -216,7 +216,7 @@ inline MixedLevelizationSuccess requirePipelineSuccess(
     const TestEdgeView& edges, const csr::CsrFifoLevelization& previous,
     std::uint64_t n_last_nodes, std::uint64_t generation = 1)
 {
-  const auto attempt = CpuIncrementalLevelizationPipeline::run(
+  const auto attempt = runCpuIncrementalLevelization(
       edges, previous,
       {n_last_nodes, generation - 1, generation});
   const auto* success = std::get_if<MixedLevelizationSuccess>(&attempt);

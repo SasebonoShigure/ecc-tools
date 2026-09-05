@@ -59,33 +59,12 @@ def validate_number(value: object, label: str, require: Require) -> None:
                 f"{label} has an invalid semantic number kind")
 
 
-def _optional(value: object, validator: Callable[[object, str, Require], None],
-              label: str, require: Require) -> None:
-    if value is not None:
-        validator(value, label, require)
-
-
 def _nested_numbers(value: object, label: str, require: Require) -> None:
     if isinstance(value, list):
         for index, item in enumerate(value):
             _nested_numbers(item, f"{label}[{index}]", require)
     else:
         validate_number(value, label, require)
-
-
-def _lane_matrix(value: object, label: str, require: Require,
-                 optional: bool) -> None:
-    analyses = _array(value, label, require)
-    require(len(analyses) == 2, f"{label} must contain max/min analyses")
-    for analysis, lanes in enumerate(analyses):
-        typed_lanes = _array(lanes, f"{label}[{analysis}]", require)
-        require(len(typed_lanes) == 2,
-                f"{label}[{analysis}] must contain rise/fall lanes")
-        for lane, item in enumerate(typed_lanes):
-            require(optional or item is not None,
-                    f"{label}[{analysis}][{lane}] must be present")
-            if item is not None:
-                validate_number(item, f"{label}[{analysis}][{lane}]", require)
 
 
 def _node_key(value: object, label: str, require: Require) -> None:
@@ -198,89 +177,6 @@ def validate_node_record(value: object, label: str, require: Require) -> None:
         _boolean(item[field], f"{label}.{field}", require)
 
 
-def _snapshot(value: object, label: str, require: Require) -> None:
-    keys = {"fingerprint_schema_version", "session_token", "graph_generation",
-            "topology_fingerprint", "clock_constraint_fingerprint",
-            "library_fingerprint", "corner_fingerprint", "parasitic_fingerprint",
-            "timing_input_fingerprint"}
-    item = _object(value, keys, label, require)
-    _count(item["session_token"], f"{label}.session_token", require)
-    _count(item["graph_generation"], f"{label}.graph_generation", require)
-    for field in keys - {"session_token", "graph_generation"}:
-        _text(item[field], f"{label}.{field}", require)
-
-
-def _analysis_context(value: object, label: str, require: Require) -> None:
-    validate_exact_reference_value("analysis_context", value, label, require)
-
-
-def _instance(value: object, label: str, require: Require) -> None:
-    keys = {"instance_name", "cell_name", "ordered_pins", "is_sequential",
-            "has_timing_checks", "is_clock_gating", "is_macro"}
-    item = _object(value, keys, label, require)
-    _text(item["instance_name"], f"{label}.instance_name", require)
-    _text(item["cell_name"], f"{label}.cell_name", require)
-    for index, node_id in enumerate(_array(item["ordered_pins"],
-                                            f"{label}.ordered_pins", require)):
-        _count(node_id, f"{label}.ordered_pins[{index}]", require)
-    for field in keys - {"instance_name", "cell_name", "ordered_pins"}:
-        _boolean(item[field], f"{label}.{field}", require)
-
-
-def _library_cell(value: object, label: str, require: Require) -> None:
-    keys = {"cell_name", "present", "library_name", "is_sequential",
-            "is_clock_gating", "is_macro", "clock_pin_name", "data_pin_name",
-            "output_pin_name", "ports", "cell_arcs", "timing_checks"}
-    item = _object(value, keys, label, require)
-    for field in ("cell_name", "library_name", "clock_pin_name", "data_pin_name",
-                  "output_pin_name"):
-        _text(item[field], f"{label}.{field}", require)
-    for field in ("present", "is_sequential", "is_clock_gating", "is_macro"):
-        _boolean(item[field], f"{label}.{field}", require)
-    for index, port in enumerate(_array(item["ports"], f"{label}.ports", require)):
-        typed = _object(port, {"name", "direction", "is_clock", "is_output",
-                               "default_capacitance", "transition_capacitance"},
-                        f"{label}.ports[{index}]", require)
-        _text(typed["name"], f"{label}.ports[{index}].name", require)
-        _text(typed["direction"], f"{label}.ports[{index}].direction", require)
-        _boolean(typed["is_clock"], f"{label}.ports[{index}].is_clock", require)
-        _boolean(typed["is_output"], f"{label}.ports[{index}].is_output", require)
-        validate_number(typed["default_capacitance"],
-                        f"{label}.ports[{index}].default_capacitance", require)
-        _lane_matrix(typed["transition_capacitance"],
-                     f"{label}.ports[{index}].transition_capacitance", require, True)
-    for index, arc in enumerate(_array(item["cell_arcs"],
-                                       f"{label}.cell_arcs", require)):
-        typed = _object(arc, {"source_port", "sink_port", "transfer"},
-                        f"{label}.cell_arcs[{index}]", require)
-        _text(typed["source_port"], f"{label}.cell_arcs[{index}].source_port", require)
-        _text(typed["sink_port"], f"{label}.cell_arcs[{index}].sink_port", require)
-        _transfer(typed["transfer"], f"{label}.cell_arcs[{index}].transfer", require)
-    _array(item["timing_checks"], f"{label}.timing_checks", require)
-
-
-def _parasitics(value: object, label: str, require: Require) -> None:
-    item = _object(value, {"capacitance_unit", "resistance_unit", "nets"},
-                   label, require)
-    _text(item["capacitance_unit"], f"{label}.capacitance_unit", require)
-    _text(item["resistance_unit"], f"{label}.resistance_unit", require)
-    for index, net in enumerate(_array(item["nets"], f"{label}.nets", require)):
-        typed = _object(net, {"map_key", "embedded_name", "lumped_capacitance",
-                              "nodes", "resistors"}, f"{label}.nets[{index}]", require)
-        _text(typed["map_key"], f"{label}.nets[{index}].map_key", require)
-        _text(typed["embedded_name"], f"{label}.nets[{index}].embedded_name", require)
-        validate_number(typed["lumped_capacitance"],
-                        f"{label}.nets[{index}].lumped_capacitance", require)
-        _array(typed["nodes"], f"{label}.nets[{index}].nodes", require)
-        _array(typed["resistors"], f"{label}.nets[{index}].resistors", require)
-
-
-def _generic_records(value: object, label: str, require: Require) -> None:
-    records = _array(value, label, require)
-    for index, record in enumerate(records):
-        require(isinstance(record, dict), f"{label}[{index}] must be an object")
-
-
 REFERENCE_KEYS = {"schema_version", "source_identity", "analysis_context",
     "analysis_order", "path_source_order", "transition_order", "instances",
     "ordered_root_ids", "ordered_start_ids", "ordered_end_ids", "clock_tags",
@@ -288,11 +184,6 @@ REFERENCE_KEYS = {"schema_version", "source_identity", "analysis_context",
     "case_analysis_constraints", "timing_check_endpoints",
     "referenced_library_cells", "parasitics", "start_seeds",
     "endpoint_required", "cell_pin_capacitances", "unsupported_reasons"}
-
-
-def _validate_reference_value(field: str, value: object, label: str,
-                              require: Require) -> None:
-    validate_exact_reference_value(field, value, label, require)
 
 
 def validate_reference_delta(value: object, label: str, require: Require,
@@ -303,10 +194,10 @@ def validate_reference_delta(value: object, label: str, require: Require,
             continue
         typed = _object(replacement, {"expected", "replacement"},
                         f"{label}.{field}", require)
-        _validate_reference_value(field, typed["expected"],
-                                  f"{label}.{field}.expected", require)
-        _validate_reference_value(field, typed["replacement"],
-                                  f"{label}.{field}.replacement", require)
+        validate_exact_reference_value(field, typed["expected"],
+                                       f"{label}.{field}.expected", require)
+        validate_exact_reference_value(field, typed["replacement"],
+                                       f"{label}.{field}.replacement", require)
         if field in chain:
             require(typed["expected"] == chain[field],
                     f"{label}.{field} breaks the replacement chain")
@@ -367,21 +258,23 @@ def run_typed_validator_self_test(require: Require) -> None:
         "cell_arcs": [], "timing_checks": []}
     errors = []
     try:
-        _library_cell(library_cell, "optional-lane-canary",
-                      lambda ok, message: errors.append(message) if not ok else None)
+        validate_exact_reference_value(
+            "referenced_library_cells", [library_cell], "optional-lane-canary",
+            lambda ok, message: errors.append(message) if not ok else None)
     except (KeyError, TypeError):
         errors.append("valid optional lane matrix raised")
     require(not errors, f"valid optional lane matrix was rejected: {errors}")
     invalid_lanes = copy.deepcopy(library_cell)
     invalid_lanes["ports"][0]["transition_capacitance"][0][0] = {"kind": "bogus"}
     errors = []
-    _library_cell(invalid_lanes, "invalid-optional-lane-canary",
-                  lambda ok, message: errors.append(message) if not ok else None)
+    validate_exact_reference_value(
+        "referenced_library_cells", [invalid_lanes], "invalid-optional-lane-canary",
+        lambda ok, message: errors.append(message) if not ok else None)
     require(errors, "non-null optional lane tamper was accepted")
     for temperature in ("25", "__unspecified_temperature__"):
         errors = []
-        _analysis_context(
-            {"liberty_corner": "c", "temperature": temperature,
+        validate_exact_reference_value(
+            "analysis_context", {"liberty_corner": "c", "temperature": temperature,
              "rc_corner": "r"}, "temperature-wire-positive",
             lambda ok, message: errors.append(message) if not ok else None)
         require(not errors,
@@ -389,8 +282,8 @@ def run_typed_validator_self_test(require: Require) -> None:
     for temperature in (25.0, True, "25.0", "-0", " 25", "25 ", "025",
                         "25.10", "1e2", "NaN", "Inf"):
         errors = []
-        _analysis_context(
-            {"liberty_corner": "c", "temperature": temperature,
+        validate_exact_reference_value(
+            "analysis_context", {"liberty_corner": "c", "temperature": temperature,
              "rc_corner": "r"}, "temperature-wire-negative",
             lambda ok, message: errors.append(message) if not ok else None)
         require(errors,

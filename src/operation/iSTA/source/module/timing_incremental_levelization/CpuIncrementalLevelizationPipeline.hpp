@@ -25,21 +25,9 @@ struct MixedLevelizationSuccess
 using MixedLevelizationAttempt =
     std::variant<MixedLevelizationSuccess, MixedLevelizationFailure>;
 
-class CpuIncrementalLevelizationPipeline final
-{
- public:
-  [[nodiscard]] static MixedLevelizationAttempt run(
-      const csr::ActiveCsrEdgeView& edges,
-      const csr::CsrFifoLevelization& previous,
-      const MixedLevelizationRequest& request);
-};
-
-[[nodiscard]] inline MixedLevelizationAttempt runCpuIncrementalLevelization(
+[[nodiscard]] MixedLevelizationAttempt runCpuIncrementalLevelization(
     const csr::ActiveCsrEdgeView& edges,
     const csr::CsrFifoLevelization& previous,
-    const MixedLevelizationRequest& request)
-{
-  return CpuIncrementalLevelizationPipeline::run(edges, previous, request);
-}
+    const MixedLevelizationRequest& request);
 
 }  // namespace ista::timing_incremental_levelization

@@ -89,7 +89,7 @@ MixedLevelizationFailure runFailure(
     const TestEdgeView& edges, const csr::CsrFifoLevelization& previous,
     std::uint64_t n_last_nodes)
 {
-  const auto attempt = CpuIncrementalLevelizationPipeline::run(
+  const auto attempt = runCpuIncrementalLevelization(
       edges, previous, {n_last_nodes, 0, 1});
   const auto* result = std::get_if<MixedLevelizationFailure>(&attempt);
   require(result != nullptr, "negative case unexpectedly succeeded");

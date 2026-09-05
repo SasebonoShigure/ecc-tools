@@ -134,7 +134,7 @@ VirtualLevelMappingAttempt virtualLevelForOldNode(
 }
 
 bool validateMixedTelemetryIdentities(
-    const MixedLevelizationTelemetry& telemetry) noexcept
+    const MixedLevelizationDeterministicTrace& telemetry) noexcept
 {
   std::uint64_t category_sum = 0;
   std::uint64_t storage_sum = 0;

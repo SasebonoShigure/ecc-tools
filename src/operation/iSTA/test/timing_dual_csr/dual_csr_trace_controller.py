@@ -95,12 +95,6 @@ def require_exact_keys(value: object, keys: set[str], label: str) -> dict[str, A
     return value
 
 
-def require_count(value: object, label: str) -> int:
-    require(type(value) is int and value >= 0,
-            f"{label} must be a nonnegative integer")
-    return value
-
-
 def validate_extent(value: object, logical: int, label: str) -> None:
     item = require_exact_keys(value, {"logical_size", "capacity"}, label)
     require(item["logical_size"] == logical, f"{label}.logical_size differs")

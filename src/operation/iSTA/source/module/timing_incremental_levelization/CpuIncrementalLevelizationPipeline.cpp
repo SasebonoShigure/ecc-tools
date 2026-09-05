@@ -63,7 +63,7 @@ MixedLevelizationFailure classifyMixedFailure(
 
 }  // namespace
 
-MixedLevelizationAttempt CpuIncrementalLevelizationPipeline::run(
+MixedLevelizationAttempt runCpuIncrementalLevelization(
     const csr::ActiveCsrEdgeView& edges,
     const csr::CsrFifoLevelization& previous,
     const MixedLevelizationRequest& request)

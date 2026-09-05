@@ -5,7 +5,6 @@
 #include "LevelizationExecutionTrace.hpp"
 
 #include <cstddef>
-#include <limits>
 #include <utility>
 
 #include "MixedLevelizationTelemetry.hpp"
@@ -13,65 +12,9 @@
 namespace ista::timing_dual_csr {
 namespace {
 
-bool checkedAdd(std::uint64_t lhs, std::uint64_t rhs,
-                std::uint64_t& result) noexcept
+bool validateMixed(const MixedLevelizationDeterministicTrace& trace) noexcept
 {
-  if (rhs > std::numeric_limits<std::uint64_t>::max() - lhs)
-    return false;
-  result = lhs + rhs;
-  return true;
-}
-
-bool checkedSum4(std::uint64_t first, std::uint64_t second,
-                 std::uint64_t third, std::uint64_t fourth,
-                 std::uint64_t& result) noexcept
-{
-  std::uint64_t left = 0;
-  std::uint64_t right = 0;
-  return checkedAdd(first, second, left)
-         && checkedAdd(third, fourth, right)
-         && checkedAdd(left, right, result);
-}
-
-bool validateMixed(const MixedLevelizationDeterministicTrace& trace)
-    noexcept
-{
-  std::uint64_t total = 0;
-  if (!checkedAdd(trace.n_last_nodes, trace.n_new_nodes, total)
-      || total != trace.n_current_nodes)
-    return false;
-  if (!checkedAdd(trace.n_old_levels, trace.n_new_nodes, total)
-      || total != trace.mixed_vertex_count)
-    return false;
-  if (!checkedSum4(trace.old_old, trace.old_new, trace.new_old,
-                   trace.new_new, total)
-      || total != trace.actual_eligible_arc_visits)
-    return false;
-  if (!checkedSum4(0, trace.old_new, trace.new_old, trace.new_new,
-                   total)
-      || total != trace.mapped_actual_arc_candidates)
-    return false;
-  if (trace.actual_parallel_duplicates_collapsed
-          > trace.mapped_actual_arc_candidates
-      || trace.unique_actual_endpoint_pairs
-             != trace.mapped_actual_arc_candidates
-                    - trace.actual_parallel_duplicates_collapsed)
-    return false;
-  if (trace.proxy_alias_duplicates_collapsed
-          > trace.unique_actual_endpoint_pairs)
-    return false;
-  const std::uint64_t mapped_unique
-      = trace.unique_actual_endpoint_pairs
-        - trace.proxy_alias_duplicates_collapsed;
-  if (!checkedAdd(trace.virtual_chain_edges, mapped_unique, total)
-      || total != trace.unique_precedence_edges)
-    return false;
-  if (!checkedAdd(trace.base_out, trace.aux_out, total)
-      || total != trace.actual_eligible_arc_visits)
-    return false;
-  const std::uint64_t expected_virtual_chain
-      = trace.n_old_levels == 0 ? 0 : trace.n_old_levels - 1;
-  if (trace.virtual_chain_edges != expected_virtual_chain
+  if (!timing_incremental_levelization::validateMixedTelemetryIdentities(trace)
       || trace.max_frontier > trace.mixed_vertex_count
       || (trace.mixed_vertex_count != 0 && trace.max_frontier == 0)
       || trace.reconstructed_level_count > trace.n_current_nodes
@@ -110,35 +53,8 @@ MixedLevelizationDeterministicTrace projectDeterministicMixedTrace(
     const timing_incremental_levelization::MixedLevelizationTelemetry&
         value) noexcept
 {
-  return {
-      .n_last_nodes = value.n_last_nodes,
-      .n_current_nodes = value.n_current_nodes,
-      .n_new_nodes = value.n_new_nodes,
-      .n_old_levels = value.n_old_levels,
-      .mixed_vertex_count = value.mixed_vertex_count,
-      .actual_eligible_arc_visits = value.actual_eligible_arc_visits,
-      .old_old = value.old_old,
-      .old_new = value.old_new,
-      .new_old = value.new_old,
-      .new_new = value.new_new,
-      .mapped_actual_arc_candidates = value.mapped_actual_arc_candidates,
-      .unique_actual_endpoint_pairs = value.unique_actual_endpoint_pairs,
-      .actual_parallel_duplicates_collapsed
-          = value.actual_parallel_duplicates_collapsed,
-      .proxy_alias_duplicates_collapsed
-          = value.proxy_alias_duplicates_collapsed,
-      .unique_precedence_edges = value.unique_precedence_edges,
-      .virtual_chain_edges = value.virtual_chain_edges,
-      .base_out = value.base_out,
-      .aux_out = value.aux_out,
-      .kahn_processed_count = value.kahn_processed_count,
-      .max_frontier = value.max_frontier,
-      .reconstructed_level_count = value.reconstructed_level_count,
-      .actual_cycle_classifier_runs
-          = value.actual_cycle_classifier_runs,
-      .actual_cycle_classifier_arc_visits
-          = value.actual_cycle_classifier_arc_visits,
-      .fallback_count = value.fallback_count};
+  // Copy only deterministic counters, excluding timing and oracle observations.
+  return value;
 }
 
 bool validateLevelizationExecutionTraceShape(

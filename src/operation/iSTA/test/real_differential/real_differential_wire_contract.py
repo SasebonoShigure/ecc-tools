@@ -450,14 +450,6 @@ _SCHEMAS = _Schemas(SCHEMA_STORE)
 _SCHEMAS.audit()
 
 
-def schema_ref(ref: str, current_id: str | None = None) -> dict[str, Any]:
-    document_id = current_id or PROBE_SCHEMA_DOCUMENT["$id"]
-    target, _target_id, _fragment = _SCHEMAS.resolve(ref, document_id)
-    if not isinstance(target, dict):
-        _schema_error(f"$ref target is not an object {ref!r}")
-    return target
-
-
 def validate_schema_fragment(ref: str, value: Any, where: str) -> None:
     target, target_id, fragment = _SCHEMAS.resolve(ref, PROBE_SCHEMA_DOCUMENT["$id"])
     _SCHEMAS.validate(target, value, where, target_id, ((target_id, fragment),))

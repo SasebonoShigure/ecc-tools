@@ -493,7 +493,7 @@ void requireAtomicFailure(
   const auto output_before = staged.output;
   const bool published_before = staged.published;
   MixedLevelizationAttempt attempt =
-      CpuIncrementalLevelizationPipeline::run(staged.edges, previous,
+      runCpuIncrementalLevelization(staged.edges, previous,
                                                staged.request);
   if (const auto* success = std::get_if<MixedLevelizationSuccess>(&attempt))
     staged.output = *success;

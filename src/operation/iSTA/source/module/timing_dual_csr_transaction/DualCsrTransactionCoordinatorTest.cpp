@@ -576,6 +576,19 @@ void recoveryContracts()
 
 void splitReceiptContracts()
 {
+  timing_incremental_levelization::MixedLevelizationTelemetry telemetry;
+  const auto deterministic = projectDeterministicMixedTrace(telemetry);
+  telemetry.mixed_build_ms = 1.0;
+  telemetry.mixed_kahn_ms = 2.0;
+  telemetry.reconstruct_ms = 3.0;
+  telemetry.legal_noncompact = true;
+  require(projectDeterministicMixedTrace(telemetry) == deterministic,
+          "run observations leaked into deterministic recovery equality");
+  ++telemetry.old_old;
+  require(projectDeterministicMixedTrace(telemetry) != deterministic
+              && !timing_incremental_levelization::validateMixedTelemetryIdentities(telemetry),
+          "deterministic projection lost a counter or its validation");
+
   timing_edit::test::installNativeTransactionBaseline();
   timing_edit::test::GuardedTestSession session;
   const StructuredFixture fixture

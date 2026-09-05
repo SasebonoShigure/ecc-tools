@@ -9,7 +9,8 @@
 
 namespace ista::timing_incremental_levelization {
 
-struct MixedLevelizationTelemetry
+// Shared deterministic counters; safe to retain in committed recovery state.
+struct MixedLevelizationDeterministicTrace
 {
   std::uint64_t n_last_nodes{0};
   std::uint64_t n_current_nodes{0};
@@ -36,8 +37,15 @@ struct MixedLevelizationTelemetry
   std::uint64_t reconstructed_level_count{0};
   std::uint64_t actual_cycle_classifier_runs{0};
   std::uint64_t actual_cycle_classifier_arc_visits{0};
-  std::optional<bool> legal_noncompact;
   std::uint64_t fallback_count{0};
+
+  friend bool operator==(const MixedLevelizationDeterministicTrace&,
+                         const MixedLevelizationDeterministicTrace&) = default;
+};
+
+struct MixedLevelizationTelemetry : MixedLevelizationDeterministicTrace
+{
+  std::optional<bool> legal_noncompact;
 
   // Run-envelope observations only. Transaction code must not commit or use
   // these values for exact recovery equality.
@@ -50,6 +58,6 @@ struct MixedLevelizationTelemetry
 };
 
 [[nodiscard]] bool validateMixedTelemetryIdentities(
-    const MixedLevelizationTelemetry& telemetry) noexcept;
+    const MixedLevelizationDeterministicTrace& telemetry) noexcept;
 
 }  // namespace ista::timing_incremental_levelization

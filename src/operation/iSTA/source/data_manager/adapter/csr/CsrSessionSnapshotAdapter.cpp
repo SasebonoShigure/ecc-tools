@@ -31,6 +31,7 @@
 #include "CsrSessionSnapshotAdapterInternal.hpp"
 #include "CsrSnapshotObservationTransition.hpp"
 #include "CsrSnapshotObservationValidator.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::csr {
 namespace {
@@ -88,12 +89,20 @@ static_assert(std::is_nothrow_swappable_v<std::unique_ptr<CsrSnapshotObservation
 
 [[nodiscard]] CsrSnapshotObservation makeReleasedObservation(const CsrSnapshotObservation& active)
 {
+  if constexpr (!incregpusta_debug_checks_enabled) {
+    CsrSnapshotObservation released;
+    released.state = CsrSnapshotState::kReleased;
+    released.identity = active.identity;
+    return released;
+  }
   CsrOptionalObservation before{active};
   return unwrapOptionalObservation(reduceSnapshotObservation(before, ReleaseAction{}), "CSR release observation reduction");
 }
 
 [[nodiscard]] detail::PreparedSessionObservationPair prepareObservationPair(const CsrSnapshotObservation& before, const CsrObservationAction& action)
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return {};
   CsrOptionalObservation optional_before{before};
   CsrSnapshotObservation active = unwrapOptionalObservation(reduceSnapshotObservation(optional_before, action), "CSR active observation reduction");
   CsrSnapshotObservation released = makeReleasedObservation(active);
@@ -157,7 +166,13 @@ CsrSessionSnapshotBuildResult buildCsrSessionSnapshot(const Database& database, 
   const double export_ms = durationMilliseconds(start, stop);
 
   CsrCaptureMetadata metadata{std::move(levelization.level_offsets), std::move(levelization.level_nodes), std::move(levelization.node_to_level)};
-  CsrSnapshotObservation active = unwrapObservation(makeReadySnapshotObservation(input, metadata, export_ms), "CSR ready observation construction");
+  CsrSnapshotObservation active;
+  if constexpr (incregpusta_debug_checks_enabled) {
+    active = unwrapObservation(makeReadySnapshotObservation(input, metadata, export_ms), "CSR ready observation construction");
+  } else {
+    active.state = CsrSnapshotState::kReady;
+    active.identity = input.source_identity;
+  }
   CsrSnapshotObservation released = makeReleasedObservation(active);
   auto active_observation = std::make_unique<CsrSnapshotObservation>(std::move(active));
   auto released_observation = std::make_unique<CsrSnapshotObservation>(std::move(released));
@@ -193,6 +208,11 @@ CsrTimingResultScatterAttempt scatterCsrSessionTimingResult(Database& database, 
     const Clock::time_point stop = Clock::now();
     const double scatter_ms = durationMilliseconds(start, stop);
     CsrTimingResultScatterAttempt attempt = std::move(*failure);
+    if constexpr (!incregpusta_debug_checks_enabled) {
+      if (attempt.scatter_result.code == CsrScatterCode::kSnapshotInvalidated)
+        snapshot.active_observation->state = CsrSnapshotState::kInvalidated;
+      return attempt;
+    }
     if (attempt.scatter_result.code == CsrScatterCode::kInvalidState)
       return attempt;
 

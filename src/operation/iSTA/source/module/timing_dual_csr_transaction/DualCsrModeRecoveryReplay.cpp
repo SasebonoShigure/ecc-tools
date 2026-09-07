@@ -126,29 +126,33 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
                   DualCsrModeRecoveryReplayCode::kSessionTokenDidNotChange,
                   0, "recovery session token must change and remain nonzero");
 
-  // Rebinding creates only the expected value for comparison. It is never
-  // installed as the rebuilt state and never bypasses either staging factory.
-  auto expected_attempt = rebindRecoveredAggregateSession(
-      poisoned_committed, old_token, new_token);
-  if (!expected_attempt.success())
-    return reject(
-        evidence,
-        DualCsrModeRecoveryReplayCode::kRecoveredAggregateRebindRejected,
-        0, "complete typed recovery rebind was rejected",
-        std::move(expected_attempt.violations));
-  CommittedDualCsrAnalysisState expected
-      = std::move(*expected_attempt.rebound);
+  // An independently rebound aggregate is only an equivalence oracle. The
+  // actual recovery below always rebuilds each batch through its recorded mode.
+  std::optional<CommittedDualCsrAnalysisState> expected;
+  if constexpr (incregpusta_debug_checks_enabled) {
+    auto expected_attempt = rebindRecoveredAggregateSession(poisoned_committed, old_token, new_token);
+    if (!expected_attempt.success())
+      return reject(evidence, DualCsrModeRecoveryReplayCode::kRecoveredAggregateRebindRejected, 0, "complete typed recovery rebind was rejected",
+                    std::move(expected_attempt.violations));
+    expected = std::move(expected_attempt.rebound);
+  }
 
   DualCsrTransactionCoordinator coordinator(std::move(generation_zero));
-  const std::size_t count = expected.descriptor_trace.size();
+  const std::size_t count = poisoned_committed.descriptor_trace.size();
   for (std::size_t index = 0; index < count; ++index) {
-    const auto& persisted_execution = expected.execution_trace[index];
-    DualCsrModeRecoveryBatchRequest request{
-        .batch_index = index,
-        .exact_recovered_before = coordinator.committed(),
-        .persisted_descriptor = expected.descriptor_trace[index],
-        .persisted_semantic_batch = expected.semantic_trace[index],
-        .persisted_execution = persisted_execution};
+    const auto& persisted_execution = poisoned_committed.execution_trace[index];
+    // Only the current descriptor needs a new session binding for the source.
+    auto descriptor = poisoned_committed.descriptor_trace[index];
+    descriptor.session_token = new_token;
+    if (auto& identity = descriptor.reference_payload.source_identity; identity) {
+      identity->expected.session_token = new_token.value();
+      identity->replacement.session_token = new_token.value();
+    }
+    DualCsrModeRecoveryBatchRequest request{.batch_index = index,
+                                            .exact_recovered_before = coordinator.committed(),
+                                            .persisted_descriptor = descriptor,
+                                            .persisted_semantic_batch = poisoned_committed.semantic_trace[index],
+                                            .persisted_execution = persisted_execution};
     auto batch_attempt = source.rebuild(request);
     if (!batch_attempt.success())
       return reject(
@@ -224,7 +228,7 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
     }
 
     const std::size_t prefix = index + 1;
-    if (!stageMatchesPersistedPrefix(staged->state(), expected, prefix))
+    if (incregpusta_debug_checks_enabled && !stageMatchesPersistedPrefix(staged->state(), *expected, prefix))
       return reject(
           evidence,
           DualCsrModeRecoveryReplayCode::kModeRecordMismatch,
@@ -248,8 +252,7 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
   evidence.generation_recovered
       = coordinator.committed().generation.value();
   evidence.recovery_replay_count = 1;
-  if (!validReplayEvidence(evidence)
-      || !(coordinator.committed() == expected))
+  if (!validReplayEvidence(evidence) || (incregpusta_debug_checks_enabled && !(coordinator.committed() == *expected)))
     return reject(
         evidence,
         DualCsrModeRecoveryReplayCode::kDeterministicMismatch,
@@ -268,20 +271,19 @@ DualCsrTransactionStatus DualCsrTransactionCoordinator::recover(
 {
   if (!_poisoned)
     return reject(DualCsrTransactionCode::kRecoveryNotPoisoned);
-  if (!(verified._expected_poisoned == _committed)
-      || !validReplayEvidence(verified._evidence))
+  if (!(verified._expected_poisoned.matches(_committed)) || !validReplayEvidence(verified._evidence))
     return reject(DualCsrTransactionCode::kTraceMismatch);
-  if (!validateCommittedDualCsrAnalysisState(verified._state).empty())
+  if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(verified._state).empty())
     return reject(DualCsrTransactionCode::kInvalidStagedState);
   if (verified._state.graph.session_token
       == _committed.graph.session_token)
     return reject(DualCsrTransactionCode::kTraceMismatch);
 
-  auto rebound = rebindRecoveredAggregateSession(
-      _committed, _committed.graph.session_token,
-      verified._state.graph.session_token);
-  if (!rebound.success() || !(*rebound.rebound == verified._state))
-    return reject(DualCsrTransactionCode::kTraceMismatch);
+  if constexpr (incregpusta_debug_checks_enabled) {
+    auto rebound = rebindRecoveredAggregateSession(_committed, _committed.graph.session_token, verified._state.graph.session_token);
+    if (!rebound.success() || !(*rebound.rebound == verified._state))
+      return reject(DualCsrTransactionCode::kTraceMismatch);
+  }
   _committed.swap(verified._state);
   _poisoned = false;
   return {DualCsrTransactionCode::kOk, true, false};

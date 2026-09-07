@@ -8,6 +8,7 @@
 #include <utility>
 #include <variant>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowTimingCaptureInternal.hpp"
 #include "NativeDualCsrPayloadCaptureInternal.hpp"
 #include "StableArcEndpointRefsInternal.hpp"
@@ -19,6 +20,8 @@ namespace {
 detail::NativeCaptureResult reject(const AffectedCapturePlan& plan,
                                    NarrowCaptureError error)
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return {std::nullopt, error, {}};
   detail::NativeCaptureResult rejected;
   rejected.audit.requested_nodes = plan.nodes.size();
   rejected.audit.requested_instances

@@ -70,3 +70,10 @@ if(BUILD_TESTING)
         ista_incremental_levelization_property_test
         IncrementalLevelizationPropertyTest.cpp)
 endif()
+
+if(BUILD_TESTING)
+  ista_diagnostic_tests(
+      ista_mixed_graph_builder_test
+      ista_incremental_levelization_property_test
+  )
+endif()

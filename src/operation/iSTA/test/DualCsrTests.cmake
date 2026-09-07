@@ -118,28 +118,36 @@ set_tests_properties(ista_dual_csr_frozen_real_differential PROPERTIES
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
 )
 
-add_test(
-    NAME ista_dual_csr_release_timing_smoke
-    COMMAND
-    "${ISTA_TEST_PYTHON_EXECUTABLE}"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/dual_csr_timing_smoke.py"
-    --probe "$<TARGET_FILE:ista_dual_csr_production_fresh_probe>"
-    --trace
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
-    --run-root
-    "${CMAKE_CURRENT_BINARY_DIR}/stage5-timing-smoke/runs"
-    --output
-    "${CMAKE_CURRENT_BINARY_DIR}/stage5-timing-smoke/timing-smoke.json"
-    --build-config "$<CONFIG>"
-    --compiler-id "${CMAKE_CXX_COMPILER_ID}"
-    --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
-    --warmup-runs 1
-    --samples 6
-    --timeout-seconds 900
-)
-set_tests_properties(ista_dual_csr_release_timing_smoke PROPERTIES
-    LABELS "ista_smoke;ista_cpu;ista_dual_csr"
-    TIMEOUT 7200
-    SKIP_RETURN_CODE 77
-    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
-)
+add_test(NAME ista_incregpusta_performance_orchestration
+    COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+    "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/test_performance_mode.py")
+set_tests_properties(ista_incregpusta_performance_orchestration PROPERTIES
+    LABELS "ista_unit;ista_dual_csr" TIMEOUT 60
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+foreach(stage IN ITEMS dual_csr stage6)
+  set(probe "ista_${stage}_production_fresh_probe")
+  if(ECC_INCREGPUSTA_DEBUG_CHECKS)
+    set(test_name "ista_${stage}_performance_rejects_on")
+    add_test(NAME "${test_name}"
+        COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+        "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/test_performance_mode.py"
+        --reject-probe "$<TARGET_FILE:${probe}>")
+  else()
+    set(test_name "ista_${stage}_release_timing_smoke")
+    add_test(NAME "${test_name}"
+        COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+        "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/dual_csr_timing_smoke.py"
+        --probe "$<TARGET_FILE:${probe}>"
+        --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
+        --run-root "${CMAKE_CURRENT_BINARY_DIR}/${stage}-timing-smoke/runs"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/${stage}-timing-smoke/timing-smoke.json"
+        --build-config "$<CONFIG>"
+        --compiler-id "${CMAKE_CXX_COMPILER_ID}"
+        --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
+        --warmup-runs 1 --samples 6 --timeout-seconds 900)
+  endif()
+  set_tests_properties("${test_name}" PROPERTIES
+      LABELS "ista_smoke;ista_cpu;ista_dual_csr" TIMEOUT 7200
+      SKIP_RETURN_CODE 77 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endforeach()

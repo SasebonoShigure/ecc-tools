@@ -162,3 +162,10 @@ if(BUILD_TESTING)
       ista_timing_dual_csr_parallel_deactivation_receipt_test
       PROPERTIES LABELS "ista_unit;ista_timing_dual_csr")
 endif()
+
+if(BUILD_TESTING)
+  ista_diagnostic_tests(
+      ista_timing_narrow_record_reader_test
+      ista_timing_dual_csr_structured_batch_test
+  )
+endif()

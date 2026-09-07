@@ -83,6 +83,7 @@ class StaCsrSessionContext final
 
   [[nodiscard]] const csr::StaAnalysisContext& analysisContext() const noexcept { return _analysis_context; }
   [[nodiscard]] std::uint64_t token() const noexcept { return _session_token; }
+  [[nodiscard]] bool hasReadySnapshot() const noexcept { return _substate == StaCsrSessionSubstate::kReady && _snapshot != nullptr; }
 
  private:
   friend class STAInterface;

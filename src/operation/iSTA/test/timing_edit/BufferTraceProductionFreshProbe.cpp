@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -644,6 +645,8 @@ int main(int argc, char* argv[])
     std::string mode;
     const auto options
         = ista::buffer_trace::test::parseOptions(argc, argv, mode);
+    if (!ista::incregpusta_debug_checks_enabled && mode != "expect-preloader-reject" && mode != "make-synthetic-template" && mode != "make-real-template")
+      throw std::runtime_error("diagnostic probe requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
     if (mode == "replay") {
       ista::buffer_trace::test::replayMode(options);
     } else if (mode == "make-synthetic-template") {

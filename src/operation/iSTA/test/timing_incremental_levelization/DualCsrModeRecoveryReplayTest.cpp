@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -17,11 +18,14 @@
 #include "CsrCpuReferenceBackend.hpp"
 #include "DataManager.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
+#include "DualCsrFunctionalReceiptJson.hpp"
 #include "DualCsrModeRecoveryReplay.hpp"
 #include "DualCsrNativeCandidateCarrierInternal.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "DualCsrStructuredBatchTestSupport.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
+#include "DualCsrUpdater.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowTimingRecordReader.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
@@ -29,6 +33,7 @@
 namespace ista::timing_dual_csr::test {
 namespace {
 
+using ::ista::timing_dual_csr::detail::DualCsrNativeCandidateCarrier;
 using structured_support::StructuredFixture;
 
 template <typename T>
@@ -192,26 +197,15 @@ class CumulativeBatchSource final
             committed.arc_group_index);
 
     timing_edit::NativeDatabaseCandidate candidate
-        = _installed
-              ? detail::DualCsrNativeCandidateCarrier::clone(
-                    *_installed)
-              : detail::DualCsrNativeCandidateCarrier::create(
-                    _baseline);
+        = _installed ? DualCsrNativeCandidateCarrier::clone(*_installed) : DualCsrNativeCandidateCarrier::create(_baseline);
     if (_installed) {
-      require(detail::DualCsrNativeCandidateCarrier::rollback(
-                  *_installed),
-              "cumulative source could not roll back prior candidate");
+      require(DualCsrNativeCandidateCarrier::rollback(*_installed), "cumulative source could not roll back prior candidate");
       _installed.reset();
     }
-    const auto translated
-        = detail::DualCsrNativeCandidateCarrier::apply(
-            candidate, pending.preparedBatch(),
-            pending.stagedResolver());
+    const auto translated = DualCsrNativeCandidateCarrier::apply(candidate, pending.preparedBatch(), pending.stagedResolver());
     require(translated.applied(),
             "cumulative source native apply was rejected");
-    _installed.emplace(
-        detail::DualCsrNativeCandidateCarrier::installAndExecute(
-            _authority, std::move(candidate)));
+    _installed.emplace(DualCsrNativeCandidateCarrier::installAndExecute(_authority, std::move(candidate)));
     CandidateBoundCapture capture = NarrowTimingRecordReader{}.read(
         _installed->database(), committed_view,
         committed.arc_group_index, pending.stagedResolver(),
@@ -262,8 +256,7 @@ class CumulativeBatchSource final
   {
     if (!_installed)
       return true;
-    const bool rolled_back
-        = detail::DualCsrNativeCandidateCarrier::rollback(*_installed);
+    const bool rolled_back = DualCsrNativeCandidateCarrier::rollback(*_installed);
     _installed.reset();
     return rolled_back;
   }
@@ -282,7 +275,12 @@ DualCsrVerifiedStage stage(
   if (mode == LevelizationExecutionMode::kFullStage5) {
     auto attempt = makeStagedDualCsrAnalysisState(
         committed, std::move(verified));
-    require(attempt.success(), "focused full stage was rejected");
+    if (!attempt.success()) {
+      std::string detail;
+      for (const auto& violation : attempt.violations)
+        detail += violation.field + ": " + violation.message + "; ";
+      throw std::runtime_error("focused full stage was rejected: " + detail);
+    }
     return std::move(*attempt.staged);
   }
   auto attempt = makeMixedLevelizedDualCsrAnalysisState(
@@ -299,9 +297,7 @@ struct PoisonedScenario
   std::vector<timing_edit::DesignEditPlan> plans;
 };
 
-PoisonedScenario producePoisoned(
-    const std::vector<LevelizationExecutionMode>& modes,
-    bool noncompact_generation_zero)
+PoisonedScenario produceCommittedScenario(const std::vector<LevelizationExecutionMode>& modes, bool noncompact_generation_zero, bool poison_after_commit = true)
 {
   timing_edit::test::installNativeTransactionBaseline();
   timing_edit::test::GuardedTestSession session;
@@ -327,12 +323,9 @@ PoisonedScenario producePoisoned(
               auto verified = source.mint(
                   coordinator->committed(), plans[index]);
               const auto status = coordinator->publish(
-                  stage(coordinator->committed(), std::move(verified),
-                        modes[index]),
-                  index + 1 == modes.size()
-                      ? DualCsrPublishFailpoint::kAfterSwap
-                      : DualCsrPublishFailpoint::kNone);
-              if (index + 1 == modes.size())
+                  stage(coordinator->committed(), std::move(verified), modes[index]),
+                  poison_after_commit && index + 1 == modes.size() ? DualCsrPublishFailpoint::kAfterSwap : DualCsrPublishFailpoint::kNone);
+              if (poison_after_commit && index + 1 == modes.size())
                 require(status.code
                             == DualCsrTransactionCode::kPostSwapPoisoned
                             && status.published && status.poisoned,
@@ -393,11 +386,13 @@ DualCsrModeRecoveryReplayEvidence recoverAndContinueMixed(
                                ? ": " + attempt.failure->detail
                                : std::string{}));
             evidence = attempt.evidence;
-            const auto recovered = scenario.coordinator->recover(
-                std::move(*attempt.recovery));
-            require(recovered.ok() && recovered.published
-                        && !recovered.poisoned,
-                    "verified mode recovery did not clear poison");
+            if (scenario.coordinator->poisoned()) {
+              const auto recovered = scenario.coordinator->recover(std::move(*attempt.recovery));
+              require(recovered.ok() && recovered.published && !recovered.poisoned, "verified mode recovery did not clear poison");
+            } else {
+              // Restore persisted work after closing its session; no fault injection.
+              scenario.coordinator = std::make_unique<DualCsrTransactionCoordinator>(attempt.recovery->state());
+            }
 
             if (continue_with_next_mixed) {
             const std::size_t next
@@ -429,8 +424,7 @@ DualCsrModeRecoveryReplayEvidence recoverAndContinueMixed(
 
 void mixedNoncompactRecoveryContract()
 {
-  auto scenario = producePoisoned(
-      {LevelizationExecutionMode::kMixedStage6}, true);
+  auto scenario = produceCommittedScenario({LevelizationExecutionMode::kMixedStage6}, true);
   finalizePoisonedSnapshot(scenario);
   const auto& poisoned = scenario.poisoned_snapshot;
   require(poisoned.execution_trace.size() == 1
@@ -480,10 +474,7 @@ void mixedNoncompactRecoveryContract()
 
 void fullThenMixedModeDispatchContract()
 {
-  auto scenario = producePoisoned(
-      {LevelizationExecutionMode::kFullStage5,
-       LevelizationExecutionMode::kMixedStage6},
-      false);
+  auto scenario = produceCommittedScenario({LevelizationExecutionMode::kFullStage5, LevelizationExecutionMode::kMixedStage6}, false);
   finalizePoisonedSnapshot(scenario);
   const auto& trace = scenario.poisoned_snapshot.execution_trace;
   require(trace.size() == 2
@@ -514,15 +505,69 @@ void fullThenMixedModeDispatchContract()
           "g1 full -> g2 mixed recovery did not preserve exact mode dispatch");
 }
 
+void runtimeRecoveryContract(const char* output)
+{
+  auto scenario = produceCommittedScenario({LevelizationExecutionMode::kFullStage5, LevelizationExecutionMode::kMixedStage6}, false, false);
+  finalizePoisonedSnapshot(scenario);
+  const auto& initial = scenario.poisoned_snapshot;
+  require(initial.generation.value() == 2, "ordinary batches did not commit");
+  require(initial.execution_trace.back().levels().level_nodes.empty() == !incregpusta_debug_checks_enabled,
+          "execution diagnostic payload does not match build mode");
+  require((initial.traversal_telemetry == csr::CsrTraversalTelemetry{}) == !incregpusta_debug_checks_enabled,
+          "storage visit collection does not match build mode");
+  const auto evidence = recoverAndContinueMixed(scenario, false, false);
+  require(evidence.full_records_replayed == 1 && evidence.mixed_records_replayed == 1, "ordinary recovery did not replay recorded modes");
+  const auto stale = DualCsrUpdater::stage(initial.graph, initial.descriptor_trace.front());
+  require(!stale.success(), "default path accepted a stale descriptor");
+  if constexpr (!incregpusta_debug_checks_enabled) {
+    bool rejected = false;
+    try {
+      static_cast<void>(DualCsrUpdater::stage(initial.graph, initial.descriptor_trace.front(), {DualCsrUpdateFailpoint::kAfterDetachedClone}));
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    require(rejected, "default path silently accepted fault injection");
+  }
+  // The frozen fixture supports one recovery followed by its second batch.
+  auto continuation = produceCommittedScenario({LevelizationExecutionMode::kMixedStage6}, false, false);
+  finalizePoisonedSnapshot(continuation);
+  recoverAndContinueMixed(continuation, false, true);
+  require(continuation.coordinator->committed().generation.value() == 2, "ordinary recovery did not continue to the next batch");
+  if (output != nullptr) {
+    // Explicit development acceptance export; never called by performance probes.
+    auto before = projectDualCsrFunctionalSemanticReceipt(initial.graph, initial.timing);
+    const auto& current = continuation.coordinator->committed();
+    const auto& recovered = scenario.coordinator->committed();
+    auto replayed = projectDualCsrFunctionalSemanticReceipt(recovered.graph, recovered.timing);
+    auto after = projectDualCsrFunctionalSemanticReceipt(current.graph, current.timing);
+    require(before.success() && replayed.success() && after.success(), "development projection failed");
+    nlohmann::json result{{"before_recovery", functionalSemanticReceiptToJson(*before.receipt)},
+                          {"after_continuation", functionalSemanticReceiptToJson(*after.receipt)},
+                          {"after_two_batch_replay", functionalSemanticReceiptToJson(*replayed.receipt)},
+                          {"generation", current.generation.value()}};
+    std::ofstream file(output);
+    file << result.dump(2);
+    require(static_cast<bool>(file), "could not write development comparison output");
+  }
+}
+
 }  // namespace
 }  // namespace ista::timing_dual_csr::test
 
-int main()
+int main(int argc, char* argv[])
 {
   try {
     ista::timing_edit::test::NativeTransactionRuntime runtime;
-    ista::timing_dual_csr::test::mixedNoncompactRecoveryContract();
-    ista::timing_dual_csr::test::fullThenMixedModeDispatchContract();
+    if (argc == 3 && std::string(argv[1]) == "--runtime-output") {
+      ista::timing_dual_csr::test::runtimeRecoveryContract(argv[2]);
+    } else if (argc != 1) {
+      throw std::invalid_argument("usage: recovery_test [--runtime-output FILE]");
+    } else if constexpr (ista::incregpusta_debug_checks_enabled) {
+      ista::timing_dual_csr::test::mixedNoncompactRecoveryContract();
+      ista::timing_dual_csr::test::fullThenMixedModeDispatchContract();
+    } else {
+      ista::timing_dual_csr::test::runtimeRecoveryContract(nullptr);
+    }
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

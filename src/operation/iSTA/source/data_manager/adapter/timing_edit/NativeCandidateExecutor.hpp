@@ -78,7 +78,8 @@ enum class NativeRollbackFailure : std::uint8_t
   kDelayRuntimeCleanup,
   kPersistentDelayRestore,
   kDelayRuntimeCleanupAndPersistentDelayRestore,
-  kOutsideOperationGuardScope
+  kOutsideOperationGuardScope,
+  kDiagnosticsDisabled
 };
 
 // installAndExecute throws this only when candidate execution has already

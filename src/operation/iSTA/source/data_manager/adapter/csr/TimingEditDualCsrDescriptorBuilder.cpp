@@ -19,11 +19,12 @@
 
 #include "CsrReferenceInputAdapterInternal.hpp"
 #include "DualCsrArcGroupIndexValidation.hpp"
+#include "DualCsrStructuredCapturePlanInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowCaptureAuditValidation.hpp"
 #include "NarrowTimingCaptureInternal.hpp"
 #include "TimingEditDualCsrCaptureEvidenceInternal.hpp"
 #include "TimingEditDualCsrDescriptorStructureInternal.hpp"
-#include "DualCsrStructuredCapturePlanInternal.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
@@ -79,6 +80,10 @@ void requireExactAudit(const AffectedCapturePlan& plan,
                        const detail::NativeCaptureResult& result,
                        const NarrowTimingRecords& records)
 {
+  if (!result.success())
+    invalid("native capture failed");
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
   const auto active_arcs = static_cast<std::uint64_t>(
       std::ranges::count_if(
       plan.arcs, [](const auto& request) {

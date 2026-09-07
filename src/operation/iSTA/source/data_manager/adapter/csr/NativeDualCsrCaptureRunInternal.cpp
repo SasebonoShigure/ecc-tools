@@ -10,6 +10,8 @@
 #include <optional>
 #include <utility>
 
+#include "IncreGpuStaBuildConfig.hpp"
+
 namespace ista::timing_dual_csr::detail {
 
 [[noreturn]] void abortCapture(NarrowCaptureError error)
@@ -17,9 +19,11 @@ namespace ista::timing_dual_csr::detail {
   throw CaptureAbort{error};
 }
 
-CaptureRun::CaptureRun(const AffectedCapturePlan& plan)
-    : _before(csr::detail::currentNativeFullExportCounters())
+CaptureRun::CaptureRun(const AffectedCapturePlan& plan) : _before{}
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
+  _before = csr::detail::currentNativeFullExportCounters();
   _records.audit.requested_nodes = plan.nodes.size();
   _records.audit.requested_instances
       = plan.token_materializations.size();
@@ -39,6 +43,8 @@ CaptureRun::CaptureRun(const AffectedCapturePlan& plan)
 
 NativeCaptureResult CaptureRun::fail(NarrowCaptureError error)
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return {std::nullopt, error, {}};
   observeExports();
   ++_records.audit.rejected_reads;
   return {std::nullopt, error, _records.audit};
@@ -46,6 +52,8 @@ NativeCaptureResult CaptureRun::fail(NarrowCaptureError error)
 
 NativeCaptureResult CaptureRun::succeed()
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return {std::move(_records), std::nullopt, {}};
   observeExports();
   if (_records.audit.full_export_observed) {
     ++_records.audit.rejected_reads;

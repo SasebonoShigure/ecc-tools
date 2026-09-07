@@ -18,6 +18,7 @@
 #include "DataManager.hpp"
 #include "Database.hpp"
 #include "DelayCalculator.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "Logger.hpp"
 #include "NativeDatabaseValidation.hpp"
 #include "STAInterface.hpp"
@@ -256,6 +257,13 @@ void requireReleasedSnapshotForNativeMutation(
   std::unique_ptr<csr::CsrSnapshotObservation> released_observation;
   StaTimingEditSessionProbeAccess::releaseSnapshotForMutation(
       session_context, &released_observation);
+  if (session_context.token() != session_token.value() || !StaTimingEditSessionProbeAccess::snapshotReleasedForTesting(session_context))
+    throw std::runtime_error("native mutation did not release the old CSR snapshot first");
+  if constexpr (!incregpusta_debug_checks_enabled) {
+    if (released_observation)
+      throw std::runtime_error("OFF release exposed a diagnostic observation");
+    return;
+  }
   if (released_observation == nullptr
       || released_observation->state != csr::CsrSnapshotState::kReleased
       || released_observation->identity.session_token
@@ -280,10 +288,8 @@ ExecutedNativeTransaction executeNativeTransaction(
       authority, std::move(candidate));
   std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot
       = buildNativeHostSnapshot(installed.database(), authority.sessionToken());
-  CsrFullExactReceipt csr_full_receipt
-      = StaTimingEditSessionProbeAccess::proveCsrFullExact(
-          authority, *host_snapshot, installed.database(),
-          transaction.prepared.targetGeneration());
+  CsrExecutionAuthorization csr_full_receipt
+      = StaTimingEditSessionProbeAccess::proveCsrFullExact(authority, *host_snapshot, installed.database(), transaction.prepared.targetGeneration());
   const CommittedEditIdentity post_identity
       = NativeTimingEditPreparer::captureCurrentIdentity(
           installed.database(), transaction.prepared.targetGeneration(),

@@ -261,3 +261,30 @@ if(BUILD_TESTING)
       TIMEOUT 600
   )
 endif()
+
+if(BUILD_TESTING)
+  ista_diagnostic_tests(
+      ista_timing_edit_receipt_test
+      ista_timing_edit_fresh_recovery_test
+      ista_incremental_session_test
+      ista_timing_edit_fresh_oracle_differential
+      ista_timing_edit_production_oracle_derived_tamper_rollback
+      ista_buffer_trace_one_shot_reuse_reject
+      ista_buffer_trace_first_empty_generation
+      ista_buffer_trace_terminal_empty_generation
+      ista_buffer_trace_fresh_process
+      ista_buffer_trace_source_isolation
+      ista_dual_csr_frozen_synthetic_differential
+      ista_dual_csr_frozen_real_differential
+      ista_stage6_frozen_synthetic_differential
+      ista_stage6_frozen_real_differential
+      ista_stage6_active_payload_microcase_test
+      ista_csr_session_snapshot_adapter_contract_test
+      ista_csr_session_context_test
+      ista_csr_session_lifecycle_test
+      ista_csr_session_fresh_process
+      ista_csr_real_differential_fresh_process
+      ista_full_baseline
+      ista_csr_projection_fresh_process
+  )
+endif()

@@ -34,32 +34,33 @@ namespace ista::timing_edit {
 
 class TimingEditCoordinator;
 
-// A successful Stage-3 CPU/full proof. The payload is intentionally opaque and
-// move-only: only the test-only guarded session bridge can mint one after an
-// independent native timing readback agrees with the complete CSR result.
-class CsrFullExactReceipt final
+// Move-only authorization minted by the guarded execution bridge. Full exact
+// proof is present only in diagnostic builds and is never implied by authorization.
+class CsrExecutionAuthorization final
 {
  public:
-  ~CsrFullExactReceipt() noexcept;
+  ~CsrExecutionAuthorization() noexcept;
 
-  CsrFullExactReceipt(const CsrFullExactReceipt&) = delete;
-  CsrFullExactReceipt& operator=(const CsrFullExactReceipt&) = delete;
-  CsrFullExactReceipt(CsrFullExactReceipt&&) noexcept;
-  CsrFullExactReceipt& operator=(CsrFullExactReceipt&&) noexcept;
+  CsrExecutionAuthorization(const CsrExecutionAuthorization&) = delete;
+  CsrExecutionAuthorization& operator=(const CsrExecutionAuthorization&) = delete;
+  CsrExecutionAuthorization(CsrExecutionAuthorization&&) noexcept;
+  CsrExecutionAuthorization& operator=(CsrExecutionAuthorization&&) noexcept;
+
+  [[nodiscard]] bool hasFullExactProof() const noexcept { return _payload != nullptr; }
 
  private:
   struct Payload;
+  CsrExecutionAuthorization(TimingEditSessionToken session_token, TransactionGeneration target_generation);
+  [[nodiscard]] bool authorizes(TimingEditSessionToken session_token, TransactionGeneration generation) const noexcept;
 
-  CsrFullExactReceipt(TimingEditSessionToken session_token,
-                      TransactionGeneration target_generation,
-                      std::vector<std::uint8_t> canonical_input,
-                      csr::CsrTimingResult exact_result);
+  CsrExecutionAuthorization(TimingEditSessionToken session_token, TransactionGeneration target_generation, std::vector<std::uint8_t> canonical_input,
+                            csr::CsrTimingResult exact_result);
 
-  [[nodiscard]] bool matches(TimingEditSessionToken session_token,
-                             TransactionGeneration target_generation,
-                             const csr::CsrReferenceInput& input,
+  [[nodiscard]] bool matches(TimingEditSessionToken session_token, TransactionGeneration target_generation, const csr::CsrReferenceInput& input,
                              const csr::CsrTimingResult& result) const;
 
+  TimingEditSessionToken _session_token;
+  TransactionGeneration _target_generation;
   std::unique_ptr<Payload> _payload;
 
   friend class ::ista::StaTimingEditSessionProbeAccess;

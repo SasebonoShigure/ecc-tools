@@ -16,17 +16,19 @@
 // ***************************************************************************************
 #include "CsrFifoLevelization.hpp"
 
-#include "FlatCsrEdgeView.hpp"
-#include "FlatTimingPayloadView.hpp"
 #include <algorithm>
 #include <limits>
 #include <queue>
 #include <stdexcept>
 #include <utility>
 
+#include "FlatCsrEdgeView.hpp"
+#include "FlatTimingPayloadView.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
+
 namespace ista::csr {
 namespace {
-
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
 thread_local std::uint64_t full_levelizer_entry_count = 0;
 
 void recordFullLevelizerEntry()
@@ -35,6 +37,7 @@ void recordFullLevelizerEntry()
     throw std::overflow_error("full levelizer entry counter overflow");
   ++full_levelizer_entry_count;
 }
+#endif
 
 }  // namespace
 
@@ -48,6 +51,7 @@ CsrFullLevelizerOperationGuard::CsrFullLevelizerOperationGuard(CsrFullLevelizerO
 {
 }
 
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
 CsrFullLevelizerEntryDelta CsrFullLevelizerOperationGuard::finish() &&
 {
   if (_counter == nullptr || _counter != &full_levelizer_entry_count)
@@ -64,9 +68,13 @@ CsrFullLevelizerOperationGuard beginCsrFullLevelizerOperation() noexcept
   return CsrFullLevelizerOperationGuard(&full_levelizer_entry_count, full_levelizer_entry_count);
 }
 
+#endif
+
 CsrFifoLevelization replayFifoLevelization(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads, CsrTraversalTelemetry* telemetry)
 {
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
   recordFullLevelizerEntry();
+#endif
   CsrFifoLevelization replay;
   if (edges.nodeCount() != payloads.nodeCount()) {
     replay.view_error = CsrViewError::kMalformedAdjacency;

@@ -20,6 +20,7 @@
 #include "Database.hpp"
 #include "DelayCalculator.hpp"
 #include "GraphBuilder.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NativeDatabaseValidation.hpp"
 #include "TimingAnalyzer.hpp"
 #include "TimingPropagator.hpp"
@@ -233,6 +234,8 @@ using StageFunction = void (*)();
       return "persistent DelayCalculator restore failed";
     case NativeRollbackFailure::kDelayRuntimeCleanupAndPersistentDelayRestore:
       return "DelayCalculator runtime cleanup and persistent restore both failed";
+    case NativeRollbackFailure::kDiagnosticsDisabled:
+      return "rollback fault injection requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON";
     case NativeRollbackFailure::kOutsideOperationGuardScope:
       return "native Database owner escaped its operation-guard scope";
   }
@@ -464,6 +467,8 @@ NativeRollbackFailure InstalledNativeDatabase::rollbackStatus() noexcept
 NativeRollbackFailure InstalledNativeDatabase::rollbackWithDiagnostics(
     NativeRollbackFailpoint failpoint) noexcept
 {
+  if (!incregpusta_debug_checks_enabled && failpoint != NativeRollbackFailpoint::kNone)
+    return NativeRollbackFailure::kDiagnosticsDisabled;
   if (!_installed) {
     return NativeRollbackFailure::kNone;
   }
@@ -512,6 +517,9 @@ InstalledNativeDatabase NativeCandidateExecutor::installAndExecute(const NativeE
                                                                     NativeExecutionFailpoint failpoint,
                                                                     NativeRollbackFailpoint rollback_failpoint)
 {
+  if (!incregpusta_debug_checks_enabled && (failpoint != NativeExecutionFailpoint::kNone || rollback_failpoint != NativeRollbackFailpoint::kNone)) {
+    throw std::invalid_argument("native fault injection requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
+  }
   if (!authority.active() || authority.sessionToken().value() == 0) {
     throw std::invalid_argument("native candidate executor received invalid operation-guard authority");
   }
@@ -541,7 +549,8 @@ InstalledNativeDatabase NativeCandidateExecutor::installAndExecute(const NativeE
 
     runFourTimingStages(failpoint);
     inject(failpoint, NativeExecutionFailpoint::kBeforeValidation);
-    requireValidNativeDatabase(installed.database());
+    if constexpr (incregpusta_debug_checks_enabled)
+      requireValidNativeDatabase(installed.database());
 
     inject(failpoint, NativeExecutionFailpoint::kBeforeDelayRuntimeDestroy);
     destroyTransientSingletons();

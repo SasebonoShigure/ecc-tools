@@ -28,7 +28,7 @@ struct CsrTimingResult;
 }  // namespace csr
 
 namespace timing_edit {
-class CsrFullExactReceipt;
+class CsrExecutionAuthorization;
 class NativeExecutionAuthority;
 }  // namespace timing_edit
 
@@ -49,6 +49,7 @@ class StaTimingEditSessionProbeAccess final
   using GuardedMutation = std::function<StaStatus(std::uint64_t, StaCsrSessionContext&, const timing_edit::NativeExecutionAuthority&)>;
 
   [[nodiscard]] static StaStatus runWithSingleOperationGuard(IncrementalStaSession& session, const GuardedMutation& mutation);
+  [[nodiscard]] static bool snapshotReleasedForTesting(const StaCsrSessionContext& context) noexcept;
   static void releaseSnapshotForMutation(StaCsrSessionContext& context,
                                          std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) noexcept;
   [[nodiscard]] static timing_edit::SessionStateSignal stateSignal(IncrementalStaSession& session) noexcept;
@@ -61,10 +62,9 @@ class StaTimingEditSessionProbeAccess final
       StaCsrSessionContext& context);
   [[nodiscard]] static StaCsrScatterAttempt scatterForTesting(
       StaCsrSessionContext& context, Database& database, const csr::CsrTimingResult& result);
-  [[nodiscard]] static timing_edit::CsrFullExactReceipt proveCsrFullExact(
-      const timing_edit::NativeExecutionAuthority& authority,
-      csr::CsrCommittedSessionSnapshot& snapshot, const Database& database,
-      timing_edit::TransactionGeneration target_generation);
+  [[nodiscard]] static timing_edit::CsrExecutionAuthorization proveCsrFullExact(const timing_edit::NativeExecutionAuthority& authority,
+                                                                                csr::CsrCommittedSessionSnapshot& snapshot, const Database& database,
+                                                                                timing_edit::TransactionGeneration target_generation);
 
  private:
   static void writeSessionState(void* opaque_session, timing_edit::SessionTransactionState state) noexcept;

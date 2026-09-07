@@ -17,6 +17,8 @@
 #include <optional>
 #pragma once
 
+#include "IncreGpuStaBuildConfig.hpp"
+
 #include <cstdint>
 #include "ActiveCsrEdgeView.hpp"
 #include "TimingPayloadView.hpp"
@@ -85,10 +87,20 @@ class CsrFullLevelizerOperationGuard final
   friend CsrFullLevelizerOperationGuard beginCsrFullLevelizerOperation() noexcept;
 };
 
-// Begins a same-thread observation window over actual generic full-levelizer
-// entries. Neither the guard nor the resulting move-only delta can be forged
-// through public construction.
+// Diagnostic observation only. OFF has no counter access or observation window;
+// its zero delta means not collected, not proof of zero full-levelizer entries.
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
 [[nodiscard]] CsrFullLevelizerOperationGuard beginCsrFullLevelizerOperation() noexcept;
+#else
+inline CsrFullLevelizerEntryDelta CsrFullLevelizerOperationGuard::finish() &&
+{
+  return CsrFullLevelizerEntryDelta(0);
+}
+inline CsrFullLevelizerOperationGuard beginCsrFullLevelizerOperation() noexcept
+{
+  return CsrFullLevelizerOperationGuard(nullptr, 0);
+}
+#endif
 
 // Precondition: validateReferenceInput(input) is empty. This helper deliberately
 // does not guard malformed CSR indices; every production caller must visibly

@@ -5,6 +5,16 @@ message(STATUS "############## iSTA: START CMAKE ##############")
 
 set(CMAKE_CXX_STANDARD 20)
 
+option(ECC_INCREGPUSTA_DEBUG_CHECKS "Enable IncreGPUSTA development diagnostics" OFF)
+configure_file(IncreGpuStaBuildConfig.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/config/IncreGpuStaBuildConfig.hpp)
+add_library(ista_incregpusta_build_options INTERFACE)
+target_include_directories(ista_incregpusta_build_options INTERFACE
+    ${CMAKE_CURRENT_BINARY_DIR}/config)
+link_libraries(ista_incregpusta_build_options)
+include(${CMAKE_CURRENT_SOURCE_DIR}/test/IncreGpuStaTestModes.cmake)
+
+
 # add_compile_options("-Wconversion")
 # add_compile_options("-fsanitize=address")
 # link_libraries("-fsanitize=address")

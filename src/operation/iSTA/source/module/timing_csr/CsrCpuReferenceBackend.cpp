@@ -130,8 +130,6 @@ CsrComputationWithTelemetry computeCsrCpuReferenceWithReplay(const ActiveCsrEdge
 
 CsrComputationResult CsrCpuReferenceBackend::compute(const CsrReferenceInput& input) const
 {
-  if (!validateReferenceInput(input).empty())
-    return CsrComputationResult{CsrComputationCode::kInvariantViolation};
   return computeWithTelemetry(input).computation;
 }
 

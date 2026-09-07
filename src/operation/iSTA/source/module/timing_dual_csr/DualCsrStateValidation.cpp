@@ -15,10 +15,10 @@
 #include <string>
 #include <vector>
 
-#include "TimingSemanticKey.hpp"
-
 #include "DualCsrReferenceValidationInternal.hpp"
 #include "DualCsrValidationInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
+#include "TimingSemanticKey.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
@@ -525,45 +525,27 @@ DualCsrViolations validateDualCsrState(const DualCsrState& state)
              "active arc must occur once outgoing and once incoming");
   }
 
-  const std::uint64_t active_arcs = static_cast<std::uint64_t>(
-      std::ranges::count_if(state.arc_slots,
-                            [](const DualCsrArcSlot& slot) {
-                              return slot.active;
-                            }));
-  const std::uint64_t base_physical = static_cast<std::uint64_t>(
-      state.base_out.physical_slots.size());
-  const std::uint64_t base_active = static_cast<std::uint64_t>(
-      std::ranges::count_if(
-          state.base_out.physical_slots,
-          [](const std::optional<csr::ArcId>& arc) {
-            return arc.has_value();
-          }));
-  const std::uint64_t aux_rows = static_cast<std::uint64_t>(
-      state.aux_out.row_sources.size());
-  const std::uint64_t aux_edges = static_cast<std::uint64_t>(
-      state.aux_out.arc_ids.size());
-  const auto& telemetry = state.telemetry;
-  const std::uint64_t expected_before_generation
-      = state.generation.value() == 0 ? 0 : state.generation.value() - 1;
-  if (telemetry.generation_before != expected_before_generation
-      || telemetry.generation_after != state.generation.value())
-    reject(violations, DualCsrViolationCode::kGeneration,
-           "telemetry.generation",
-           "telemetry generation must describe the committed update");
-  if (telemetry.logical_edges_after != active_arcs
-      || telemetry.base_physical_edges != base_physical
-      || telemetry.base_active_edges != base_active
-      || telemetry.base_tombstones != base_physical - base_active
-      || telemetry.aux_rows != aux_rows
-      || telemetry.aux_edges != aux_edges
-      || base_active + aux_edges != active_arcs)
-    reject(violations, DualCsrViolationCode::kExpectedValue,
-           "telemetry.structure",
-           "telemetry counts must exactly match active Base/Aux storage");
-  if (telemetry.fallback_count != 0)
-    reject(violations, DualCsrViolationCode::kConflict,
-           "telemetry.fallback_count",
-           "a committed targeted state cannot contain fallback");
+  // logical_edges_after is consumed by ActiveCsrEdgeView, despite its legacy location.
+  const std::uint64_t active_arcs = static_cast<std::uint64_t>(std::ranges::count_if(state.arc_slots, [](const DualCsrArcSlot& slot) { return slot.active; }));
+  if (state.telemetry.logical_edges_after != active_arcs)
+    reject(violations, DualCsrViolationCode::kExpectedValue, "telemetry.logical_edges_after", "active edge count must match the graph");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    const std::uint64_t base_physical = static_cast<std::uint64_t>(state.base_out.physical_slots.size());
+    const std::uint64_t base_active = static_cast<std::uint64_t>(
+        std::ranges::count_if(state.base_out.physical_slots, [](const std::optional<csr::ArcId>& arc) { return arc.has_value(); }));
+    const std::uint64_t aux_rows = static_cast<std::uint64_t>(state.aux_out.row_sources.size());
+    const std::uint64_t aux_edges = static_cast<std::uint64_t>(state.aux_out.arc_ids.size());
+    const auto& telemetry = state.telemetry;
+    const std::uint64_t expected_before_generation = state.generation.value() == 0 ? 0 : state.generation.value() - 1;
+    if (telemetry.generation_before != expected_before_generation || telemetry.generation_after != state.generation.value())
+      reject(violations, DualCsrViolationCode::kGeneration, "telemetry.generation", "telemetry generation must describe the committed update");
+    if (telemetry.logical_edges_after != active_arcs || telemetry.base_physical_edges != base_physical || telemetry.base_active_edges != base_active
+        || telemetry.base_tombstones != base_physical - base_active || telemetry.aux_rows != aux_rows || telemetry.aux_edges != aux_edges
+        || base_active + aux_edges != active_arcs)
+      reject(violations, DualCsrViolationCode::kExpectedValue, "telemetry.structure", "telemetry counts must exactly match active Base/Aux storage");
+    if (telemetry.fallback_count != 0)
+      reject(violations, DualCsrViolationCode::kConflict, "telemetry.fallback_count", "a committed targeted state cannot contain fallback");
+  }
 
   const auto& identity = state.reference_payload.source_identity;
   if (identity.session_token != state.session_token.value())

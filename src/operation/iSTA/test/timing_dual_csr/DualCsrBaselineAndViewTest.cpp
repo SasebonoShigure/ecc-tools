@@ -15,6 +15,7 @@
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrTestSupport.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "TimingSemanticKey.hpp"
 
 namespace ista::timing_dual_csr::test {
@@ -321,6 +322,8 @@ void telemetryContracts()
   require(hasCode(validateDualCsrState(structure),
                   DualCsrViolationCode::kExpectedValue),
           "state validator accepted forged active-edge telemetry");
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
   auto generation = baselineState();
   ++generation.telemetry.generation_after;
   require(hasCode(validateDualCsrState(generation),

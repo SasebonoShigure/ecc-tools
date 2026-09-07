@@ -4,11 +4,12 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
-#include "DualCsrNativeCandidateCarrierInternal.hpp"
-
 #include <limits>
 #include <stdexcept>
 #include <utility>
+
+#include "DualCsrNativeCandidateCarrierInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::timing_dual_csr::detail {
 namespace {
@@ -50,7 +51,8 @@ CandidateLifecycleSnapshot candidateLifecycleDelta(
 timing_edit::NativeDatabaseCandidate
 DualCsrNativeCandidateCarrier::create(const Database& baseline)
 {
-  increment(g_lifecycle.creates);
+  if constexpr (incregpusta_debug_checks_enabled)
+    increment(g_lifecycle.creates);
   return timing_edit::NativeDatabaseCandidate::create(baseline);
 }
 
@@ -58,7 +60,8 @@ timing_edit::NativeDatabaseCandidate
 DualCsrNativeCandidateCarrier::clone(
     const timing_edit::InstalledNativeDatabase& installed)
 {
-  increment(g_lifecycle.clones);
+  if constexpr (incregpusta_debug_checks_enabled)
+    increment(g_lifecycle.clones);
   return timing_edit::NativeDatabaseCandidate::create(
       installed.database());
 }
@@ -69,7 +72,8 @@ DualCsrNativeCandidateCarrier::apply(
     const timing_edit::PreparedBatch& prepared,
     const timing_edit::TimingEditResolverState& staged_resolver)
 {
-  increment(g_lifecycle.applies);
+  if constexpr (incregpusta_debug_checks_enabled)
+    increment(g_lifecycle.applies);
   return timing_edit::NativeDesignEditTranslator::applyNormalizedBatch(
       candidate.database(), prepared, staged_resolver);
 }
@@ -79,8 +83,10 @@ DualCsrNativeCandidateCarrier::installAndExecute(
     const timing_edit::NativeExecutionAuthority& authority,
     timing_edit::NativeDatabaseCandidate candidate)
 {
-  increment(g_lifecycle.installs);
-  increment(g_lifecycle.executes);
+  if constexpr (incregpusta_debug_checks_enabled)
+    increment(g_lifecycle.installs);
+  if constexpr (incregpusta_debug_checks_enabled)
+    increment(g_lifecycle.executes);
   return timing_edit::NativeCandidateExecutor::installAndExecute(
       authority, std::move(candidate));
 }
@@ -88,7 +94,8 @@ DualCsrNativeCandidateCarrier::installAndExecute(
 bool DualCsrNativeCandidateCarrier::rollback(
     timing_edit::InstalledNativeDatabase& installed) noexcept
 {
-  increment(g_lifecycle.rollbacks);
+  if constexpr (incregpusta_debug_checks_enabled)
+    increment(g_lifecycle.rollbacks);
   return installed.rollback();
 }
 

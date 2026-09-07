@@ -20,7 +20,7 @@
 #include <memory>
 #include <vector>
 
-#include "CsrFullExactReceipt.hpp"
+#include "CsrExecutionAuthorization.hpp"
 #include "NativeDatabaseCandidate.hpp"
 #include "TimingEditResolver.hpp"
 #include "TimingEditTransactionTypes.hpp"
@@ -89,11 +89,9 @@ struct PrecommitRollbackSignal
 class VerifiedPublishBundle final
 {
  public:
-  VerifiedPublishBundle(InstalledNativeDatabase&& installed_database,
-                        std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot,
-                        CsrFullExactReceipt&& csr_full_receipt, PreparedBatch&& prepared_batch,
-                        CumulativeEditTrace&& cumulative_trace, TimingEditResolverState&& resolver_state,
-                        CommitFaultLatch commit_fault_latch = {}, bool publish_after_commit_fault = false) noexcept;
+  VerifiedPublishBundle(InstalledNativeDatabase&& installed_database, std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot,
+                        CsrExecutionAuthorization&& csr_full_receipt, PreparedBatch&& prepared_batch, CumulativeEditTrace&& cumulative_trace,
+                        TimingEditResolverState&& resolver_state, CommitFaultLatch commit_fault_latch = {}, bool publish_after_commit_fault = false) noexcept;
   ~VerifiedPublishBundle() noexcept;
 
   VerifiedPublishBundle(const VerifiedPublishBundle&) = delete;
@@ -114,7 +112,7 @@ class VerifiedPublishBundle final
 
   InstalledNativeDatabase _installed_database;
   std::unique_ptr<csr::CsrCommittedSessionSnapshot> _host_snapshot;
-  CsrFullExactReceipt _csr_full_receipt;
+  CsrExecutionAuthorization _csr_full_receipt;
   PreparedBatch _prepared_batch;
   CumulativeEditTrace _cumulative_trace;
   TimingEditResolverState _resolver_state;
@@ -130,8 +128,7 @@ class FreshRecoveryBundle final
 {
  public:
   FreshRecoveryBundle(TimingEditSessionToken new_session_token, std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot,
-                      CsrFullExactReceipt&& csr_full_receipt,
-                      CommittedEditIdentity&& committed_identity, CumulativeEditTrace&& cumulative_trace,
+                      CsrExecutionAuthorization&& csr_full_receipt, CommittedEditIdentity&& committed_identity, CumulativeEditTrace&& cumulative_trace,
                       TimingEditResolverState&& resolver_state, SessionStateSignal new_session_signal) noexcept;
   ~FreshRecoveryBundle() noexcept;
 
@@ -143,7 +140,7 @@ class FreshRecoveryBundle final
  private:
   TimingEditSessionToken _new_session_token;
   std::unique_ptr<csr::CsrCommittedSessionSnapshot> _host_snapshot;
-  CsrFullExactReceipt _csr_full_receipt;
+  CsrExecutionAuthorization _csr_full_receipt;
   CommittedEditIdentity _committed_identity;
   CumulativeEditTrace _cumulative_trace;
   TimingEditResolverState _resolver_state;

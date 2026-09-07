@@ -136,10 +136,9 @@ void runReceiptMismatch(ReceiptMismatch mismatch)
                         .ok(),
                     "receipt fixture did not reach Verified");
 
-            CsrFullExactReceipt rejected_receipt
-                = std::move(executed.csr_full_receipt);
+            CsrExecutionAuthorization rejected_receipt = std::move(executed.csr_full_receipt);
             if (mismatch == ReceiptMismatch::kMovedFrom) {
-              CsrFullExactReceipt retained = std::move(rejected_receipt);
+              CsrExecutionAuthorization retained = std::move(rejected_receipt);
               (void) retained;
             } else if (mismatch == ReceiptMismatch::kOldDatabase) {
               auto alternate_host = buildAlternateContextHost(

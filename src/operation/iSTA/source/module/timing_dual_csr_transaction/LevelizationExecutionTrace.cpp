@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <utility>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationTelemetry.hpp"
 
 namespace ista::timing_dual_csr {
@@ -29,23 +30,18 @@ bool validateMixed(const MixedLevelizationDeterministicTrace& trace) noexcept
 
 }  // namespace
 
-LevelizationExecutionTrace::LevelizationExecutionTrace(
-    timing_edit::TransactionGeneration generation_value,
-    LevelizationExecutionMode mode_value,
-    csr::CsrFifoLevelization levels_value,
-    csr::CsrTraversalTelemetry traversal_value,
-    csr::CsrFullLevelizerEntryDelta&& entry_delta,
-    std::uint64_t fallback_count_value,
-    bool supplied_levels_validated_value,
-    std::optional<MixedLevelizationDeterministicTrace> mixed_value)
+LevelizationExecutionTrace::LevelizationExecutionTrace(timing_edit::TransactionGeneration generation_value, LevelizationExecutionMode mode_value,
+                                                       const csr::CsrFifoLevelization& levels_value, csr::CsrTraversalTelemetry traversal_value,
+                                                       csr::CsrFullLevelizerEntryDelta&& entry_delta, std::uint64_t fallback_count_value,
+                                                       bool supplied_levels_validated_value, std::optional<MixedLevelizationDeterministicTrace> mixed_value)
     : _generation(generation_value),
       _mode(mode_value),
-      _levels(std::move(levels_value)),
+      _levels(incregpusta_debug_checks_enabled ? levels_value : csr::CsrFifoLevelization{}),
       _traversal(traversal_value),
       _full_levelizer_entry_delta(entry_delta.value()),
       _fallback_count(fallback_count_value),
       _supplied_levels_validated(supplied_levels_validated_value),
-      _mixed(std::move(mixed_value))
+      _mixed(incregpusta_debug_checks_enabled ? std::move(mixed_value) : std::nullopt)
 {
 }
 
@@ -60,6 +56,9 @@ MixedLevelizationDeterministicTrace projectDeterministicMixedTrace(
 bool validateLevelizationExecutionTraceShape(
     const LevelizationExecutionTrace& trace) noexcept
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return trace.generation().value() != 0
+           && (trace.mode() == LevelizationExecutionMode::kFullStage5 || trace.mode() == LevelizationExecutionMode::kMixedStage6);
   if (trace.generation().value() == 0 || !trace.levels().complete
       || trace.levels().view_error.has_value()
       || trace.levels().level_offsets.empty())

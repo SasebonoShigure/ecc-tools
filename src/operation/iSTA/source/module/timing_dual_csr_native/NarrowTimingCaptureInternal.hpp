@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "AffectedCapturePlan.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::timing_dual_csr::detail {
 
@@ -113,10 +114,9 @@ struct NativeCaptureResult
   [[nodiscard]] bool success() const noexcept
   {
     return records.has_value() && !error
-           && audit.full_export_guard_active
-           && !audit.full_export_observed
-           && audit.native_full_graph_exports == 0
-           && audit.native_full_reference_exports == 0;
+           && (!incregpusta_debug_checks_enabled
+               || (audit.full_export_guard_active && !audit.full_export_observed && audit.native_full_graph_exports == 0
+                   && audit.native_full_reference_exports == 0));
   }
 };
 

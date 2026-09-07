@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "CsrReferenceNativeModels.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::csr {
 
@@ -141,6 +142,8 @@ struct CsrTraversalTelemetry
 
 inline void recordStorageVisit(CsrStageStorageVisits& visits, EdgeStorageKind kind) noexcept
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
   if (kind == EdgeStorageKind::kBaseOut)
     ++visits.base_out;
   else if (kind == EdgeStorageKind::kAuxOut)

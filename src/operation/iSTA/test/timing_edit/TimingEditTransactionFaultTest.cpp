@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -41,7 +42,7 @@ bool failRollback(void* context) noexcept
   return false;
 }
 
-void testUnknownExecutionFailpointRejectedBeforeSwap()
+void testUnknownExecutionFailpointRejectedBeforeSwap(NativeExecutionFailpoint failpoint = static_cast<NativeExecutionFailpoint>(255))
 {
   installNativeTransactionBaseline();
   GuardedTestSession session;
@@ -59,15 +60,11 @@ void testUnknownExecutionFailpointRejectedBeforeSwap()
             NativeDatabaseCandidate candidate
                 = NativeDatabaseCandidate::create(STADM.getDatabase());
             try {
-              InstalledNativeDatabase unexpected
-                  = NativeCandidateExecutor::installAndExecute(
-                      authority, std::move(candidate),
-                      static_cast<NativeExecutionFailpoint>(255));
+              InstalledNativeDatabase unexpected = NativeCandidateExecutor::installAndExecute(authority, std::move(candidate), failpoint);
               (void) unexpected;
             } catch (const std::invalid_argument& error) {
-              rejected
-                  = std::string(error.what()).find("unknown execution failpoint")
-                    != std::string::npos;
+              rejected = std::string(error.what()).find(incregpusta_debug_checks_enabled ? "unknown execution failpoint" : "ECC_INCREGPUSTA_DEBUG_CHECKS=ON")
+                         != std::string::npos;
             }
             return StaStatus::success(session.session().state());
           });
@@ -168,6 +165,10 @@ int main()
 {
   NativeTransactionRuntime runtime;
   testUnknownExecutionFailpointRejectedBeforeSwap();
-  testRollbackErrorImmediatelyPoisonsCoordinatorAndSession();
+  if constexpr (ista::incregpusta_debug_checks_enabled) {
+    testRollbackErrorImmediatelyPoisonsCoordinatorAndSession();
+  } else {
+    testUnknownExecutionFailpointRejectedBeforeSwap(NativeExecutionFailpoint::kAfterInstall);
+  }
   return 0;
 }

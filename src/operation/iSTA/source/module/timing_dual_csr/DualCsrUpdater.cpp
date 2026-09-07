@@ -7,9 +7,11 @@
 #include "DualCsrUpdater.hpp"
 
 #include <new>
+#include <stdexcept>
 
 #include "DualCsrStateValidation.hpp"
 #include "DualCsrUpdaterInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
@@ -17,7 +19,7 @@ namespace {
 void inject(DualCsrUpdateFailpoint requested,
             DualCsrUpdateFailpoint current)
 {
-  if (requested == current)
+  if (incregpusta_debug_checks_enabled && requested == current)
     throw std::bad_alloc();
 }
 
@@ -28,6 +30,8 @@ DualCsrUpdateAttempt DualCsrUpdater::stage(
     const DualCsrBatchDescriptor& descriptor,
     DualCsrUpdateOptions options)
 {
+  if (!incregpusta_debug_checks_enabled && options.failpoint != DualCsrUpdateFailpoint::kNone)
+    throw std::invalid_argument("fault injection requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
   DualCsrUpdateAttempt attempt;
   attempt.violations = validateDualCsrDescriptor(committed, descriptor);
   if (!attempt.violations.empty())
@@ -48,7 +52,8 @@ DualCsrUpdateAttempt DualCsrUpdater::stage(
   detail::applyPayloadChanges(staged, descriptor);
   detail::finalizeUpdateState(staged, descriptor);
   inject(options.failpoint, DualCsrUpdateFailpoint::kBeforeValidation);
-  attempt.violations = validateDualCsrState(staged);
+  if constexpr (incregpusta_debug_checks_enabled)
+    attempt.violations = validateDualCsrState(staged);
   if (attempt.violations.empty())
     attempt.state = std::move(staged);
   return attempt;

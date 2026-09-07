@@ -1,5 +1,5 @@
 add_library(ista_timing_edit_transaction
-    ${CMAKE_CURRENT_SOURCE_DIR}/CsrFullExactReceipt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrExecutionAuthorization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingEditCoordinator.cpp
 )
 

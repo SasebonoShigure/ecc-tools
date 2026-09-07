@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -167,7 +168,8 @@ namespace ista::csr {
 
 CsrGraphExportResult exportCsrGraphSnapshot(const ista::Database& database)
 {
-  detail::noteNativeFullGraphExport();
+  if constexpr (incregpusta_debug_checks_enabled)
+    detail::noteNativeFullGraphExport();
   try {
     detail::GraphBuildState state(database);
     detail::exportNodesAndInstances(state);

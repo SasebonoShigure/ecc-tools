@@ -8,6 +8,7 @@
 #include <limits>
 #include <vector>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationInternal.hpp"
 
 namespace ista::timing_incremental_levelization {
@@ -97,15 +98,11 @@ MixedValidationResult validateMixedPrecedenceGraph(
   if (indegree != graph.indegree)
     return invalid(MixedValidationCode::kIndegreeMismatch,
                    "stored mixed indegree disagrees with adjacency");
-  if (graph.telemetry.n_last_nodes != graph.domain.n_last_nodes
-      || graph.telemetry.n_current_nodes != graph.domain.n_current_nodes
-      || graph.telemetry.n_new_nodes != graph.domain.n_new_nodes
-      || graph.telemetry.n_old_levels != graph.domain.n_old_levels
-      || graph.telemetry.mixed_vertex_count
-             != graph.domain.mixed_vertex_count
-      || graph.telemetry.unique_precedence_edges
-             != graph.successors.size()
-      || !validateMixedTelemetryIdentities(graph.telemetry))
+  if (incregpusta_debug_checks_enabled
+      && (graph.telemetry.n_last_nodes != graph.domain.n_last_nodes || graph.telemetry.n_current_nodes != graph.domain.n_current_nodes
+          || graph.telemetry.n_new_nodes != graph.domain.n_new_nodes || graph.telemetry.n_old_levels != graph.domain.n_old_levels
+          || graph.telemetry.mixed_vertex_count != graph.domain.mixed_vertex_count || graph.telemetry.unique_precedence_edges != graph.successors.size()
+          || !validateMixedTelemetryIdentities(graph.telemetry)))
     return invalid(MixedValidationCode::kMalformedAdjacency,
                    "mixed telemetry identities are inconsistent");
   return {};

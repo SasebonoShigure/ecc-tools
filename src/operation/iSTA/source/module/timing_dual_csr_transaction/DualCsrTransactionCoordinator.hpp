@@ -12,6 +12,7 @@
 #include <variant>
 
 #include "CommittedDualCsrAnalysisState.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationTypes.hpp"
 
 namespace ista::timing_dual_csr {
@@ -88,6 +89,33 @@ class DualCsrStageFactoryAccess;
 struct DualCsrStageAttempt;
 class VerifiedStructuredBatch;
 
+// Session, generation and committed identity bind a stage. Aggregate comparison is
+// supplementary diagnostics, with no graph copy in the default build.
+class DualCsrCommitBinding final
+{
+ public:
+  explicit DualCsrCommitBinding(const CommittedDualCsrAnalysisState& state)
+      : _session(state.graph.session_token), _generation(state.generation), _identity(state.identity)
+  {
+    if constexpr (incregpusta_debug_checks_enabled)
+      _exact.emplace(state);
+  }
+  [[nodiscard]] bool matches(const CommittedDualCsrAnalysisState& state) const
+  {
+    if (_session != state.graph.session_token || _generation != state.generation || _identity != state.identity)
+      return false;
+    if constexpr (incregpusta_debug_checks_enabled)
+      return *_exact == state;
+    return true;
+  }
+
+ private:
+  timing_edit::TimingEditSessionToken _session;
+  timing_edit::TransactionGeneration _generation;
+  timing_edit::CommittedEditIdentity _identity;
+  std::optional<CommittedDualCsrAnalysisState> _exact;
+};
+
 class DualCsrVerifiedStage final
 {
  public:
@@ -106,16 +134,12 @@ class DualCsrVerifiedStage final
   }
 
  private:
-  DualCsrVerifiedStage(CommittedDualCsrAnalysisState expected_committed,
-                       CommittedDualCsrAnalysisState state,
-                       DualCsrStageTimings timings)
-      : _expected_committed(std::move(expected_committed)),
-        _state(std::move(state)),
-        _timings(timings)
+  DualCsrVerifiedStage(const CommittedDualCsrAnalysisState& expected_committed, CommittedDualCsrAnalysisState state, DualCsrStageTimings timings)
+      : _expected_committed(expected_committed), _state(std::move(state)), _timings(timings)
   {
   }
 
-  CommittedDualCsrAnalysisState _expected_committed;
+  DualCsrCommitBinding _expected_committed;
   CommittedDualCsrAnalysisState _state;
   DualCsrStageTimings _timings;
 
@@ -142,14 +166,12 @@ class DualCsrVerifiedRecovery final
   }
 
  private:
-  DualCsrVerifiedRecovery(CommittedDualCsrAnalysisState expected_poisoned,
-                          CommittedDualCsrAnalysisState state)
-      : _expected_poisoned(std::move(expected_poisoned)),
-        _state(std::move(state))
+  DualCsrVerifiedRecovery(const CommittedDualCsrAnalysisState& expected_poisoned, CommittedDualCsrAnalysisState state)
+      : _expected_poisoned(expected_poisoned), _state(std::move(state))
   {
   }
 
-  CommittedDualCsrAnalysisState _expected_poisoned;
+  DualCsrCommitBinding _expected_poisoned;
   CommittedDualCsrAnalysisState _state;
 
   friend DualCsrRecoveryAttempt makeDualCsrVerifiedRecovery(

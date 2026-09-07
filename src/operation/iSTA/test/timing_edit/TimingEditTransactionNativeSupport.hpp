@@ -64,7 +64,7 @@ struct ExecutedNativeTransaction
 {
   InstalledNativeDatabase installed;
   std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot;
-  CsrFullExactReceipt csr_full_receipt;
+  CsrExecutionAuthorization csr_full_receipt;
   CommittedEditIdentity post_identity;
   TimingEditResolverState staged_resolver;
   TokenMaterialization materialization;

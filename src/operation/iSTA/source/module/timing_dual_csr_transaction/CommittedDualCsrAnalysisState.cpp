@@ -15,6 +15,7 @@
 #include "../../data_manager/adapter/csr/DualCsrSemanticIdentity.hpp"
 #include "DualCsrArcGroupIndexValidation.hpp"
 #include "DualCsrStateValidation.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "TimingEditValidation.hpp"
 
 namespace ista::timing_dual_csr {
@@ -150,8 +151,7 @@ DualCsrViolations validateCommittedDualCsrAnalysisState(
     const auto& execution = state.execution_trace[index];
     const auto target = timing_edit::TransactionGeneration{index + 1};
     bool mixed_boundary_differs = false;
-    if (index < state.descriptor_trace.size()
-        && execution.mode() == LevelizationExecutionMode::kMixedStage6) {
+    if (incregpusta_debug_checks_enabled && index < state.descriptor_trace.size() && execution.mode() == LevelizationExecutionMode::kMixedStage6) {
       const auto& descriptor = state.descriptor_trace[index];
       const auto& mixed = execution.mixed();
       mixed_boundary_differs
@@ -162,13 +162,10 @@ DualCsrViolations validateCommittedDualCsrAnalysisState(
     }
     const bool descriptor_binding_differs
         = index < state.descriptor_trace.size()
-          && (state.descriptor_trace[index].target_generation
-                  != execution.generation()
-              || execution.levels().level_nodes.size()
-                     != state.descriptor_trace[index].after.node_slots
-              || execution.levels().node_to_level.size()
-                     != state.descriptor_trace[index].after.node_slots
-              || mixed_boundary_differs);
+          && (state.descriptor_trace[index].target_generation != execution.generation()
+              || (incregpusta_debug_checks_enabled
+                  && (execution.levels().level_nodes.size() != state.descriptor_trace[index].after.node_slots
+                      || execution.levels().node_to_level.size() != state.descriptor_trace[index].after.node_slots || mixed_boundary_differs)));
     if (execution.generation() != target
         || !validateLevelizationExecutionTraceShape(execution)
         || descriptor_binding_differs)
@@ -176,7 +173,7 @@ DualCsrViolations validateCommittedDualCsrAnalysisState(
              "aggregate.execution_trace[" + std::to_string(index) + "]",
              "execution record mode, generation, descriptor boundary, or deterministic shape is invalid");
   }
-  if (!state.execution_trace.empty()) {
+  if (incregpusta_debug_checks_enabled && !state.execution_trace.empty()) {
     const auto& latest = state.execution_trace.back();
     if (latest.levels().level_offsets != state.timing.values.level_offsets
         || latest.levels().level_nodes != state.timing.values.level_nodes

@@ -8,11 +8,19 @@
 #include <set>
 #include <utility>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationInternal.hpp"
 #include "MixedLevelizationValidation.hpp"
 
 namespace ista::timing_incremental_levelization {
 namespace {
+
+bool recordDiagnosticVisit(std::uint64_t& value) noexcept
+{
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return true;
+  return detail::checkedIncrement(value);
+}
 
 using EndpointPair = std::pair<std::uint64_t, std::uint64_t>;
 
@@ -126,20 +134,19 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
         if (!arc.eligibility.levelization)
           return csr::EdgeVisitResult::continueVisit();
         if (entry.storage_kind == csr::EdgeStorageKind::kBaseOut) {
-          counter_overflow |= !detail::checkedIncrement(telemetry.base_out);
+          counter_overflow |= !recordDiagnosticVisit(telemetry.base_out);
         } else if (entry.storage_kind == csr::EdgeStorageKind::kAuxOut) {
-          counter_overflow |= !detail::checkedIncrement(telemetry.aux_out);
+          counter_overflow |= !recordDiagnosticVisit(telemetry.aux_out);
         } else {
           return csr::EdgeVisitResult::fail(
               csr::CsrViewError::kMalformedAdjacency);
         }
-        counter_overflow |= !detail::checkedIncrement(
-            telemetry.actual_eligible_arc_visits);
+        counter_overflow |= !recordDiagnosticVisit(telemetry.actual_eligible_arc_visits);
 
         const bool source_old = arc.source.value() < domain->n_last_nodes;
         const bool sink_old = arc.sink.value() < domain->n_last_nodes;
         if (source_old && sink_old) {
-          counter_overflow |= !detail::checkedIncrement(telemetry.old_old);
+          counter_overflow |= !recordDiagnosticVisit(telemetry.old_old);
           const std::uint64_t source_level = previous.node_to_level[
               static_cast<std::size_t>(arc.source.value())];
           const std::uint64_t sink_level = previous.node_to_level[
@@ -149,20 +156,20 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
         }
 
         if (source_old) {
-          counter_overflow |= !detail::checkedIncrement(telemetry.old_new);
+          counter_overflow |= !recordDiagnosticVisit(telemetry.old_new);
         } else if (sink_old) {
-          counter_overflow |= !detail::checkedIncrement(telemetry.new_old);
+          counter_overflow |= !recordDiagnosticVisit(telemetry.new_old);
         } else {
-          counter_overflow |= !detail::checkedIncrement(telemetry.new_new);
+          counter_overflow |= !recordDiagnosticVisit(telemetry.new_new);
         }
-        counter_overflow |= !detail::checkedIncrement(
-            telemetry.mapped_actual_arc_candidates);
+        counter_overflow |= !recordDiagnosticVisit(telemetry.mapped_actual_arc_candidates);
 
-        const EndpointPair actual{arc.source.value(), arc.sink.value()};
-        if (!actual_pairs.insert(actual).second) {
-          counter_overflow |= !detail::checkedIncrement(
-              telemetry.actual_parallel_duplicates_collapsed);
-          return csr::EdgeVisitResult::continueVisit();
+        if constexpr (incregpusta_debug_checks_enabled) {
+          const EndpointPair actual{arc.source.value(), arc.sink.value()};
+          if (!actual_pairs.insert(actual).second) {
+            counter_overflow |= !recordDiagnosticVisit(telemetry.actual_parallel_duplicates_collapsed);
+            return csr::EdgeVisitResult::continueVisit();
+          }
         }
         mapping_error |= !addMappedPair(arc, previous, *domain, mapped_pairs);
         return mapping_error
@@ -171,13 +178,13 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
                    : csr::EdgeVisitResult::continueVisit();
       });
 
-  telemetry.unique_actual_endpoint_pairs =
-      static_cast<std::uint64_t>(actual_pairs.size());
-  if (actual_pairs.size() < mapped_pairs.size())
-    counter_overflow = true;
-  else
-    telemetry.proxy_alias_duplicates_collapsed =
-        static_cast<std::uint64_t>(actual_pairs.size() - mapped_pairs.size());
+  if constexpr (incregpusta_debug_checks_enabled) {
+    telemetry.unique_actual_endpoint_pairs = static_cast<std::uint64_t>(actual_pairs.size());
+    if (actual_pairs.size() < mapped_pairs.size())
+      counter_overflow = true;
+    else
+      telemetry.proxy_alias_duplicates_collapsed = static_cast<std::uint64_t>(actual_pairs.size() - mapped_pairs.size());
+  }
 
   if (mapping_error)
     return makeFailure(MixedGraphBuildFailureCode::kMappingOverflow,
@@ -198,7 +205,7 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
   std::set<EndpointPair> precedence;
   for (std::uint64_t level = 1; level < domain->n_old_levels; ++level) {
     precedence.emplace(level - 1, level);
-    if (!detail::checkedIncrement(telemetry.virtual_chain_edges))
+    if (!recordDiagnosticVisit(telemetry.virtual_chain_edges))
       return makeFailure(MixedGraphBuildFailureCode::kInvariantFailure,
                          "virtual chain edge counter overflow", telemetry);
   }
@@ -241,11 +248,11 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
     return makeFailure(MixedGraphBuildFailureCode::kInvariantFailure,
                        "mapped source escapes mixed domain", telemetry);
 
-  const MixedValidationResult validation =
-      validateMixedPrecedenceGraph(graph);
-  if (!validation.valid())
-    return makeFailure(MixedGraphBuildFailureCode::kInvariantFailure,
-                       validation.detail, telemetry);
+  if constexpr (incregpusta_debug_checks_enabled) {
+    const MixedValidationResult validation = validateMixedPrecedenceGraph(graph);
+    if (!validation.valid())
+      return makeFailure(MixedGraphBuildFailureCode::kInvariantFailure, validation.detail, telemetry);
+  }
   return graph;
 }
 

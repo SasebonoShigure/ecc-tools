@@ -4,8 +4,6 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
-#include "DualCsrUpdaterInternal.hpp"
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +13,9 @@
 #include <utility>
 #include <vector>
 
+#include "DualCsrUpdaterInternal.hpp"
 #include "DualCsrValidationInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::timing_dual_csr::detail {
 namespace {
@@ -40,8 +40,8 @@ void reserveFor(std::vector<T>& values, std::size_t required,
   const std::size_t requested
       = std::max(required, std::max<std::size_t>(1, doubled));
   values.reserve(requested);
-  telemetry.capacity_grow_events.push_back(
-      {kind, old, required, values.capacity()});
+  if constexpr (incregpusta_debug_checks_enabled)
+    telemetry.capacity_grow_events.push_back({kind, old, required, values.capacity()});
 }
 
 template <typename T>
@@ -96,6 +96,8 @@ void initializeUpdateTelemetry(DualCsrState& staged,
                                const DualCsrBatchDescriptor& descriptor)
 {
   staged.telemetry = {};
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
   staged.telemetry.generation_before = committed.generation.value();
   staged.telemetry.generation_after = descriptor.target_generation.value();
   staged.telemetry.logical_edges_before = activeArcCount(committed);
@@ -289,7 +291,10 @@ void finalizeUpdateState(DualCsrState& staged,
     staged.reference_payload.clock_owner_by_node.resize(staged.nodes.size());
 
   refreshAdjacencyExtents(staged);
+  // The edge view consumes this count to run levelization; it is functional state.
   staged.telemetry.logical_edges_after = activeArcCount(staged);
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
   staged.telemetry.base_physical_edges
       = sizeOf(staged.base_out.physical_slots);
   staged.telemetry.base_active_edges = std::ranges::count_if(

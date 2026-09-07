@@ -78,3 +78,9 @@ if(BUILD_TESTING)
         LABELS "ista_unit;ista_timing_dual_csr;ista_transaction;ista_incremental_levelization;ista_timing_incremental_levelization"
     )
 endif()
+
+if(BUILD_TESTING)
+  ista_diagnostic_tests(
+      ista_timing_dual_csr_transaction_test
+  )
+endif()

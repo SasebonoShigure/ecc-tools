@@ -16,6 +16,7 @@
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrResourceObservation.hpp"
 #include "DualCsrTestSupport.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::timing_dual_csr::test {
 namespace {
@@ -104,13 +105,12 @@ void tombstoneAndReuseContracts()
   require(first.base_in.physical_slots[0]
               == std::optional<csr::ArcId>{csr::ArcId{1}},
           "reverse change did not update BaseIn");
-  require(first.telemetry.base_physical_edges
-              == first.base_out.physical_slots.size()
-              && first.telemetry.base_active_edges == 1
-              && first.telemetry.base_tombstones == 1,
-          "batch telemetry changed outgoing-Base semantics");
-  require(!first.telemetry.capacity_grow_events.empty(),
-          "detached append did not report any capacity growth");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    require(first.telemetry.base_physical_edges == first.base_out.physical_slots.size() && first.telemetry.base_active_edges == 1
+                && first.telemetry.base_tombstones == 1,
+            "batch telemetry changed outgoing-Base semantics");
+    require(!first.telemetry.capacity_grow_events.empty(), "detached append did not report any capacity growth");
+  }
 
   const auto first_out_offsets = first.base_out.row_offsets;
   const auto first_in_offsets = first.base_in.row_offsets;
@@ -125,9 +125,9 @@ void tombstoneAndReuseContracts()
               && second.base_out.physical_slots[0]
                      == std::optional<csr::ArcId>{csr::ArcId{2}},
           "old-row tombstone was not reused in place");
-  require(second.telemetry.tombstone_reuse_count == 1
-              && second.telemetry.base_tombstones == 1,
-          "tombstone reuse telemetry is incorrect");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    require(second.telemetry.tombstone_reuse_count == 1 && second.telemetry.base_tombstones == 1, "tombstone reuse telemetry is incorrect");
+  }
   require(!second.arc_slots[0].active
               && second.arc_slots[0].payload.key
                      == baseline.arc_slots[0].payload.key,
@@ -258,10 +258,8 @@ void payloadAndDescriptorContracts()
                    third.reference_payload.port_constraints,
                    std::move(constraints));
   const DualCsrState changed = apply(third, descriptor);
-  require(changed.nodes[3].net_name == "replacement_net"
-              && (*changed.arc_slots[2].payload.output_load)[0][0]
-                     == 4.0
-              && changed.telemetry.payload_change_count == 1,
+  require(changed.nodes[3].net_name == "replacement_net" && (*changed.arc_slots[2].payload.output_load)[0][0] == 4.0
+              && (!incregpusta_debug_checks_enabled || changed.telemetry.payload_change_count == 1),
           "node/arc payload changes were not applied");
 
   auto missing_identity = descriptorFor(second, 0, 0);
@@ -298,10 +296,12 @@ void detachedFailureIsAtomic()
     static_cast<void>(DualCsrUpdater::stage(
         committed, reuseBatch(committed),
         {DualCsrUpdateFailpoint::kAfterCapacityGrow}));
+  } catch (const std::invalid_argument&) {
+    threw = !incregpusta_debug_checks_enabled;
   } catch (const std::bad_alloc&) {
-    threw = true;
+    threw = incregpusta_debug_checks_enabled;
   }
-  require(threw, "capacity failpoint did not throw std::bad_alloc");
+  require(threw, "failpoint did not honor its build mode");
   require(committed == snapshot,
           "detached allocation failure mutated committed state");
 }
@@ -313,7 +313,8 @@ int main()
 {
   try {
     ista::timing_dual_csr::test::tombstoneAndReuseContracts();
-    ista::timing_dual_csr::test::resourceObservationContracts();
+    if constexpr (ista::incregpusta_debug_checks_enabled)
+      ista::timing_dual_csr::test::resourceObservationContracts();
     ista::timing_dual_csr::test::payloadAndDescriptorContracts();
     ista::timing_dual_csr::test::detachedFailureIsAtomic();
   } catch (const std::exception& error) {

@@ -5,17 +5,17 @@
 //
 // iEDA is licensed under Mulan PSL v2.
 // ***************************************************************************************
-#include "StaTimingEditSessionProbeAccess.hpp"
-
 #include <stdexcept>
 #include <utility>
 #include <variant>
 
-#include "CsrFullExactReceipt.hpp"
 #include "../CsrNativeTimingOracleTestSupport.hpp"
+#include "CsrExecutionAuthorization.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "CsrSessionSnapshotAdapter.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NativeCandidateExecutor.hpp"
+#include "StaTimingEditSessionProbeAccess.hpp"
 
 namespace ista::csr::test {
 
@@ -26,10 +26,9 @@ namespace ista::csr::test {
 
 namespace ista {
 
-timing_edit::CsrFullExactReceipt StaTimingEditSessionProbeAccess::proveCsrFullExact(
-    const timing_edit::NativeExecutionAuthority& authority,
-    csr::CsrCommittedSessionSnapshot& snapshot, const Database& database,
-    timing_edit::TransactionGeneration target_generation)
+timing_edit::CsrExecutionAuthorization StaTimingEditSessionProbeAccess::proveCsrFullExact(const timing_edit::NativeExecutionAuthority& authority,
+                                                                                          csr::CsrCommittedSessionSnapshot& snapshot, const Database& database,
+                                                                                          timing_edit::TransactionGeneration target_generation)
 {
   if (!authority.active() || authority.sessionToken().value() == 0
       || target_generation.value() == 0
@@ -38,6 +37,9 @@ timing_edit::CsrFullExactReceipt StaTimingEditSessionProbeAccess::proveCsrFullEx
     throw std::invalid_argument(
         "CSR full exact proof requires an active matching authority and generation");
   }
+
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return timing_edit::CsrExecutionAuthorization(authority.sessionToken(), target_generation);
 
   csr::CsrComputationResult computation
       = csr::computeCsrSessionReference(snapshot);
@@ -57,9 +59,8 @@ timing_edit::CsrFullExactReceipt StaTimingEditSessionProbeAccess::proveCsrFullEx
     throw CsrFullExactMismatch{};
   }
 
-  return timing_edit::CsrFullExactReceipt(
-      authority.sessionToken(), target_generation,
-      csr::canonicalReferenceInputBytes(snapshot.input), std::move(*reference));
+  return timing_edit::CsrExecutionAuthorization(authority.sessionToken(), target_generation, csr::canonicalReferenceInputBytes(snapshot.input),
+                                                std::move(*reference));
 }
 
 }  // namespace ista

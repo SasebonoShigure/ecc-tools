@@ -4,8 +4,6 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
-#include "DualCsrTraceBaselineInternal.hpp"
-
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -20,6 +18,8 @@
 #include "DualCsrReplayTypes.hpp"
 #include "DualCsrSemanticIdentity.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
+#include "DualCsrTraceBaselineInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "TimingEditResolver.hpp"
 
 namespace ista::timing_dual_csr::detail {
@@ -96,7 +96,7 @@ CommittedDualCsrAnalysisState makeTraceBaseline(
       .descriptor_trace = {},
       .semantic_trace = {},
       .traversal_telemetry = computation.telemetry};
-  if (!validateCommittedDualCsrAnalysisState(committed).empty())
+  if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(committed).empty())
     baselineFail("generation-zero aggregate failed intrinsic validation");
   return committed;
 }

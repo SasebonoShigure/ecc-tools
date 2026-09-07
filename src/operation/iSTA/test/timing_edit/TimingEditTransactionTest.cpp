@@ -19,9 +19,10 @@
 #include <variant>
 
 #include "DataManager.hpp"
-#include "STAInterface.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "NativeTimingEditPreparer.hpp"
+#include "STAInterface.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "TimingEditCoordinator.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
@@ -639,10 +640,17 @@ void testAllCommitLatchesFinishGPlusOneThenPoison()
 
 }  // namespace
 
+namespace ista::timing_edit::test {
+void testTimingEditRuntimeContract();
+}
+
 int main()
 {
   NativeTransactionRuntime runtime;
+  ista::timing_edit::test::testTimingEditRuntimeContract();
   testStateIdentityAndPrecommitRollbackSignals();
+  if constexpr (!ista::incregpusta_debug_checks_enabled)
+    return 0;
   testPublishBeforeCommitRollsBackExactG();
   testPublishIntegrityMismatchesRollbackExactG();
   testAllCommitLatchesFinishGPlusOneThenPoison();

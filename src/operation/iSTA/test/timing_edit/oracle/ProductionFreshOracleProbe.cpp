@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -132,7 +133,7 @@ struct CsrFullEqualityReceipt
   std::size_t ordinal{0};
   std::size_t node_count{0};
   std::size_t arc_count{0};
-  CsrFullExactReceipt proof;
+  CsrExecutionAuthorization proof;
 };
 
 CsrFullEqualityReceipt requireCsrFullExact(
@@ -511,6 +512,8 @@ int main(int argc, char* argv[])
 {
   using namespace ista::timing_edit::oracle;
   try {
+    if constexpr (!ista::incregpusta_debug_checks_enabled)
+      throw std::runtime_error("diagnostic probe requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
     OracleCliMode mode = parseOracleCli(argc, argv, false);
     run(std::get<OracleReplayOptions>(mode));
     return 0;

@@ -1,5 +1,3 @@
-#include "NativeDualCsrPayloadCaptureInternal.hpp"
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -13,11 +11,13 @@
 
 #include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "Database.hpp"
-#include "NativeDualCsrArcBijectionInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NativeDualCsrAffectedArcIndex.hpp"
+#include "NativeDualCsrArcBijectionInternal.hpp"
 #include "NativeDualCsrCaptureRunInternal.hpp"
 #include "NativeDualCsrDataNetPolicyInternal.hpp"
 #include "NativeDualCsrOutgoingOrderInternal.hpp"
+#include "NativeDualCsrPayloadCaptureInternal.hpp"
 #include "NativeDualCsrReferenceCapture.hpp"
 #include "NativeDualCsrTypedCaptureInternal.hpp"
 #include "TimingSemanticKey.hpp"
@@ -72,9 +72,7 @@ class CaptureBuilder final
     captureInstances();
     captureNetLoads();
     captureArcs();
-    if (_run.records().audit.accepted_node_roles != _plan.node_roles.size()
-        || _run.records().audit.accepted_cell_pin_capacitances
-               != _plan.cell_pin_capacitances.size())
+    if (_run.records().node_roles.size() != _plan.node_roles.size() || _run.records().cell_pin_capacitances.size() != _plan.cell_pin_capacitances.size())
       abortCapture(NarrowCaptureError::kUnplannedDependency);
     std::vector<std::optional<csr::NodeKey>> captured_node_keys(
         _plan.after.node_slots);
@@ -210,17 +208,20 @@ class CaptureBuilder final
       }
       requested.push_back(edit.library_cell);
     }
-    _run.records().audit.requested_library_cells = requested.size();
+    if constexpr (incregpusta_debug_checks_enabled)
+      _run.records().audit.requested_library_cells = requested.size();
     for (const auto& item : requested) {
       auto model = csr::detail::projectCanonicalReferencedLibraryCell(
           _database, item.cell_name);
-      ++_run.records().audit.library_cell_reads;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.library_cell_reads;
       if (const auto error = detail::validateCapturedLibraryCell(item, model))
         abortCapture(*error);
       if (!_library_by_name.emplace(item.cell_name, model).second)
         abortCapture(NarrowCaptureError::kDuplicateRequest);
       _run.records().library_cells.push_back({item, std::move(model)});
-      ++_run.records().audit.accepted_library_cells;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.accepted_library_cells;
     }
   }
 
@@ -271,9 +272,11 @@ class CaptureBuilder final
       auto role = std::get<std::optional<detail::CapturedNodeRole>>(
           std::move(projected));
       if (role) {
-        ++_run.records().audit.node_role_reads;
+        if constexpr (incregpusta_debug_checks_enabled)
+          ++_run.records().audit.node_role_reads;
         _run.records().node_roles.push_back(std::move(*role));
-        ++_run.records().audit.accepted_node_roles;
+        if constexpr (incregpusta_debug_checks_enabled)
+          ++_run.records().audit.accepted_node_roles;
       }
     }
     if (record.id.value() >= _nodes.size())
@@ -288,7 +291,8 @@ class CaptureBuilder final
     if (!record.is_port)
       _ordered_pin_owners.emplace(full_name,
                                   record.key.instance_name);
-    ++_run.records().audit.node_reads;
+    if constexpr (incregpusta_debug_checks_enabled)
+      ++_run.records().audit.node_reads;
     return _node_by_name.emplace(full_name, std::move(record))
         .first->second;
   }
@@ -311,10 +315,12 @@ class CaptureBuilder final
       abortCapture(*error);
     auto captured = std::get<detail::CapturedCellPinCapacitance>(
         std::move(projected));
-    ++_run.records().audit.cell_pin_capacitance_reads;
+    if constexpr (incregpusta_debug_checks_enabled)
+      ++_run.records().audit.cell_pin_capacitance_reads;
     _run.records().cell_pin_capacitances.push_back(
         std::move(captured));
-    ++_run.records().audit.accepted_cell_pin_capacitances;
+    if constexpr (incregpusta_debug_checks_enabled)
+      ++_run.records().audit.accepted_cell_pin_capacitances;
     return &_run.records().cell_pin_capacitances.back().model;
   }
 
@@ -332,7 +338,8 @@ class CaptureBuilder final
       captureCapacitance(node);
       _run.records().nodes.push_back(
           {request.ref, node.id, node});
-      ++_run.records().audit.accepted_nodes;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.accepted_nodes;
     }
   }
 
@@ -362,8 +369,10 @@ class CaptureBuilder final
         abortCapture(NarrowCaptureError::kUnsupportedPolicy);
       _run.records().instances.push_back(
           {item.creation_token, std::move(record)});
-      ++_run.records().audit.instance_reads;
-      ++_run.records().audit.accepted_instances;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.instance_reads;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.accepted_instances;
     }
   }
 
@@ -415,8 +424,10 @@ class CaptureBuilder final
         abortCapture(NarrowCaptureError::kDuplicateRequest);
       _run.records().net_loads.push_back(
           {request.ref, request.expected_name, load});
-      ++_run.records().audit.net_reads;
-      ++_run.records().audit.accepted_load_nets;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.net_reads;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.accepted_load_nets;
     }
   }
   std::vector<detail::NativeCandidateArcOrderFact> projectAffectedArcs()
@@ -427,10 +438,10 @@ class CaptureBuilder final
       abortCapture(*error);
     const auto& adjacency
         = std::get<detail::NativeAffectedArcAdjacency>(collected);
-    _run.records().audit.index_group_lookups
-        = adjacency.index_group_lookups;
-    _run.records().audit.native_arc_candidate_upper_bound
-        = adjacency.candidate_neighbor_upper_bound;
+    if constexpr (incregpusta_debug_checks_enabled)
+      _run.records().audit.index_group_lookups = adjacency.index_group_lookups;
+    if constexpr (incregpusta_debug_checks_enabled)
+      _run.records().audit.native_arc_candidate_upper_bound = adjacency.candidate_neighbor_upper_bound;
     const auto& indices = adjacency.indices_in_native_order;
     std::vector<const ista::Arc*> native;
     std::vector<csr::NodeId> sources;
@@ -449,7 +460,8 @@ class CaptureBuilder final
       bases.push_back(
           csr::detail::projectCanonicalArcKeyBase(context, arc));
       native.push_back(&arc);
-      ++_run.records().audit.native_arc_candidate_reads;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.native_arc_candidate_reads;
     }
     const auto keys = csr::assignParallelOrdinals(bases);
     std::vector<detail::NativeCandidateArcOrderFact> result;
@@ -594,8 +606,8 @@ class CaptureBuilder final
     if (const auto* error = std::get_if<NarrowCaptureError>(&matched))
       abortCapture(*error);
     const auto& bijection = std::get<detail::NativeArcBijection>(matched);
-    _run.records().audit.arc_identity_tie_breaks
-        = bijection.identity_tie_breaks;
+    if constexpr (incregpusta_debug_checks_enabled)
+      _run.records().audit.arc_identity_tie_breaks = bijection.identity_tie_breaks;
     for (std::size_t request = 0; request < _plan.arcs.size(); ++request) {
       if (!bijection.candidate_by_request[request])
         continue;
@@ -626,9 +638,12 @@ class CaptureBuilder final
           abortCapture(NarrowCaptureError::kUnplannedDependency);
         _run.records().arcs.push_back(
             {request.ref, id, false, *old});
-        ++_run.records().audit.deactivated_arc_before_reads;
-        ++_run.records().audit.accepted_deactivations;
-        ++_run.records().audit.captured_arc_records;
+        if constexpr (incregpusta_debug_checks_enabled)
+          ++_run.records().audit.deactivated_arc_before_reads;
+        if constexpr (incregpusta_debug_checks_enabled)
+          ++_run.records().audit.accepted_deactivations;
+        if constexpr (incregpusta_debug_checks_enabled)
+          ++_run.records().audit.captured_arc_records;
         continue;
       }
       if (!bijection.candidate_by_request[index])
@@ -640,12 +655,12 @@ class CaptureBuilder final
         abortCapture(NarrowCaptureError::kArcKeyMismatch);
       _run.records().arcs.push_back(
           {request.ref, id, true, std::move(payload)});
-      ++_run.records().audit.accepted_arcs;
-      ++_run.records().audit.captured_arc_records;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.accepted_arcs;
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++_run.records().audit.captured_arc_records;
     }
-    if (_run.records().audit.captured_arc_records
-        != _run.records().audit.requested_arcs
-               + _run.records().audit.requested_deactivations)
+    if (_run.records().arcs.size() != _plan.arcs.size())
       abortCapture(NarrowCaptureError::kArcMultiplicityMismatch);
   }
   const ista::Database& _database;

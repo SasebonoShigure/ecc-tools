@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -638,6 +639,8 @@ void writeExclusive(const fs::path& path, const std::string& payload)
 int main(int argc, char* argv[])
 {
   try {
+    if constexpr (!ista::incregpusta_debug_checks_enabled)
+      throw std::runtime_error("diagnostic probe requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
     Options options = parseOptions(argc, argv);
     validateOptions(options);
     loadDesign(options);

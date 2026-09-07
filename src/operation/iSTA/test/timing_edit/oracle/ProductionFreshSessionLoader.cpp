@@ -18,6 +18,7 @@
 
 #include "CsrFingerprint.hpp"
 #include "DataManager.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "IncrementalStaSession.hpp"
 #include "STAInterface.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
@@ -153,11 +154,10 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
     fail("run directory cannot be canonicalized");
   }
 
-  const std::vector<FreshArtifactEvidence> artifact_evidence{
-      evidence("tech_lef", artifacts.tech_lef),
-      evidence("cell_lef", artifacts.cell_lef),
-      evidence("liberty", artifacts.liberty),
-      evidence("verilog", artifacts.verilog), evidence("sdc", artifacts.sdc)};
+  std::vector<FreshArtifactEvidence> artifact_evidence;
+  if constexpr (incregpusta_debug_checks_enabled)
+    artifact_evidence = {evidence("tech_lef", artifacts.tech_lef), evidence("cell_lef", artifacts.cell_lef), evidence("liberty", artifacts.liberty),
+                         evidence("verilog", artifacts.verilog), evidence("sdc", artifacts.sdc)};
 
   loadArtifacts(artifacts);
   IncrementalStaSession session(

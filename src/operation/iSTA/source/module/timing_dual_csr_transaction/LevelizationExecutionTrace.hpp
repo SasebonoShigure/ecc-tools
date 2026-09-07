@@ -83,13 +83,9 @@ class LevelizationExecutionTrace final
                          const LevelizationExecutionTrace&) = default;
 
  private:
-  LevelizationExecutionTrace(
-      timing_edit::TransactionGeneration generation,
-      LevelizationExecutionMode mode, csr::CsrFifoLevelization levels,
-      csr::CsrTraversalTelemetry traversal,
-      csr::CsrFullLevelizerEntryDelta&& full_levelizer_entry_delta,
-      std::uint64_t fallback_count, bool supplied_levels_validated,
-      std::optional<MixedLevelizationDeterministicTrace> mixed);
+  LevelizationExecutionTrace(timing_edit::TransactionGeneration generation, LevelizationExecutionMode mode, const csr::CsrFifoLevelization& levels,
+                             csr::CsrTraversalTelemetry traversal, csr::CsrFullLevelizerEntryDelta&& full_levelizer_entry_delta, std::uint64_t fallback_count,
+                             bool supplied_levels_validated, std::optional<MixedLevelizationDeterministicTrace> mixed);
 
   timing_edit::TransactionGeneration _generation;
   LevelizationExecutionMode _mode{LevelizationExecutionMode::kFullStage5};

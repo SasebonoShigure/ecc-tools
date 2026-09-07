@@ -21,6 +21,7 @@
 
 #include "CsrReferenceValidator.hpp"
 #include "CsrSessionSnapshotAdapter.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "STAInterface.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "StaLifecycleGuard.hpp"
@@ -257,7 +258,12 @@ StaExecutionResult IncrementalStaSession::runFullBaseline()
     return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), "STA execution record was not resolved"));
   }
 
-  if (isIncrementalRequest()) {
+  if (isIncrementalRequest() && !incregpusta_debug_checks_enabled && (!_context || !_context->hasReadySnapshot())) {
+    _state.store(StaSessionState::kPoisoned, std::memory_order_release);
+    return StaExecutionResult::failure(
+        StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), "incremental STA capture did not publish a ready snapshot"));
+  }
+  if (isIncrementalRequest() && incregpusta_debug_checks_enabled) {
     std::unique_ptr<csr::CsrSnapshotObservation> active;
     try {
       status = _operations->copyObservation(_token.load(std::memory_order_acquire), _context.get(), &active);

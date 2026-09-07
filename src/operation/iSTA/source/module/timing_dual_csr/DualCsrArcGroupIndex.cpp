@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "DualCsrArcGroupIndexValidation.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "TimingSemanticKey.hpp"
 
 namespace ista::timing_dual_csr {
@@ -529,8 +530,13 @@ DualCsrArcGroupIndexAttempt stageDualCsrArcGroupIndex(
     const DualCsrBatchDescriptor& descriptor)
 {
   DualCsrArcGroupIndexAttempt attempt;
-  attempt.violations
-      = validateDualCsrArcGroupIndex(committed_graph, committed_index);
+  if (committed_index.slots.size() != committed_graph.arc_slots.size() || staged_graph.generation != descriptor.target_generation
+      || staged_graph.session_token != descriptor.session_token || staged_graph.high_water != descriptor.after) {
+    reject(attempt.violations, DualCsrViolationCode::kGeneration, "index.stage", "graph/index staging boundary differs");
+    return attempt;
+  }
+  if constexpr (incregpusta_debug_checks_enabled)
+    attempt.violations = validateDualCsrArcGroupIndex(committed_graph, committed_index);
   auto delta_errors = validateDualCsrArcGroupIndexDelta(
       committed_graph, committed_index, descriptor);
   attempt.violations.insert(attempt.violations.end(),
@@ -551,7 +557,8 @@ DualCsrArcGroupIndexAttempt stageDualCsrArcGroupIndex(
   }
   updateAffectedGroups(committed_graph, committed_index, staged_graph,
                        descriptor, staged);
-  attempt.violations = validateDualCsrArcGroupIndex(staged_graph, staged);
+  if constexpr (incregpusta_debug_checks_enabled)
+    attempt.violations = validateDualCsrArcGroupIndex(staged_graph, staged);
   if (attempt.violations.empty())
     attempt.index = std::move(staged);
   return attempt;

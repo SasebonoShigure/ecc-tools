@@ -18,14 +18,15 @@
 #include <vector>
 
 #include "BufferTraceTypes.hpp"
-#include "CsrReferenceInputAdapterInternal.hpp"
 #include "CpuIncrementalLevelizationRunner.hpp"
+#include "CsrReferenceInputAdapterInternal.hpp"
 #include "DualCsrBaselineFactoryInstrumentationInternal.hpp"
 #include "DualCsrNativeCandidateCarrierInternal.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "DualCsrTraceBaselineInternal.hpp"
 #include "DualCsrTransactionCoordinator.hpp"
 #include "DualSemanticReadView.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowTimingRecordReader.hpp"
 #include "TimingEditDualCsrDescriptorBuilder.hpp"
 
@@ -380,32 +381,31 @@ DualCsrTraceRunResult replayPrefixWithMode(
     fail(DualCsrTraceFailureCode::kInvalidBaseline,
          "operation authority and context session differ");
 
-  const std::uint64_t baseline_factory_before
-      = detail::currentBaselineFactoryCallCount();
+  const std::uint64_t baseline_factory_before = incregpusta_debug_checks_enabled ? detail::currentBaselineFactoryCallCount() : 0;
   CommittedDualCsrAnalysisState baseline = detail::makeTraceBaseline(
       context.baseline_database, context.baseline_reference_input,
       session_token);
-  const std::uint64_t targeted_baseline_before
-      = detail::currentBaselineFactoryCallCount();
+  const std::uint64_t targeted_baseline_before = incregpusta_debug_checks_enabled ? detail::currentBaselineFactoryCallCount() : 0;
   const std::uint64_t baseline_outside = counterDelta(
       baseline_factory_before, targeted_baseline_before,
       "outside-targeted baseline factory");
-  if (baseline_outside != 1)
+  if (incregpusta_debug_checks_enabled && baseline_outside != 1)
     fail(DualCsrTraceFailureCode::kInvalidBaseline,
          "generation-zero baseline did not call its factory exactly once");
 
-  const auto full_before
-      = csr::detail::currentNativeFullExportCounters();
+  const auto full_before = incregpusta_debug_checks_enabled ? csr::detail::currentNativeFullExportCounters() : csr::detail::NativeFullExportCounters{};
   const CandidateLifecycleSnapshot lifecycle_before
-      = detail::currentCandidateLifecycleSnapshot();
+      = incregpusta_debug_checks_enabled ? detail::currentCandidateLifecycleSnapshot() : CandidateLifecycleSnapshot{};
   DualCsrTransactionCoordinator coordinator(std::move(baseline));
   std::optional<timing_edit::InstalledNativeDatabase> installed;
   std::vector<DualCsrPublishedObservation> observations;
-  observations.reserve(prefix_batches);
+  if constexpr (incregpusta_debug_checks_enabled)
+    observations.reserve(prefix_batches);
   std::vector<DualCsrBatchPhaseTimings> phase_timings;
   phase_timings.reserve(prefix_batches);
   std::vector<DualCsrResourceObservation> resource_observations;
-  resource_observations.reserve(prefix_batches);
+  if constexpr (incregpusta_debug_checks_enabled)
+    resource_observations.reserve(prefix_batches);
   DualCsrTransactionEvidence evidence;
   std::uint64_t fallback_calls = 0;
 
@@ -427,8 +427,8 @@ DualCsrTraceRunResult replayPrefixWithMode(
               committed.arc_group_index);
       batch_timing.pre_candidate_prepare_ms
           = elapsedMilliseconds(prepare_started);
-      evidence.phase_trace.push_back(
-          DualCsrReceiptPhase::kPreCandidatePrepare);
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kPreCandidatePrepare);
 
       const auto candidate_started = SteadyClock::now();
       timing_edit::NativeDatabaseCandidate candidate
@@ -442,8 +442,8 @@ DualCsrTraceRunResult replayPrefixWithMode(
           context.authority, std::move(candidate)));
       batch_timing.candidate_apply_execute_ms
           = elapsedMilliseconds(candidate_started);
-      evidence.phase_trace.push_back(
-          DualCsrReceiptPhase::kCandidateApplyExecute);
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kCandidateApplyExecute);
 
       const auto capture_started = SteadyClock::now();
       CandidateBoundCapture capture = NarrowTimingRecordReader{}.read(
@@ -458,9 +458,10 @@ DualCsrTraceRunResult replayPrefixWithMode(
               std::move(pending), std::move(capture));
       batch_timing.post_candidate_capture_ms
           = elapsedMilliseconds(capture_started);
-      evidence.capture_audits.push_back(verified.captureAudit());
-      evidence.phase_trace.push_back(
-          DualCsrReceiptPhase::kPostCandidateCapture);
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.capture_audits.push_back(verified.captureAudit());
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kPostCandidateCapture);
 
       std::optional<DualCsrVerifiedStage> verified_stage;
       DualCsrStageTimings stage_timings;
@@ -489,15 +490,15 @@ DualCsrTraceRunResult replayPrefixWithMode(
       batch_timing.full_propagation_ms = stage_timings.full_propagation_ms;
       batch_timing.invariant_ms = stage_timings.invariant_ms;
       batch_timing.verify_ms = stage_timings.verify_ms;
-      evidence.phase_trace.push_back(DualCsrReceiptPhase::kDualCsrUpdate);
-      evidence.phase_trace.push_back(
-          mode == LevelizationExecutionMode::kMixedStage6
-              ? DualCsrReceiptPhase::kMixedLevelization
-              : DualCsrReceiptPhase::kFullLevelization);
-      evidence.phase_trace.push_back(
-          DualCsrReceiptPhase::kFullPropagation);
-      evidence.phase_trace.push_back(
-          DualCsrReceiptPhase::kIntrinsicVerify);
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kDualCsrUpdate);
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(mode == LevelizationExecutionMode::kMixedStage6 ? DualCsrReceiptPhase::kMixedLevelization
+                                                                                       : DualCsrReceiptPhase::kFullLevelization);
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kFullPropagation);
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kIntrinsicVerify);
 
       const auto publish_started = SteadyClock::now();
       const auto status = coordinator.publish(std::move(*verified_stage));
@@ -506,10 +507,12 @@ DualCsrTraceRunResult replayPrefixWithMode(
       if (!status.ok() || !status.published || status.poisoned)
         fail(DualCsrTraceFailureCode::kPublishRejected,
              "atomic aggregate publish rejected the verified stage");
-      evidence.phase_trace.push_back(DualCsrReceiptPhase::kPublish);
-      observations.push_back(observe(coordinator.committed()));
-      resource_observations.push_back(
-          observeResources(coordinator.committed()));
+      if constexpr (incregpusta_debug_checks_enabled)
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kPublish);
+      if constexpr (incregpusta_debug_checks_enabled)
+        observations.push_back(observe(coordinator.committed()));
+      if constexpr (incregpusta_debug_checks_enabled)
+        resource_observations.push_back(observeResources(coordinator.committed()));
       batch_timing.generation_after
           = coordinator.committed().generation.value();
       checkedAdd(fallback_calls,
@@ -523,8 +526,8 @@ DualCsrTraceRunResult replayPrefixWithMode(
            "successful prefix has no cumulative installed candidate");
     requireRollback(*installed);
     installed.reset();
-    evidence.phase_trace.push_back(
-        DualCsrReceiptPhase::kNativeFinalRollback);
+    if constexpr (incregpusta_debug_checks_enabled)
+      evidence.phase_trace.push_back(DualCsrReceiptPhase::kNativeFinalRollback);
     evidence.native_final_rollback_completed = true;
   } catch (...) {
     if (installed && installed->active()
@@ -534,12 +537,27 @@ DualCsrTraceRunResult replayPrefixWithMode(
     throw;
   }
 
-  const auto full_after
-      = csr::detail::currentNativeFullExportCounters();
-  const std::uint64_t targeted_baseline_after
-      = detail::currentBaselineFactoryCallCount();
+  const auto& committed_result = coordinator.committed();
+  const DualCsrWorkloadResult actual{.input_node_slots = context.baseline_reference_input.nodes.size(),
+                                     .input_arc_slots = context.baseline_reference_input.arcs.size(),
+                                     .requested_mode = mode,
+                                     .generation = committed_result.generation.value(),
+                                     .node_slots = committed_result.graph.nodes.size(),
+                                     .arc_slots = committed_result.graph.arc_slots.size(),
+                                     .fallback_count = fallback_calls,
+                                     .executed_mode = committed_result.execution_trace.back().mode(),
+                                     .native_final_rollback_completed = true};
+  if constexpr (!incregpusta_debug_checks_enabled) {
+    return {.exact_receipt = std::nullopt,
+            .result = actual,
+            .published_observations = {},
+            .envelope = {.batch_phase_timings = std::move(phase_timings), .batch_resource_observations = {}}};
+  }
+
+  const auto full_after = incregpusta_debug_checks_enabled ? csr::detail::currentNativeFullExportCounters() : csr::detail::NativeFullExportCounters{};
+  const std::uint64_t targeted_baseline_after = incregpusta_debug_checks_enabled ? detail::currentBaselineFactoryCallCount() : 0;
   const CandidateLifecycleSnapshot lifecycle_after
-      = detail::currentCandidateLifecycleSnapshot();
+      = incregpusta_debug_checks_enabled ? detail::currentCandidateLifecycleSnapshot() : CandidateLifecycleSnapshot{};
   evidence.operation_counters = measuredCounters(
       full_before, full_after, targeted_baseline_before,
       targeted_baseline_after, lifecycle_before, lifecycle_after,
@@ -557,17 +575,14 @@ DualCsrTraceRunResult replayPrefixWithMode(
   if (!exact.success())
     fail(DualCsrTraceFailureCode::kReceiptRejected,
          "final rollback evidence could not seal the exact receipt");
-  return {
-      .exact_receipt = std::move(*exact.receipt),
-      .published_observations = std::move(observations),
-      .envelope = {
-          .baseline_factory_calls_outside_targeted = baseline_outside,
-          .baseline_factory_calls_inside_targeted = counterDelta(
-              targeted_baseline_before, targeted_baseline_after,
-              "inside-targeted baseline factory"),
-          .batch_phase_timings = std::move(phase_timings),
-          .batch_resource_observations
-              = std::move(resource_observations)}};
+  return {.exact_receipt = std::move(*exact.receipt),
+          .result = actual,
+          .published_observations = std::move(observations),
+          .envelope
+          = {.baseline_factory_calls_outside_targeted = baseline_outside,
+             .baseline_factory_calls_inside_targeted = counterDelta(targeted_baseline_before, targeted_baseline_after, "inside-targeted baseline factory"),
+             .batch_phase_timings = std::move(phase_timings),
+             .batch_resource_observations = std::move(resource_observations)}};
 }
 
 DualCsrTraceRunResult DualCsrTraceReplayer::replayPrefix(

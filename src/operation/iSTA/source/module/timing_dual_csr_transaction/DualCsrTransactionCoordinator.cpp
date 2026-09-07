@@ -194,23 +194,22 @@ DualCsrTransactionStatus DualCsrTransactionCoordinator::publish(
   if (_poisoned)
     return reject(DualCsrTransactionCode::kPoisoned);
   if (failpoint != DualCsrPublishFailpoint::kNone
-      && failpoint != DualCsrPublishFailpoint::kBeforeSwap
-      && failpoint != DualCsrPublishFailpoint::kAfterSwap)
+      && (!incregpusta_debug_checks_enabled || (failpoint != DualCsrPublishFailpoint::kBeforeSwap && failpoint != DualCsrPublishFailpoint::kAfterSwap)))
     return reject(DualCsrTransactionCode::kUnknownFailpoint);
-  if (!validateCommittedDualCsrAnalysisState(_committed).empty()) {
+  if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(_committed).empty()) {
     _poisoned = true;
     return reject(DualCsrTransactionCode::kInvalidCommittedState);
   }
-  if (!(verified._expected_committed == _committed))
+  if (!(verified._expected_committed.matches(_committed)))
     return reject(DualCsrTransactionCode::kTraceMismatch);
 
   CommittedDualCsrAnalysisState staged = std::move(verified._state);
-  if (!validateCommittedDualCsrAnalysisState(staged).empty())
+  if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(staged).empty())
     return reject(DualCsrTransactionCode::kInvalidStagedState);
   if (staged.graph.session_token != _committed.graph.session_token
       || staged.generation.value() != _committed.generation.value() + 1)
     return reject(DualCsrTransactionCode::kStaleGeneration);
-  if (!prefixMatches(_committed, staged))
+  if (incregpusta_debug_checks_enabled && !prefixMatches(_committed, staged))
     return reject(DualCsrTransactionCode::kTraceMismatch);
   if (failpoint == DualCsrPublishFailpoint::kBeforeSwap)
     return reject(DualCsrTransactionCode::kPreSwapFault);
@@ -228,7 +227,7 @@ DualCsrTransactionStatus DualCsrTransactionCoordinator::recover(
 {
   if (!_poisoned)
     return reject(DualCsrTransactionCode::kRecoveryNotPoisoned);
-  if (!(verified._expected_poisoned == _committed))
+  if (!(verified._expected_poisoned.matches(_committed)))
     return reject(DualCsrTransactionCode::kTraceMismatch);
 
   if (!_committed.execution_trace.empty()

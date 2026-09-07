@@ -4,6 +4,8 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
+#include <unistd.h>
+
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
@@ -18,14 +20,13 @@
 #include <utility>
 #include <variant>
 
-#include <unistd.h>
-
 #include "BufferTraceJson.hpp"
 #include "DualCsrExactReceiptJson.hpp"
 #include "DualCsrFunctionalReceiptJson.hpp"
 #include "DualCsrResourceObservationJson.hpp"
 #include "DualCsrSourceIsolationJson.hpp"
 #include "DualCsrTraceProductionFreshAdapter.hpp"
+#include "IncreGpuStaPerformanceJson.hpp"
 #include "Stage6ProductionTargetedAdapter.hpp"
 #include "Stage6ReceiptJson.hpp"
 
@@ -182,6 +183,12 @@ void targeted(const Options& options)
     fail("targeted adapter did not finish its one-shot state");
   }
 
+  if constexpr (!incregpusta_debug_checks_enabled) {
+    writeText(options.at("--output"),
+              timing_dual_csr::test::performanceResultToJson(result.replay, prefix, phaseTimings(result.replay.envelope.batch_phase_timings)).dump(2));
+    return;
+  }
+
   Json observations = Json::array();
   Json stage6_observations = Json::array();
   std::uint64_t generation = 0;
@@ -198,34 +205,23 @@ void targeted(const Options& options)
         timing_dual_csr::test::stage6SeparatedReceiptToJson(
             observation.functional, generation));
   }
-  Json envelope{
-      {"schema_version", "ista-dual-csr-trace-process/1.0.0"},
-      {"role", "targeted-under-test"},
-      {"prefix_batches", prefix},
-      {"receipt_validated", true},
-      {"published_observations", std::move(observations)},
-      {"stage6_observations", std::move(stage6_observations)},
-      {"exact_receipt",
-       timing_dual_csr::test::exactReceiptToJson(
-           result.replay.exact_receipt)},
-      {"source_isolation",
-       timing_dual_csr::test::sourceIsolationToJson(
-           result.source_isolation)},
-      {"run",
-       {{"child_pid", static_cast<std::uint64_t>(::getpid())},
-        {"loader_invocation_count", result.loader_invocation_count},
-        {"guarded_work_invocation_count",
-         result.guarded_work_invocation_count},
-        {"one_shot_state", "finished"},
-        {"baseline_factory_calls_outside_targeted",
-         result.replay.envelope.baseline_factory_calls_outside_targeted},
-        {"baseline_factory_calls_inside_targeted",
-         result.replay.envelope.baseline_factory_calls_inside_targeted},
-        {"batch_phase_timings",
-         phaseTimings(result.replay.envelope.batch_phase_timings)},
-        {"batch_resource_observations",
-         timing_dual_csr::test::resourceObservationsToJson(
-             result.replay.envelope.batch_resource_observations)}}}};
+  Json envelope{{"schema_version", "ista-dual-csr-trace-process/1.0.0"},
+                {"role", "targeted-under-test"},
+                {"prefix_batches", prefix},
+                {"receipt_validated", true},
+                {"published_observations", std::move(observations)},
+                {"stage6_observations", std::move(stage6_observations)},
+                {"exact_receipt", timing_dual_csr::test::exactReceiptToJson(result.replay.exact_receipt.value())},
+                {"source_isolation", timing_dual_csr::test::sourceIsolationToJson(result.source_isolation)},
+                {"run",
+                 {{"child_pid", static_cast<std::uint64_t>(::getpid())},
+                  {"loader_invocation_count", result.loader_invocation_count},
+                  {"guarded_work_invocation_count", result.guarded_work_invocation_count},
+                  {"one_shot_state", "finished"},
+                  {"baseline_factory_calls_outside_targeted", result.replay.envelope.baseline_factory_calls_outside_targeted},
+                  {"baseline_factory_calls_inside_targeted", result.replay.envelope.baseline_factory_calls_inside_targeted},
+                  {"batch_phase_timings", phaseTimings(result.replay.envelope.batch_phase_timings)},
+                  {"batch_resource_observations", timing_dual_csr::test::resourceObservationsToJson(result.replay.envelope.batch_resource_observations)}}}};
   writeText(options.at("--output"), envelope.dump(2));
 }
 
@@ -238,9 +234,17 @@ int main(int argc, char* argv[])
       fail("usage: probe fresh|targeted --trace FILE --prefix N --output FILE");
     }
     const std::string mode = argv[1];
+    if (mode == "build-info" && argc == 2) {
+      std::cout << timing_dual_csr::test::incregpustaBuildInfo().dump() << '\n';
+      return 0;
+    }
+    if (mode == "performance" && incregpusta_debug_checks_enabled)
+      fail("performance sampling requires ECC_INCREGPUSTA_DEBUG_CHECKS=OFF");
+    if (mode != "performance" && !incregpusta_debug_checks_enabled)
+      fail("oracle and diagnostic output require ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
     if (mode == "fresh")
       fresh(parseOptions(argc, argv, 2));
-    else if (mode == "targeted")
+    else if (mode == "targeted" || mode == "performance")
       targeted(parseOptions(argc, argv, 2));
     else
       fail("unknown mode " + mode);

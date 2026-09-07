@@ -66,6 +66,11 @@ StaStatus StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(Increment
   }
 }
 
+bool StaTimingEditSessionProbeAccess::snapshotReleasedForTesting(const StaCsrSessionContext& context) noexcept
+{
+  return context._substate == StaCsrSessionSubstate::kReleased;
+}
+
 void StaTimingEditSessionProbeAccess::releaseSnapshotForMutation(
     StaCsrSessionContext& context, std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) noexcept
 {

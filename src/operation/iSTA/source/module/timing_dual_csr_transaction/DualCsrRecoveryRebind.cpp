@@ -2,10 +2,11 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
-#include "DualCsrTransactionCoordinator.hpp"
-
 #include <string>
 #include <utility>
+
+#include "DualCsrTransactionCoordinator.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
@@ -87,13 +88,14 @@ rebindRecoveredAggregateSession(
   for (auto& descriptor : recovered.descriptor_trace)
     rebindDescriptor(descriptor, new_token);
 
-  attempt.violations = validateCommittedDualCsrAnalysisState(recovered);
-  if (!attempt.violations.empty())
-    return attempt;
-  if (!fullyBoundTo(recovered, new_token)) {
-    reject(attempt.violations, "recovery.new_session_token",
-           "aggregate was only partially rebound to the new token");
-    return attempt;
+  if constexpr (incregpusta_debug_checks_enabled) {
+    attempt.violations = validateCommittedDualCsrAnalysisState(recovered);
+    if (!attempt.violations.empty())
+      return attempt;
+    if (!fullyBoundTo(recovered, new_token)) {
+      reject(attempt.violations, "recovery.new_session_token", "aggregate was only partially rebound to the new token");
+      return attempt;
+    }
   }
   attempt.rebound = std::move(recovered);
   return attempt;

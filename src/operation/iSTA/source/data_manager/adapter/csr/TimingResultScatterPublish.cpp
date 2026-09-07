@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "CsrSessionSnapshotAdapterInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::csr::detail {
 namespace {
@@ -116,8 +117,10 @@ void publishPreparedTimingResult(PreparedTimingResult& prepared) noexcept
 
 void publishPreparedSessionObservationPair(CsrCommittedSessionSnapshot& snapshot, PreparedSessionObservationPair& prepared) noexcept
 {
-  snapshot.active_observation.swap(prepared.active);
-  snapshot.released_observation.swap(prepared.released);
+  if constexpr (incregpusta_debug_checks_enabled) {
+    snapshot.active_observation.swap(prepared.active);
+    snapshot.released_observation.swap(prepared.released);
+  }
 }
 
 void publishPreparedTimingResultAndSessionObservationPair(PreparedTimingResult& timing_result, CsrCommittedSessionSnapshot& snapshot,

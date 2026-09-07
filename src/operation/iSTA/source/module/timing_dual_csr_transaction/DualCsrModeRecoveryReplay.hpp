@@ -119,17 +119,13 @@ class DualCsrVerifiedModeRecovery final
   }
 
  private:
-  DualCsrVerifiedModeRecovery(
-      CommittedDualCsrAnalysisState expected_poisoned,
-      CommittedDualCsrAnalysisState state,
-      DualCsrModeRecoveryReplayEvidence evidence)
-      : _expected_poisoned(std::move(expected_poisoned)),
-        _state(std::move(state)),
-        _evidence(evidence)
+  DualCsrVerifiedModeRecovery(const CommittedDualCsrAnalysisState& expected_poisoned, CommittedDualCsrAnalysisState state,
+                              DualCsrModeRecoveryReplayEvidence evidence)
+      : _expected_poisoned(expected_poisoned), _state(std::move(state)), _evidence(evidence)
   {
   }
 
-  CommittedDualCsrAnalysisState _expected_poisoned;
+  DualCsrCommitBinding _expected_poisoned;
   CommittedDualCsrAnalysisState _state;
   DualCsrModeRecoveryReplayEvidence _evidence;
 

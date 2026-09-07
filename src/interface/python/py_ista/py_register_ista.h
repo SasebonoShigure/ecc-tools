@@ -19,6 +19,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "py_ista.h"
 
 namespace python_interface {
@@ -62,6 +63,11 @@ inline void registerStaSessionException(py::module& m)
 void register_ista(py::module& m)
 {
   registerStaSessionException(m);
+  auto builtins = py::module_::import("builtins");
+  py::dict attributes;
+  attributes["incregpusta_debug_checks_enabled"]
+      = builtins.attr("property")(py::cpp_function([](py::object) { return ista::incregpusta_debug_checks_enabled; }));
+  m.attr("__class__") = builtins.attr("type")("_IncreGpuStaModule", py::make_tuple(py::type::of(m)), attributes);
   m.def("init_sta", initSTA, py::arg("config") = "", py::arg("config_dict") = std::map<std::string, std::string>{});
   m.def("run_sta", runSTA);
   m.def("extract_lib", extractLib);

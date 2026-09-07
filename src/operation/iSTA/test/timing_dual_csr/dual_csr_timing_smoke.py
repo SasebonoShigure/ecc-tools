@@ -3,19 +3,24 @@
 
 import argparse
 import datetime
+import json
 import os
 import pathlib
 import platform
+import subprocess
 import sys
 from typing import Any
 
 from dual_csr_timing_evidence import duration_ms
 from dual_csr_trace_controller import (
-    ControllerError, first_difference, normalized_source, read_json, require,
-    run_child, validate_fresh, validate_targeted, write_json,
+    ControllerError,
+    read_json,
+    require,
+    run_child,
+    write_json,
 )
 
-SCHEMA = "ista-dual-csr-timing-smoke/1.0.0"
+SCHEMA = "ista-dual-csr-timing-smoke/2.0.0"
 MIN_SAMPLES = 6
 
 
@@ -28,16 +33,19 @@ def _cpu_model() -> str:
     return platform.processor()
 
 
-def _environment(probe: pathlib.Path, trace: pathlib.Path,
-                 build_config: str, compiler_id: str,
-                 compiler_version: str) -> dict[str, Any]:
+def _environment(
+    probe: pathlib.Path,
+    trace: pathlib.Path,
+    build_config: str,
+    compiler_id: str,
+    compiler_version: str,
+) -> dict[str, Any]:
     affinity = None
     if hasattr(os, "sched_getaffinity"):
         affinity = len(os.sched_getaffinity(0))
     uname = platform.uname()
     return {
-        "captured_at_utc": datetime.datetime.now(
-            datetime.timezone.utc).isoformat(),
+        "captured_at_utc": datetime.datetime.now(datetime.UTC).isoformat(),
         "build_config": build_config,
         "compiler_id": compiler_id,
         "compiler_version": compiler_version,
@@ -57,57 +65,57 @@ def _environment(probe: pathlib.Path, trace: pathlib.Path,
     }
 
 
-def _run_sample(probe: pathlib.Path, trace: pathlib.Path,
-                batches: list[dict[str, Any]], root: pathlib.Path,
-                name: str, timeout: int) -> dict[str, Any]:
-    prefix = len(batches)
-    targeted, targeted_wall = run_child(
-        probe, "targeted", trace, prefix, root / name / "targeted.json",
-        timeout)
-    fresh, fresh_wall = run_child(
-        probe, "fresh", trace, prefix, root / name / "fresh.json", timeout)
-    targeted_functional, timings, resources = validate_targeted(
-        targeted, prefix, batches, f"{name}.targeted")
-    fresh_functional = validate_fresh(fresh, prefix, f"{name}.fresh")
-    mismatch = first_difference(targeted_functional, fresh_functional)
-    require(mismatch is None, f"{name} functional mismatch: {mismatch}")
-    targeted_source = normalized_source(
-        targeted["source_isolation"], f"{name}.targeted.source")
-    fresh_source = normalized_source(
-        fresh["source_isolation"], f"{name}.fresh.source")
-    mismatch = first_difference(targeted_source, fresh_source)
-    require(mismatch is None, f"{name} source mismatch: {mismatch}")
-    targeted_pid = targeted["run"]["child_pid"]
-    fresh_pid = fresh["run"]["child_pid"]
-    require(targeted_pid != fresh_pid
-            and targeted_pid != os.getpid() and fresh_pid != os.getpid(),
-            f"{name} did not use two isolated child processes")
-    transaction = targeted["exact_receipt"]["transaction"]
-    evidence = transaction["evidence"]
-    counters = evidence["operation_counters"]
-    require(evidence["native_final_rollback_completed"] is True
-            and counters["native_full_graph_exports"] == 0
-            and counters["native_full_reference_exports"] == 0
-            and counters["host_snapshot_rebuilds"] == 0
-            and counters["fallback_calls"] == 0,
-            f"{name} targeted execution/rollback evidence differs")
+def _run_sample(
+    probe: pathlib.Path,
+    trace: pathlib.Path,
+    batches: list[dict[str, Any]],
+    root: pathlib.Path,
+    name: str,
+    timeout: int,
+) -> dict[str, Any]:
+    result, wall_ms = run_child(
+        probe, "performance", trace, len(batches), root / name / "performance.json", timeout
+    )
+    require(
+        result["schema_version"] == "ista-incregpusta-performance-process/2.0.0",
+        f"{name} unsupported performance output",
+    )
+    require(
+        result["debug_checks_enabled"] is False, f"{name} diagnostics enabled in performance child"
+    )
+    require(
+        result["correctness_comparison"] == "not_run",
+        f"{name} unexpectedly performed a correctness comparison",
+    )
+    require(
+        result["result"]["generation"] == len(batches)
+        and result["result"]["native_final_rollback_completed"] is True,
+        f"{name} workload or lifecycle did not complete",
+    )
     return {
-        "targeted_pid": targeted_pid,
-        "fresh_pid": fresh_pid,
-        "targeted_wall_ms": duration_ms(
-            targeted_wall, f"{name}.targeted_wall_ms", require,
-            positive=True),
-        "fresh_oracle_ms": duration_ms(
-            fresh_wall, f"{name}.fresh_oracle_ms", require, positive=True),
-        "batch_phase_timings": timings,
-        "batch_resource_observations": resources,
-        "phase_trace": evidence["phase_trace"],
-        "functional_fields_equal_with_stage2_tolerance": True,
-        "source_isolation_equal": True,
-        "native_final_rollback_completed": True,
-        "targeted_region_full_export_count": 0,
-        "targeted_region_fallback_count": 0,
+        "targeted_pid": result["run"]["child_pid"],
+        "targeted_wall_ms": duration_ms(wall_ms, f"{name}.wall_ms", require, positive=True),
+        "batch_phase_timings": result["run"]["batch_phase_timings"],
+        "requested_mode": result["requested_mode"],
+        "executed_mode": result["executed_mode"],
+        "result": result["result"],
+        "input": result["input"],
+        "debug_checks_enabled": False,
+        "correctness_comparison": "not_run",
     }
+
+
+def probe_build_info(probe: pathlib.Path, timeout: int) -> dict[str, Any]:
+    completed = subprocess.run(
+        [str(probe), "build-info"], check=True, capture_output=True, text=True, timeout=timeout
+    )
+    value = json.loads(completed.stdout)
+    require(
+        value["debug_checks_enabled"] is False,
+        "performance sampling requires ECC_INCREGPUSTA_DEBUG_CHECKS=OFF",
+    )
+    require(value["build_config"] == "Release", "performance probe must use Release")
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,47 +134,49 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> None:
-    require(args.samples >= MIN_SAMPLES,
-            f"timing smoke requires at least {MIN_SAMPLES} raw samples")
+    require(
+        args.samples >= MIN_SAMPLES, f"timing smoke requires at least {MIN_SAMPLES} raw samples"
+    )
     require(args.warmup_runs >= 1, "timing smoke requires a warm-up run")
     probe = args.probe.resolve(strict=True)
+    build = probe_build_info(probe, args.timeout_seconds)
     trace = args.trace.resolve(strict=True)
     trace_value = read_json(trace)
     batches = trace_value["replay"]["workload"]["batches"]
-    require(isinstance(batches, list) and batches,
-            "timing smoke trace must contain at least one batch")
+    require(
+        isinstance(batches, list) and batches, "timing smoke trace must contain at least one batch"
+    )
     root = args.run_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     warmups = [
-        _run_sample(probe, trace, batches, root, f"warmup-{index + 1}",
-                    args.timeout_seconds)
+        _run_sample(probe, trace, batches, root, f"warmup-{index + 1}", args.timeout_seconds)
         for index in range(args.warmup_runs)
     ]
     samples: list[dict[str, Any]] = []
     for index in range(args.samples):
         sample = _run_sample(
-            probe, trace, batches, root, f"sample-{index + 1}",
-            args.timeout_seconds)
+            probe, trace, batches, root, f"sample-{index + 1}", args.timeout_seconds
+        )
         sample["sample_ordinal"] = index + 1
         samples.append(sample)
+    raw_sample_count = len(samples)
     output = {
         "schema_version": SCHEMA,
         "trace_is_fixed": True,
         "trace": str(trace),
         "environment_fingerprint": _environment(
-            probe, trace, args.build_config, args.compiler_id,
-            args.compiler_version),
-        "warmup": {"runs": args.warmup_runs,
-                   "completed": True,
-                   "observations": warmups},
+            probe, trace, build["build_config"], build["compiler_id"], build["compiler_version"]
+        ),
+        "warmup": {"runs": args.warmup_runs, "completed": True, "observations": warmups},
         "raw_samples": samples,
-        "raw_sample_count": len(samples),
-        "functional_correctness_primary": True,
+        "raw_sample_count": raw_sample_count,
+        "build": build,
+        "debug_checks_enabled": False,
+        "correctness_comparison": "not_run",
         "performance_claims_made": False,
         "speedup_or_break_even_reported": False,
     }
-    require(output["raw_sample_count"] >= MIN_SAMPLES,
-            "timing smoke did not retain six raw samples")
+    require(raw_sample_count >= MIN_SAMPLES, "timing smoke did not retain six raw samples")
     write_json(args.output.resolve(), output)
 
 
@@ -178,7 +188,14 @@ def main() -> int:
             return 77
         run(args)
         return 0
-    except (ControllerError, OSError, KeyError, TypeError, ValueError) as error:
+    except (
+        ControllerError,
+        OSError,
+        KeyError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as error:
         print(f"dual CSR timing smoke: {error}", file=sys.stderr)
         return 1
 

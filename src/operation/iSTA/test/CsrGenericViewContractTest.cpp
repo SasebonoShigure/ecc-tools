@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #include <exception>
@@ -144,11 +145,13 @@ void runContracts()
                                  == CsrViewError::kMalformedAdjacency,
                       "flat view accepted an arc in the wrong source row");
 
-  requireCpuReference(flat.telemetry.levelization.base_in > 0 && flat.telemetry.levelization.base_out > 0,
-                      "levelization did not traverse incoming and outgoing storage");
-  requireCpuReference(flat.telemetry.arc_initialization.base_out > 0, "arc initialization did not traverse active arcs");
-  requireCpuReference(flat.telemetry.forward_propagation.base_out > 0, "forward propagation did not traverse outgoing arcs");
-  requireCpuReference(flat.telemetry.required_propagation.base_out > 0, "required propagation did not traverse outgoing arcs");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    requireCpuReference(flat.telemetry.levelization.base_in > 0 && flat.telemetry.levelization.base_out > 0,
+                        "levelization did not traverse incoming and outgoing storage");
+    requireCpuReference(flat.telemetry.arc_initialization.base_out > 0, "arc initialization did not traverse active arcs");
+    requireCpuReference(flat.telemetry.forward_propagation.base_out > 0, "forward propagation did not traverse outgoing arcs");
+    requireCpuReference(flat.telemetry.required_propagation.base_out > 0, "required propagation did not traverse outgoing arcs");
+  }
 
   InternalHoleView holes(input);
   constexpr std::size_t hole = 1;

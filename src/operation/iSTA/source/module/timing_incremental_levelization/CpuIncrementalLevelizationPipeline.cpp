@@ -9,6 +9,7 @@
 
 #include "CorrectedMixedKahnLevelizer.hpp"
 #include "CsrFifoLevelizationValidation.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationGraphBuilder.hpp"
 #include "MixedLevelizationInternal.hpp"
 #include "MixedLevelizationValidation.hpp"
@@ -144,24 +145,19 @@ MixedLevelizationAttempt runCpuIncrementalLevelization(
 
   auto levels = std::get<csr::CsrFifoLevelization>(
       std::move(reconstruction));
-  const csr::CsrFifoLevelizationValidationResult validation =
-      csr::validateCsrFifoLevelization(edges, levels);
-  if (!validation.valid()) {
-    if (validation.code
-        == csr::CsrFifoLevelizationValidationCode::kViewError)
-      return failure(MixedStageFailureCode::kViewError,
-                     MixedFailureOrigin::kExternalLevelValidation,
-                     request,
-                     "reconstructed-level edge traversal failed",
-                     validation.view_error);
-    return failure(MixedStageFailureCode::kInvariantFailure,
-                   MixedFailureOrigin::kExternalLevelValidation,
-                   request,
-                   "reconstructed levels violate the external-level contract");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    const csr::CsrFifoLevelizationValidationResult validation = csr::validateCsrFifoLevelization(edges, levels);
+    if (!validation.valid()) {
+      if (validation.code == csr::CsrFifoLevelizationValidationCode::kViewError)
+        return failure(MixedStageFailureCode::kViewError, MixedFailureOrigin::kExternalLevelValidation, request, "reconstructed-level edge traversal failed",
+                       validation.view_error);
+      return failure(MixedStageFailureCode::kInvariantFailure, MixedFailureOrigin::kExternalLevelValidation, request,
+                     "reconstructed levels violate the external-level contract");
+    }
   }
   graph.telemetry.reconstructed_level_count =
       static_cast<std::uint64_t>(levels.level_offsets.size() - 1);
-  if (!validateMixedTelemetryIdentities(graph.telemetry))
+  if (incregpusta_debug_checks_enabled && !validateMixedTelemetryIdentities(graph.telemetry))
     return failure(MixedStageFailureCode::kInvariantFailure,
                    MixedFailureOrigin::kExternalLevelValidation,
                    request,

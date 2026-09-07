@@ -80,6 +80,7 @@ set(ISTA_TIMING_EDIT_TRANSACTION_TEST_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.hpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionTest.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditRuntimeContract.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.hpp"
     ${ISTA_TIMING_EDIT_CSR_RECEIPT_TEST_SUPPORT}

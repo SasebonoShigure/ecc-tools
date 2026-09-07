@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -74,15 +75,16 @@ void runExternalLevelBackendContracts()
   auto flat_guard = beginCsrFullLevelizerOperation();
   const CsrFifoLevelization flat_levels = replayFifoLevelization(input);
   const auto flat_delta = std::move(flat_guard).finish();
-  requireCpuReference(flat_delta.value() == 1, "flat FIFO overload double-counted or missed its generic full-levelizer entry");
+  requireCpuReference(flat_delta.value() == (incregpusta_debug_checks_enabled ? 1 : 0),
+                      "flat FIFO overload double-counted or missed its generic full-levelizer entry");
   requireCpuReference(validateCsrFifoLevelization(edges, flat_levels).valid(), "flat FIFO overload produced invalid levels");
 
   auto full_guard = beginCsrFullLevelizerOperation();
   const CsrComputationWithTelemetry full = backend.computeWithTelemetry(edges, payloads);
   const auto full_delta = std::move(full_guard).finish();
-  requireCpuReference(full_delta.value() == 1, "full backend did not enter the generic full levelizer exactly once");
-  requireCpuReference(full.telemetry.levelization.base_in > 0 && full.telemetry.levelization.base_out > 0,
-                      "full backend did not record FIFO traversal");
+  requireCpuReference(full_delta.value() == (incregpusta_debug_checks_enabled ? 1 : 0), "full backend did not enter the generic full levelizer exactly once");
+  if constexpr (incregpusta_debug_checks_enabled)
+    requireCpuReference(full.telemetry.levelization.base_in > 0 && full.telemetry.levelization.base_out > 0, "full backend did not record FIFO traversal");
 
   const CsrFifoLevelization supplied = suppliedLevels(requireTiming(full.computation, "full backend"));
   requireCpuReference(validateCsrFifoLevelization(edges, supplied).valid(), "full backend levels failed the public validator");

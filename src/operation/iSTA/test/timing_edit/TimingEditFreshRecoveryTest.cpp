@@ -347,10 +347,8 @@ void testFreshRecoveryReplaysDurableSemanticTrace()
                 = currentCsrFull(fresh_session.token());
             auto recovery_host = buildNativeHostSnapshot(
                 STADM.getDatabase(), fresh_session.token());
-            CsrFullExactReceipt recovery_receipt
-                = StaTimingEditSessionProbeAccess::proveCsrFullExact(
-                    authority, *recovery_host, STADM.getDatabase(),
-                    replay_coordinator.committedIdentity().generation);
+            CsrExecutionAuthorization recovery_receipt = StaTimingEditSessionProbeAccess::proveCsrFullExact(authority, *recovery_host, STADM.getDatabase(),
+                                                                                                            replay_coordinator.committedIdentity().generation);
             CommittedEditIdentity recovery_identity
                 = replay_coordinator.committedIdentity();
             CumulativeEditTrace recovery_trace

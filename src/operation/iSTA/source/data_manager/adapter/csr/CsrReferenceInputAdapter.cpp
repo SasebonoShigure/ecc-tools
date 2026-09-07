@@ -1,3 +1,4 @@
+#include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -227,7 +228,8 @@ namespace ista::csr {
 CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Database& database, const StaAnalysisContext& canonical_context,
                                                                std::uint64_t caller_session_token)
 {
-  detail::noteNativeFullReferenceExport();
+  if constexpr (incregpusta_debug_checks_enabled)
+    detail::noteNativeFullReferenceExport();
   if (caller_session_token == 0)
     throw std::invalid_argument("CSR reference input export requires a nonzero session token");
 

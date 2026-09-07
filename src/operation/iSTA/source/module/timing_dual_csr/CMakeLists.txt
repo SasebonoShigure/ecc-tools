@@ -78,3 +78,9 @@ if(BUILD_TESTING)
         ista_timing_dual_csr_functional_semantic_receipt_test
         DualCsrFunctionalSemanticReceiptTest.cpp)
 endif()
+
+if(BUILD_TESTING)
+  ista_diagnostic_tests(
+      ista_timing_dual_csr_aux_microcase_test
+  )
+endif()

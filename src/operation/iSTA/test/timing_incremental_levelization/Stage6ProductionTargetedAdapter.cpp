@@ -20,6 +20,7 @@
 #include "DualCsrTargetedArtifactSupport.hpp"
 #include "DualCsrTargetedPhysicalProjection.hpp"
 #include "DualCsrTraceReplayer.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "ProductionFreshSessionLoader.hpp"
 
 namespace ista::timing_dual_csr::test {
@@ -72,6 +73,8 @@ void requireArtifactEvidence(const ProductionFreshSessionView& view,
 void requirePhysicalUnchanged(
     buffer_trace::SourceIsolationFunctionalReceipt& source)
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
   source.physical_after = captureTargetedSourcePhysical();
   if (source.physical_before != source.physical_after)
     targetedFail("targeted work changed source IDM/IDB state");
@@ -81,6 +84,8 @@ void requireArtifactsUnchanged(
     const DualCsrTargetedArtifactSupport& artifacts,
     buffer_trace::SourceIsolationFunctionalReceipt& source)
 {
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return;
   source.artifacts_after = artifacts.capture();
   if (source.artifacts_before != source.artifacts_after)
     targetedFail("loader or targeted work changed source artifacts");
@@ -112,7 +117,8 @@ ProductionStage6TargetedPrefix runProductionStage6TargetedPrefix(
 
   DualCsrTargetedArtifactSupport artifacts(program);
   buffer_trace::SourceIsolationFunctionalReceipt source;
-  source.artifacts_before = artifacts.capture();
+  if constexpr (incregpusta_debug_checks_enabled)
+    source.artifacts_before = artifacts.capture();
   std::optional<DualCsrTraceRunResult> replay;
   std::size_t callback_count = 0;
   g_loader_invocations.fetch_add(1, std::memory_order_acq_rel);
@@ -124,10 +130,12 @@ ProductionStage6TargetedPrefix runProductionStage6TargetedPrefix(
           if (callback_count != 1 || replay) {
             targetedFail("loader invoked guarded targeted work more than once");
           }
-          requireArtifactEvidence(view, artifacts.artifacts());
-          source.physical_before = captureTargetedSourcePhysical();
-          if (!source.physical_before.primary_idb.present)
-            targetedFail("production loader exposed no primary IDB");
+          if constexpr (incregpusta_debug_checks_enabled) {
+            requireArtifactEvidence(view, artifacts.artifacts());
+            source.physical_before = captureTargetedSourcePhysical();
+            if (!source.physical_before.primary_idb.present)
+              targetedFail("production loader exposed no primary IDB");
+          }
           try {
             g_guarded_work_invocations.fetch_add(
                 1, std::memory_order_acq_rel);

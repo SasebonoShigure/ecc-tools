@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -67,9 +68,23 @@ struct DualCsrTraceRunEnvelope
                          const DualCsrTraceRunEnvelope&) = default;
 };
 
+struct DualCsrWorkloadResult
+{
+  std::uint64_t input_node_slots{0};
+  std::uint64_t input_arc_slots{0};
+  LevelizationExecutionMode requested_mode{LevelizationExecutionMode::kFullStage5};
+  std::uint64_t generation{0};
+  std::uint64_t node_slots{0};
+  std::uint64_t arc_slots{0};
+  std::uint64_t fallback_count{0};
+  LevelizationExecutionMode executed_mode{LevelizationExecutionMode::kFullStage5};
+  bool native_final_rollback_completed{false};
+};
+
 struct DualCsrTraceRunResult
 {
-  DualCsrExactReceipt exact_receipt;
+  std::optional<DualCsrExactReceipt> exact_receipt;
+  DualCsrWorkloadResult result;
   std::vector<DualCsrPublishedObservation> published_observations;
   DualCsrTraceRunEnvelope envelope;
 };

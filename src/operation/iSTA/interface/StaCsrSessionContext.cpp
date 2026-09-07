@@ -23,6 +23,7 @@
 
 #include "CsrReferenceValidator.hpp"
 #include "CsrSessionSnapshotAdapter.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista {
 namespace {
@@ -139,7 +140,8 @@ void StaCsrSessionContext::release(std::unique_ptr<csr::CsrSnapshotObservation>*
   if (_substate == StaCsrSessionSubstate::kReady || _substate == StaCsrSessionSubstate::kInvalidated) {
     if (_snapshot) {
       csr::releaseCsrSessionSnapshot(*_snapshot);
-      *detached_out = std::move(_snapshot->active_observation);
+      if constexpr (incregpusta_debug_checks_enabled)
+        *detached_out = std::move(_snapshot->active_observation);
     }
   }
   _substate = StaCsrSessionSubstate::kReleased;
@@ -149,6 +151,8 @@ bool StaCsrSessionContext::copyObservation(std::unique_ptr<csr::CsrSnapshotObser
 {
   if (detached_out == nullptr || *detached_out)
     return false;
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return true;
   if (_substate == StaCsrSessionSubstate::kAwaitingCapture || _substate == StaCsrSessionSubstate::kCaptureFailed)
     return true;
   if (_substate == StaCsrSessionSubstate::kReleased || !_snapshot || !_snapshot->active_observation)

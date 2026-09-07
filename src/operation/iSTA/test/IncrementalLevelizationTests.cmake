@@ -181,6 +181,10 @@ set_tests_properties(ista_stage6_frozen_real_differential PROPERTIES
 )
 
 set(ISTA_STAGE6_RECOVERY_SOURCES
+    timing_dual_csr/DualCsrFunctionalReceiptJson.cpp
+    timing_dual_csr/DualCsrFunctionalGraphJson.cpp
+    timing_dual_csr/DualCsrFunctionalTimingJson.cpp
+    timing_dual_csr/DualCsrReceiptJsonCommon.cpp
     timing_incremental_levelization/DualCsrModeRecoveryReplayTest.cpp
     timing_dual_csr/DualCsrStructuredBatchTestSupport.cpp
     timing_edit/StaTimingEditSessionProbeAccess.cpp

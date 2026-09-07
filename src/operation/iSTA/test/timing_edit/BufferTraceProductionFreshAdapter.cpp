@@ -502,10 +502,8 @@ void BufferTraceProductionFreshAdapter::proveSealAndPublish(
     PendingVerifiedBatch&& pending)
 {
   try {
-    timing_edit::CsrFullExactReceipt proof
-        = StaTimingEditSessionProbeAccess::proveCsrFullExact(
-            view.authority, *pending._host_snapshot, pending._installed.database(),
-            pending._prepared.targetGeneration());
+    timing_edit::CsrExecutionAuthorization proof = StaTimingEditSessionProbeAccess::proveCsrFullExact(
+        view.authority, *pending._host_snapshot, pending._installed.database(), pending._prepared.targetGeneration());
     requireTransactionOk(
         coordinator.sealVerified(pending._prepared, pending._post_identity),
         "sealVerified");

@@ -9,6 +9,7 @@ target_link_libraries(py_ista
     PUBLIC
         tool_manager
         ista_interface
+        ista_incregpusta_build_options
         tcl_util
         pybind11::pybind11
         ecc_logger

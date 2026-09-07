@@ -15,6 +15,7 @@
 #include "CsrReferenceValidator.hpp"
 #include "DualCsrBaselineFactoryInstrumentationInternal.hpp"
 #include "DualCsrValidationInternal.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
@@ -115,7 +116,7 @@ DualCsrBaselineAttempt DualCsrBaselineFactory::create(
     timing_edit::TimingEditSessionToken session_token,
     timing_edit::AppendOnlyHighWater high_water)
 {
-  if (baseline_factory_calls != std::numeric_limits<std::uint64_t>::max())
+  if (incregpusta_debug_checks_enabled && baseline_factory_calls != std::numeric_limits<std::uint64_t>::max())
     ++baseline_factory_calls;
   DualCsrBaselineAttempt attempt;
   validateBaselineInput(input, session_token, high_water, attempt.violations);

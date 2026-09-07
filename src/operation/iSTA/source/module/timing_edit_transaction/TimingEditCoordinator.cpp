@@ -26,6 +26,7 @@
 #include "CsrSessionSnapshotAdapter.hpp"
 #include "CsrSnapshotObservation.hpp"
 #include "CsrSnapshotObservationValidator.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "NativeDatabaseCandidate.hpp"
 #include "NativeTimingEditPreparer.hpp"
@@ -91,6 +92,8 @@ inline constexpr std::uint64_t kStage3GraphGeneration = 0;
       || snapshot.released_observation->identity != snapshot.input.source_identity) {
     return false;
   }
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return true;
   return csr::validateCaptureMetadata(snapshot.input, snapshot.metadata).empty()
          && csr::validateSnapshotObservation(*snapshot.active_observation).empty()
          && csr::validateSnapshotObservation(*snapshot.released_observation).empty();
@@ -143,12 +146,10 @@ inline constexpr std::uint64_t kStage3GraphGeneration = 0;
 
 }  // namespace
 
-VerifiedPublishBundle::VerifiedPublishBundle(InstalledNativeDatabase&& installed_database,
-                                             std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot,
-                                             CsrFullExactReceipt&& csr_full_receipt,
-                                             PreparedBatch&& prepared_batch, CumulativeEditTrace&& cumulative_trace,
-                                             TimingEditResolverState&& resolver_state, CommitFaultLatch commit_fault_latch,
-                                             bool publish_after_commit_fault) noexcept
+VerifiedPublishBundle::VerifiedPublishBundle(InstalledNativeDatabase&& installed_database, std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot,
+                                             CsrExecutionAuthorization&& csr_full_receipt, PreparedBatch&& prepared_batch,
+                                             CumulativeEditTrace&& cumulative_trace, TimingEditResolverState&& resolver_state,
+                                             CommitFaultLatch commit_fault_latch, bool publish_after_commit_fault) noexcept
     : _installed_database(std::move(installed_database)),
       _host_snapshot(std::move(host_snapshot)),
       _csr_full_receipt(std::move(csr_full_receipt)),
@@ -166,14 +167,13 @@ VerifiedPublishBundle::~VerifiedPublishBundle() noexcept = default;
 VerifiedPublishBundle::VerifiedPublishBundle(VerifiedPublishBundle&&) noexcept = default;
 
 static_assert(std::is_nothrow_move_constructible_v<InstalledNativeDatabase>);
-static_assert(std::is_nothrow_move_constructible_v<CsrFullExactReceipt>);
+static_assert(std::is_nothrow_move_constructible_v<CsrExecutionAuthorization>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedBatch>);
 static_assert(std::is_nothrow_move_constructible_v<CumulativeEditTrace>);
 static_assert(std::is_nothrow_move_constructible_v<TimingEditResolverState>);
-static_assert(std::is_nothrow_constructible_v<VerifiedPublishBundle, InstalledNativeDatabase&&,
-                                              std::unique_ptr<csr::CsrCommittedSessionSnapshot>,
-                                              CsrFullExactReceipt&&, PreparedBatch&&,
-                                              CumulativeEditTrace&&, TimingEditResolverState&&, CommitFaultLatch, bool>);
+static_assert(
+    std::is_nothrow_constructible_v<VerifiedPublishBundle, InstalledNativeDatabase&&, std::unique_ptr<csr::CsrCommittedSessionSnapshot>,
+                                    CsrExecutionAuthorization&&, PreparedBatch&&, CumulativeEditTrace&&, TimingEditResolverState&&, CommitFaultLatch, bool>);
 
 bool VerifiedPublishBundle::nativeDatabaseInstalled() const noexcept
 {
@@ -188,11 +188,10 @@ bool VerifiedPublishBundle::rollbackDatabase() noexcept
   return _installed_database.rollback();
 }
 
-FreshRecoveryBundle::FreshRecoveryBundle(TimingEditSessionToken new_session_token,
-                                         std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot,
-                                         CsrFullExactReceipt&& csr_full_receipt,
-                                         CommittedEditIdentity&& committed_identity, CumulativeEditTrace&& cumulative_trace,
-                                         TimingEditResolverState&& resolver_state, SessionStateSignal new_session_signal) noexcept
+FreshRecoveryBundle::FreshRecoveryBundle(TimingEditSessionToken new_session_token, std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot,
+                                         CsrExecutionAuthorization&& csr_full_receipt, CommittedEditIdentity&& committed_identity,
+                                         CumulativeEditTrace&& cumulative_trace, TimingEditResolverState&& resolver_state,
+                                         SessionStateSignal new_session_signal) noexcept
     : _new_session_token(new_session_token),
       _host_snapshot(std::move(host_snapshot)),
       _csr_full_receipt(std::move(csr_full_receipt)),
@@ -382,9 +381,9 @@ TransactionStatus TimingEditCoordinator::publish(const NativeExecutionAuthority&
   if (_state != TimingEditCoordinatorState::kVerified) {
     return rejectBeforeCommit(bundle, TransactionStatusCode::kInvalidState);
   }
-  if (!isKnownFailpoint(failpoint)
-      || (bundle._commit_fault_latch.armed()
-          && !isKnownCommitLatchOrdinal(bundle._commit_fault_latch.armedOrdinal()))) {
+  if ((!incregpusta_debug_checks_enabled
+       && (failpoint != PrecommitFailpoint::kNone || bundle._commit_fault_latch.armed() || bundle._publish_after_commit_fault))
+      || !isKnownFailpoint(failpoint) || (bundle._commit_fault_latch.armed() && !isKnownCommitLatchOrdinal(bundle._commit_fault_latch.armedOrdinal()))) {
     return rejectBeforeCommit(bundle, TransactionStatusCode::kPrecommitFault);
   }
   if (!bundle.nativeDatabaseInstalled() || !bundle.hostSnapshotReady()) {
@@ -426,29 +425,29 @@ TransactionStatus TimingEditCoordinator::publish(const NativeExecutionAuthority&
     if (bundle._host_snapshot->input.source_identity.graph_generation != kStage3GraphGeneration) {
       return rejectBeforeCommit(bundle, TransactionStatusCode::kInvalidGeneration);
     }
-    auto rebuilt_host = rebuildMatchingHostSnapshot(candidate_database, *bundle._host_snapshot, _session_token);
-    if (rebuilt_host == nullptr) {
-      return rejectBeforeCommit(bundle, TransactionStatusCode::kHostSnapshotMismatch);
-    }
-    csr::CsrComputationResult computation = csr::computeCsrSessionReference(*rebuilt_host);
-    const auto* exact_result = std::get_if<csr::CsrTimingResult>(&computation.outcome);
-    if (exact_result == nullptr
-        || !bundle._csr_full_receipt.matches(_session_token, prepared_batch.targetGeneration(),
-                                             rebuilt_host->input, *exact_result)) {
+    if (!validSnapshotEnvelope(*bundle._host_snapshot) || !bundle._csr_full_receipt.authorizes(_session_token, prepared_batch.targetGeneration()))
       return rejectBeforeCommit(bundle, TransactionStatusCode::kCsrFullReceiptMismatch);
+    if constexpr (incregpusta_debug_checks_enabled) {
+      auto rebuilt_host = rebuildMatchingHostSnapshot(candidate_database, *bundle._host_snapshot, _session_token);
+      if (rebuilt_host == nullptr) {
+        return rejectBeforeCommit(bundle, TransactionStatusCode::kHostSnapshotMismatch);
+      }
+      csr::CsrComputationResult computation = csr::computeCsrSessionReference(*rebuilt_host);
+      const auto* exact_result = std::get_if<csr::CsrTimingResult>(&computation.outcome);
+      if (exact_result == nullptr || !bundle._csr_full_receipt.matches(_session_token, prepared_batch.targetGeneration(), rebuilt_host->input, *exact_result)) {
+        return rejectBeforeCommit(bundle, TransactionStatusCode::kCsrFullReceiptMismatch);
+      }
+      if (!candidateMatchesPostIdentity(candidate_database, _baseline, *target_post_identity, rebuilt_host->input.analysis_context, _session_token)) {
+        return rejectBeforeCommit(bundle, TransactionStatusCode::kInvalidPostIdentity);
+      }
+      TimingEditResolverState expected_resolver = _resolver_state.stage(prepared_batch);
+      if (bundle._resolver_state != expected_resolver) {
+        return rejectBeforeCommit(bundle, TransactionStatusCode::kResolverMismatch);
+      }
+      NativeTimingEditPreparer::requireExactCommittedTraceClosure(candidate_database, rebuilt_host->input, expected_resolver, _baseline,
+                                                                  bundle._cumulative_trace.batches);
+      bundle._host_snapshot.swap(rebuilt_host);
     }
-    if (!candidateMatchesPostIdentity(candidate_database, _baseline, *target_post_identity,
-                                      rebuilt_host->input.analysis_context, _session_token)) {
-      return rejectBeforeCommit(bundle, TransactionStatusCode::kInvalidPostIdentity);
-    }
-    TimingEditResolverState expected_resolver = _resolver_state.stage(prepared_batch);
-    if (bundle._resolver_state != expected_resolver) {
-      return rejectBeforeCommit(bundle, TransactionStatusCode::kResolverMismatch);
-    }
-    NativeTimingEditPreparer::requireExactCommittedTraceClosure(candidate_database, rebuilt_host->input,
-                                                                expected_resolver, _baseline,
-                                                                bundle._cumulative_trace.batches);
-    bundle._host_snapshot.swap(rebuilt_host);
   } catch (...) {
     return rejectBeforeCommit(bundle, TransactionStatusCode::kPublishVerificationFailed);
   }
@@ -511,10 +510,10 @@ TransactionStatus TimingEditCoordinator::acknowledgePoisonedSessionClosed(Timing
 bool TimingEditCoordinator::isValidFreshRecovery(const FreshRecoveryBundle& bundle) const
 {
   return bundle._new_session_token.value() != 0 && bundle._new_session_token != _session_token && bundle._new_session_signal.valid()
-         && bundle._host_snapshot != nullptr && bundle._committed_identity == _committed_identity
-         && bundle._cumulative_trace == _cumulative_trace && bundle._device_state == _device_state
-         && bundle._resolver_state == _resolver_state
-         && isWellFormedTrace(bundle._cumulative_trace, _baseline, bundle._committed_identity.generation);
+         && bundle._host_snapshot != nullptr && bundle._committed_identity == _committed_identity && bundle._device_state == _device_state
+         && (!incregpusta_debug_checks_enabled
+             || (bundle._cumulative_trace == _cumulative_trace && bundle._resolver_state == _resolver_state
+                 && isWellFormedTrace(bundle._cumulative_trace, _baseline, bundle._committed_identity.generation)));
 }
 
 TransactionStatus TimingEditCoordinator::installFreshRecovery(const NativeExecutionAuthority& authority,
@@ -537,31 +536,34 @@ TransactionStatus TimingEditCoordinator::installFreshRecovery(const NativeExecut
       return status(TransactionStatusCode::kRecoveryMismatch);
     }
 
-    std::unique_ptr<csr::CsrCommittedSessionSnapshot> rebuilt_host
-        = rebuildMatchingHostSnapshot(fresh_database, *bundle._host_snapshot, bundle._new_session_token);
-    if (rebuilt_host != nullptr) {
-      csr::CsrComputationResult computation = csr::computeCsrSessionReference(*rebuilt_host);
-      const auto* exact_result = std::get_if<csr::CsrTimingResult>(&computation.outcome);
-      if (exact_result == nullptr
-          || !bundle._csr_full_receipt.matches(bundle._new_session_token, bundle._committed_identity.generation,
-                                               rebuilt_host->input, *exact_result)) {
+    if (!validSnapshotEnvelope(*bundle._host_snapshot)
+        || !bundle._csr_full_receipt.authorizes(bundle._new_session_token, bundle._committed_identity.generation))
+      return status(TransactionStatusCode::kRecoveryMismatch);
+    if constexpr (incregpusta_debug_checks_enabled) {
+      std::unique_ptr<csr::CsrCommittedSessionSnapshot> rebuilt_host
+          = rebuildMatchingHostSnapshot(fresh_database, *bundle._host_snapshot, bundle._new_session_token);
+      if (rebuilt_host != nullptr) {
+        csr::CsrComputationResult computation = csr::computeCsrSessionReference(*rebuilt_host);
+        const auto* exact_result = std::get_if<csr::CsrTimingResult>(&computation.outcome);
+        if (exact_result == nullptr
+            || !bundle._csr_full_receipt.matches(bundle._new_session_token, bundle._committed_identity.generation, rebuilt_host->input, *exact_result)) {
+          return status(TransactionStatusCode::kRecoveryMismatch);
+        }
+      }
+      if (rebuilt_host == nullptr
+          || !candidateMatchesPostIdentity(fresh_database, _baseline, bundle._committed_identity, rebuilt_host->input.analysis_context,
+                                           bundle._new_session_token)) {
         return status(TransactionStatusCode::kRecoveryMismatch);
       }
-    }
-    if (rebuilt_host == nullptr
-        || !candidateMatchesPostIdentity(fresh_database, _baseline, bundle._committed_identity,
-                                         rebuilt_host->input.analysis_context, bundle._new_session_token)) {
-      return status(TransactionStatusCode::kRecoveryMismatch);
-    }
-    NativeTimingEditPreparer::requireExactCommittedTraceClosure(fresh_database, rebuilt_host->input,
-                                                                bundle._resolver_state, _baseline,
-                                                                bundle._cumulative_trace.batches);
+      NativeTimingEditPreparer::requireExactCommittedTraceClosure(fresh_database, rebuilt_host->input, bundle._resolver_state, _baseline,
+                                                                  bundle._cumulative_trace.batches);
 
-    // Recovery publishes the snapshot rebuilt from the currently installed
-    // fresh Database, rather than trusting a publicly constructible bundle's
-    // observation sidecars. All allocation and validation ends before the
-    // no-throw recovery install begins.
-    bundle._host_snapshot.swap(rebuilt_host);
+      // Recovery publishes the snapshot rebuilt from the currently installed
+      // fresh Database, rather than trusting a publicly constructible bundle's
+      // observation sidecars. All allocation and validation ends before the
+      // no-throw recovery install begins.
+      bundle._host_snapshot.swap(rebuilt_host);
+    }
   } catch (...) {
     return status(TransactionStatusCode::kRecoveryMismatch);
   }

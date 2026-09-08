@@ -142,9 +142,6 @@ foreach(stage IN ITEMS dual_csr stage6)
         --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
         --run-root "${CMAKE_CURRENT_BINARY_DIR}/${stage}-timing-smoke/runs"
         --output "${CMAKE_CURRENT_BINARY_DIR}/${stage}-timing-smoke/timing-smoke.json"
-        --build-config "$<CONFIG>"
-        --compiler-id "${CMAKE_CXX_COMPILER_ID}"
-        --compiler-version "${CMAKE_CXX_COMPILER_VERSION}"
         --warmup-runs 1 --samples 6 --timeout-seconds 900)
   endif()
   set_tests_properties("${test_name}" PROPERTIES

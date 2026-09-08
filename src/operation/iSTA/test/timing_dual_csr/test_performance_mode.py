@@ -63,6 +63,25 @@ class PerformanceModeTest(unittest.TestCase):
             child.assert_not_called()
             self.assertFalse(args.run_root.exists())
 
+    def test_non_release_native_build_skips_before_loading_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            probe = root / "probe"
+            probe.touch()
+            args = argparse.Namespace(
+                samples=6, warmup_runs=1, probe=probe, timeout_seconds=10,
+                run_root=root / "runs")
+            response = subprocess.CompletedProcess(
+                [], 0, json.dumps({"debug_checks_enabled": False,
+                                   "build_config": "Debug"}))
+            with (
+                patch.object(smoke.subprocess, "run", return_value=response),
+                patch.object(smoke, "run_child") as child,
+            ):
+                self.assertFalse(smoke.run(args))
+            child.assert_not_called()
+            self.assertFalse(args.run_root.exists())
+
 
 def reject_real_on_probe(probe: pathlib.Path) -> None:
     build = subprocess.run([str(probe), "build-info"], check=True, capture_output=True, text=True)

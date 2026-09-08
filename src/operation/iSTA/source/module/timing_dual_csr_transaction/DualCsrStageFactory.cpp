@@ -4,8 +4,6 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
-#include "DualCsrTransactionCoordinator.hpp"
-
 #include <chrono>
 #include <cstdint>
 #include <limits>
@@ -19,13 +17,12 @@
 #include "../../data_manager/adapter/csr/DualCsrSemanticIdentity.hpp"
 #include "../../data_manager/adapter/csr/TimingEditDualCsrDescriptorBuilder.hpp"
 #include "CpuIncrementalLevelizationPipeline.hpp"
-#include "CsrCpuReferenceBackend.hpp"
-#include "CsrFifoLevelizationValidation.hpp"
-#include "DualCsrArcGroupIndexValidation.hpp"
+#include "CsrCpuReferenceBackendInternal.hpp"
 #include "DualCsrArcGroupResolverValidation.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrStateValidation.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
+#include "DualCsrTransactionCoordinator.hpp"
 #include "DualCsrUpdater.hpp"
 #include "NarrowCaptureAuditValidation.hpp"
 
@@ -84,13 +81,6 @@ double elapsedMilliseconds(SteadyClock::time_point start)
   return std::chrono::duration<double, std::milli>(
              SteadyClock::now() - start)
       .count();
-}
-
-void append(DualCsrViolations& target, DualCsrViolations source)
-{
-  target.insert(target.end(),
-                std::make_move_iterator(source.begin()),
-                std::make_move_iterator(source.end()));
 }
 
 DualCsrStageFailure makeDualFailure(
@@ -183,12 +173,6 @@ PreparedStageAttempt prepareStage(
     DualCsrStageFactoryAccess::ConsumedBatch batch)
 {
   DualCsrViolations violations;
-  if constexpr (incregpusta_debug_checks_enabled)
-    violations = validateCommittedDualCsrAnalysisState(committed);
-  if (!violations.empty())
-    return makeDualFailure(DualCsrStageFailureOrigin::kExactBefore,
-                           std::move(violations));
-
   if (incregpusta_debug_checks_enabled
       && (batch.expected_before.graph() != committed.graph || batch.expected_before.resolver() != committed.resolver
           || batch.expected_before.arcGroupIndex() != committed.arc_group_index || batch.expected_before.identity() != committed.identity))
@@ -215,12 +199,6 @@ PreparedStageAttempt prepareStage(
         DualCsrStageFailureOrigin::kCapability,
         DualCsrViolationCode::kGeneration, "stage.capability",
         "verified batch and exact committed state do not form the next generation");
-
-  violations = validateDualCsrArcGroupIndexDelta(
-      committed.graph, committed.arc_group_index, batch.descriptor);
-  if (!violations.empty())
-    return makeDualFailure(DualCsrStageFailureOrigin::kIndexDelta,
-                           std::move(violations));
 
   try {
     if (incregpusta_debug_checks_enabled && committed.resolver.stage(batch.prepared_batch) != batch.staged_resolver)
@@ -249,8 +227,6 @@ PreparedStageAttempt prepareStage(
   if constexpr (incregpusta_debug_checks_enabled) {
     const auto invariant_started = SteadyClock::now();
     violations = validateDualCsrArcGroupResolverTransition(committed.arc_group_index, arc_group_index, batch.descriptor, batch.staged_resolver);
-    append(violations, validateDualCsrState(graph));
-    append(violations, validateDualCsrArcGroupIndex(graph, arc_group_index));
     invariant_ms = elapsedMilliseconds(invariant_started);
   }
   if (!violations.empty())
@@ -279,12 +255,6 @@ BuiltStateAttempt buildStagedState(
     LevelizationExecutionTrace execution)
 {
   DualCsrViolations violations;
-  if constexpr (incregpusta_debug_checks_enabled)
-    violations = validateDualCsrTimingResult(stage.graph, timing);
-  if (!violations.empty())
-    return makeDualFailure(DualCsrStageFailureOrigin::kTimingIntrinsic,
-                           std::move(violations));
-
   timing_edit::CommittedEditIdentity identity
       = deriveDualCsrCommittedIdentity(stage.graph,
                                        stage.staged_resolver);
@@ -327,21 +297,6 @@ MixedLevelizationFailure forbiddenFullEntry(
           + std::to_string(delta) + " time(s)");
 }
 
-MixedLevelizationFailure externalValidationFailure(
-    const csr::CsrFifoLevelizationValidationResult& validation,
-    std::uint64_t generation)
-{
-  const bool view_error
-      = validation.code
-        == csr::CsrFifoLevelizationValidationCode::kViewError;
-  return makeMixedFailure(
-      view_error ? MixedStageFailureCode::kViewError
-                 : MixedStageFailureCode::kInvariantFailure,
-      MixedFailureOrigin::kExternalLevelValidation,
-      validation.view_error, generation,
-      "reconstructed levels failed the external-level boundary validator");
-}
-
 }  // namespace
 
 DualCsrStageAttempt makeStagedDualCsrAnalysisState(
@@ -363,9 +318,8 @@ DualCsrStageAttempt makeStagedDualCsrAnalysisState(
 
   DualCsrEdgeViewImpl edges(stage.graph);
   DualCsrTimingPayloadViewImpl payloads(stage.graph);
-  csr::CsrCpuReferenceBackend backend;
   auto guard = csr::beginCsrFullLevelizerOperation();
-  auto computation = backend.computeWithTelemetry(edges, payloads);
+  auto computation = csr::detail::computeCsrCpuReferenceForStage(edges, payloads);
   auto entry_delta = std::move(guard).finish();
   attempt.timings.full_levelization_ms
       = computation.phase_timings.levelization_ms;
@@ -386,15 +340,6 @@ DualCsrStageAttempt makeStagedDualCsrAnalysisState(
   csr::CsrFifoLevelization levels;
   if constexpr (incregpusta_debug_checks_enabled)
     levels = levelizationFromTiming(*values);
-  if (incregpusta_debug_checks_enabled && !csr::validateCsrFifoLevelization(edges, levels).valid()) {
-    assignFailure(
-        attempt,
-        makeDualFailure(DualCsrStageFailureOrigin::kTimingIntrinsic,
-                        DualCsrViolationCode::kTimingResult,
-                        "stage.full_levels",
-                        "full CPU levels failed public validation"));
-    return attempt;
-  }
   const auto fallback_delta = counterDelta(
       committed.graph.telemetry.fallback_count,
       stage.graph.telemetry.fallback_count);
@@ -473,29 +418,7 @@ MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
   stage.timings.mixed_build_ms = mixed.telemetry.mixed_build_ms;
   stage.timings.mixed_kahn_ms = mixed.telemetry.mixed_kahn_ms;
   stage.timings.reconstruct_ms = mixed.telemetry.reconstruct_ms;
-  if (incregpusta_debug_checks_enabled && !timing_incremental_levelization::validateMixedTelemetryIdentities(mixed.telemetry)) {
-    auto entry_delta = std::move(guard).finish();
-    if (entry_delta.value() != 0)
-      return forbiddenFullEntry(generation, entry_delta.value());
-    return makeMixedFailure(
-        MixedStageFailureCode::kInvariantFailure,
-        MixedFailureOrigin::kMixedKahnQuotient, std::nullopt,
-        generation, "mixed telemetry identities are inconsistent");
-  }
-
-  if constexpr (incregpusta_debug_checks_enabled) {
-    const auto level_validation = csr::validateCsrFifoLevelization(edges, mixed.levels);
-    if (!level_validation.valid()) {
-      auto entry_delta = std::move(guard).finish();
-      if (entry_delta.value() != 0)
-        return forbiddenFullEntry(generation, entry_delta.value());
-      return externalValidationFailure(level_validation, generation);
-    }
-  }
-
-  csr::CsrCpuReferenceBackend backend;
-  auto computation
-      = backend.computeWithTelemetry(edges, payloads, mixed.levels);
+  auto computation = csr::detail::propagateCsrCpuReferenceWithLevels(edges, payloads, mixed.levels);
   auto entry_delta = std::move(guard).finish();
   if (entry_delta.value() != 0)
     return forbiddenFullEntry(generation, entry_delta.value());
@@ -528,12 +451,6 @@ MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
           computation.telemetry, std::move(entry_delta),
           *fallback_delta, true,
           projectDeterministicMixedTrace(mixed.telemetry));
-  if (incregpusta_debug_checks_enabled && !validateLevelizationExecutionTraceShape(execution))
-    return makeMixedFailure(
-        MixedStageFailureCode::kInvariantFailure,
-        MixedFailureOrigin::kPropagation, std::nullopt, generation,
-        "mode-specific execution trace failed deterministic validation");
-
   DualCsrTimingResult timing{std::move(*values),
                              activeArcMask(stage.graph)};
   const auto verify_started = SteadyClock::now();

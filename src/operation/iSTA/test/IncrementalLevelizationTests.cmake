@@ -65,7 +65,6 @@ set_tests_properties(ista_stage6_functional_receipt_test PROPERTIES
 set(ISTA_STAGE6_PRODUCTION_FRESH_PROBE_SOURCES
     timing_incremental_levelization/IncrementalLevelizationTraceProductionFreshProbe.cpp
     timing_incremental_levelization/Stage6ProductionTargetedAdapter.cpp
-    timing_incremental_levelization/Stage6ReceiptJson.cpp
     timing_incremental_levelization/Stage6FunctionalReceipt.cpp
     timing_dual_csr/DualCsrTraceProductionFreshAdapter.cpp
     timing_dual_csr/DualCsrTargetedArtifactSupport.cpp

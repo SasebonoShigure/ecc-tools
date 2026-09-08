@@ -319,6 +319,17 @@ PoisonedScenario produceCommittedScenario(const std::vector<LevelizationExecutio
             timing_edit::test::requireReleasedSnapshotForNativeMutation(
                 context, authority.sessionToken());
             CumulativeBatchSource source(STADM.getDatabase(), authority);
+            auto wrong_generation = plans.front();
+            wrong_generation.expected_generation = timing_edit::TransactionGeneration{1};
+            const auto* before_nodes = coordinator->committed().graph.nodes.data();
+            bool rejected = false;
+            try {
+              static_cast<void>(source.mint(coordinator->committed(), std::move(wrong_generation)));
+            } catch (const std::invalid_argument&) {
+              rejected = true;
+            }
+            require(rejected && coordinator->committed().generation.value() == 0 && coordinator->committed().graph.nodes.data() == before_nodes,
+                    "structured prepare accepted a foreign generation or changed committed state");
             for (std::size_t index = 0; index < modes.size(); ++index) {
               auto verified = source.mint(
                   coordinator->committed(), plans[index]);
@@ -351,9 +362,17 @@ void finalizePoisonedSnapshot(PoisonedScenario& scenario)
   scenario.poisoned_snapshot = scenario.coordinator->committed();
 }
 
-DualCsrModeRecoveryReplayEvidence recoverAndContinueMixed(
-    PoisonedScenario& scenario, bool noncompact_generation_zero,
-    bool continue_with_next_mixed)
+class RejectingRecoveryBatchSource final : public DualCsrModeRecoveryBatchSource
+{
+ public:
+  DualCsrModeRecoveryBatchAttempt rebuild(const DualCsrModeRecoveryBatchRequest&) override
+  {
+    return {.verified_batch = std::nullopt, .violations = {}, .detail = "recovery source rejected the batch"};
+  }
+};
+
+std::optional<DualCsrModeRecoveryReplayEvidence> recoverAndContinueMixed(PoisonedScenario& scenario, bool noncompact_generation_zero,
+                                                                         bool continue_with_next_mixed)
 {
   timing_edit::test::installNativeTransactionBaseline();
   timing_edit::test::GuardedTestSession session;
@@ -369,7 +388,7 @@ DualCsrModeRecoveryReplayEvidence recoverAndContinueMixed(
               != scenario.poisoned_snapshot.graph.session_token,
           "fresh recovery session token did not change");
 
-  DualCsrModeRecoveryReplayEvidence evidence;
+  std::optional<DualCsrModeRecoveryReplayEvidence> evidence;
   const StaStatus guarded
       = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
           session.session(),
@@ -378,6 +397,18 @@ DualCsrModeRecoveryReplayEvidence recoverAndContinueMixed(
             timing_edit::test::requireReleasedSnapshotForNativeMutation(
                 context, authority.sessionToken());
             CumulativeBatchSource source(STADM.getDatabase(), authority);
+            RejectingRecoveryBatchSource rejecting_source;
+            const auto* original_nodes = scenario.coordinator->committed().graph.nodes.data();
+            const auto original_generation = scenario.coordinator->committed().generation;
+            const bool originally_poisoned = scenario.coordinator->poisoned();
+            const auto rejected = replayDualCsrModesForRecovery(scenario.poisoned_snapshot, baseline, rejecting_source);
+            require(
+                !rejected.success() && !rejected.recovery && rejected.failure && rejected.failure->code == DualCsrModeRecoveryReplayCode::kBatchSourceRejected,
+                "rejected recovery source minted a commit capability");
+            require(rejected.evidence.has_value() == incregpusta_debug_checks_enabled, "failed recovery audit presence does not match build mode");
+            require(scenario.coordinator->committed().graph.nodes.data() == original_nodes
+                        && scenario.coordinator->committed().generation == original_generation && scenario.coordinator->poisoned() == originally_poisoned,
+                    "failed recovery changed the committed state");
             auto attempt = replayDualCsrModesForRecovery(
                 scenario.poisoned_snapshot, std::move(baseline), source);
             require(attempt.success(),
@@ -386,9 +417,14 @@ DualCsrModeRecoveryReplayEvidence recoverAndContinueMixed(
                                ? ": " + attempt.failure->detail
                                : std::string{}));
             evidence = attempt.evidence;
+            // Successful publication must not depend on retaining diagnostic output.
+            attempt.evidence.reset();
+            require(evidence.has_value() == incregpusta_debug_checks_enabled, "recovery audit presence does not match build mode");
             if (scenario.coordinator->poisoned()) {
+              const auto* recovered_nodes = attempt.recovery->state().graph.nodes.data();
               const auto recovered = scenario.coordinator->recover(std::move(*attempt.recovery));
               require(recovered.ok() && recovered.published && !recovered.poisoned, "verified mode recovery did not clear poison");
+              require(scenario.coordinator->committed().graph.nodes.data() == recovered_nodes, "recovery publication copied the recovered graph");
             } else {
               // Restore persisted work after closing its session; no fault injection.
               scenario.coordinator = std::make_unique<DualCsrTransactionCoordinator>(attempt.recovery->state());
@@ -447,24 +483,10 @@ void mixedNoncompactRecoveryContract()
   require(!wrong_old.success(),
           "typed rebind accepted a partially matching old binding");
 
-  auto legacy_clone = rebindRecoveredAggregateSession(
-      poisoned, poisoned.graph.session_token,
-      timing_edit::TimingEditSessionToken{
-          poisoned.graph.session_token.value() + 100});
-  require(legacy_clone.success(),
-          "legacy bypass rejection fixture could not be rebound");
-  ++legacy_clone.rebound->graph.telemetry.full_rebuild_count;
-  const auto legacy_bypass = makeDualCsrVerifiedRecovery(
-      poisoned, std::move(*legacy_clone.rebound));
-  require(!legacy_bypass.success(),
-          "legacy aggregate clone/rebind bypassed persisted mode replay");
-
   const auto evidence
       = recoverAndContinueMixed(scenario, true, true);
-  require(evidence.descriptors_replayed == 1
-              && evidence.full_records_replayed == 0
-              && evidence.mixed_records_replayed == 1
-              && evidence.recovery_replay_count == 1,
+  require(evidence && evidence->descriptors_replayed == 1 && evidence->full_records_replayed == 0 && evidence->mixed_records_replayed == 1
+              && evidence->recovery_replay_count == 1,
           "noncompact recovery envelope counters are wrong");
   require(scenario.coordinator->committed().generation.value() == 2
               && scenario.coordinator->committed().execution_trace.back()
@@ -489,10 +511,8 @@ void fullThenMixedModeDispatchContract()
 
   const auto evidence
       = recoverAndContinueMixed(scenario, false, false);
-  require(evidence.descriptors_replayed == 2
-              && evidence.full_records_replayed == 1
-              && evidence.mixed_records_replayed == 1
-              && evidence.recovery_replay_count == 1,
+  require(evidence && evidence->descriptors_replayed == 2 && evidence->full_records_replayed == 1 && evidence->mixed_records_replayed == 1
+              && evidence->recovery_replay_count == 1,
           "mode-dispatched recovery did not replay full then mixed exactly");
   const auto& recovered = scenario.coordinator->committed();
   require(recovered.generation.value() == 2
@@ -516,7 +536,11 @@ void runtimeRecoveryContract(const char* output)
   require((initial.traversal_telemetry == csr::CsrTraversalTelemetry{}) == !incregpusta_debug_checks_enabled,
           "storage visit collection does not match build mode");
   const auto evidence = recoverAndContinueMixed(scenario, false, false);
-  require(evidence.full_records_replayed == 1 && evidence.mixed_records_replayed == 1, "ordinary recovery did not replay recorded modes");
+  require(evidence.has_value() == incregpusta_debug_checks_enabled, "recovery audit presence does not match build mode");
+  const auto& recovered_trace = scenario.coordinator->committed().execution_trace;
+  require(recovered_trace.size() == 2 && recovered_trace[0].mode() == LevelizationExecutionMode::kFullStage5
+              && recovered_trace[1].mode() == LevelizationExecutionMode::kMixedStage6,
+          "ordinary recovery did not execute the persisted modes");
   const auto stale = DualCsrUpdater::stage(initial.graph, initial.descriptor_trace.front());
   require(!stale.success(), "default path accepted a stale descriptor");
   if constexpr (!incregpusta_debug_checks_enabled) {

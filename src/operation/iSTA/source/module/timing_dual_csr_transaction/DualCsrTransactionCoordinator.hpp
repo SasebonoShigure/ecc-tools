@@ -149,47 +149,9 @@ class DualCsrVerifiedStage final
   friend class DualCsrTransactionCoordinator;
 };
 
-struct DualCsrRecoveryAttempt;
 class DualCsrVerifiedModeRecovery;
-class DualCsrVerifiedRecovery final
-{
- public:
-  DualCsrVerifiedRecovery(const DualCsrVerifiedRecovery&) = delete;
-  DualCsrVerifiedRecovery& operator=(const DualCsrVerifiedRecovery&) = delete;
-  DualCsrVerifiedRecovery(DualCsrVerifiedRecovery&&) noexcept = default;
-  DualCsrVerifiedRecovery& operator=(DualCsrVerifiedRecovery&&) noexcept
-      = default;
-
-  [[nodiscard]] const CommittedDualCsrAnalysisState& state() const noexcept
-  {
-    return _state;
-  }
-
- private:
-  DualCsrVerifiedRecovery(const CommittedDualCsrAnalysisState& expected_poisoned, CommittedDualCsrAnalysisState state)
-      : _expected_poisoned(expected_poisoned), _state(std::move(state))
-  {
-  }
-
-  DualCsrCommitBinding _expected_poisoned;
-  CommittedDualCsrAnalysisState _state;
-
-  friend DualCsrRecoveryAttempt makeDualCsrVerifiedRecovery(
-      const CommittedDualCsrAnalysisState&,
-      CommittedDualCsrAnalysisState);
-  friend class DualCsrTransactionCoordinator;
-};
-
-struct DualCsrRecoveryAttempt
-{
-  std::optional<DualCsrVerifiedRecovery> recovery;
-  DualCsrViolations violations;
-
-  [[nodiscard]] bool success() const noexcept
-  {
-    return recovery.has_value() && violations.empty();
-  }
-};
+class DualCsrModeRecoveryBatchSource;
+struct DualCsrModeRecoveryReplayAttempt;
 
 struct DualCsrStageAttempt
 {
@@ -237,10 +199,6 @@ rebindRecoveredAggregateSession(
     timing_edit::TimingEditSessionToken old_token,
     timing_edit::TimingEditSessionToken new_token);
 
-[[nodiscard]] DualCsrRecoveryAttempt makeDualCsrVerifiedRecovery(
-    const CommittedDualCsrAnalysisState& poisoned_committed,
-    CommittedDualCsrAnalysisState rebuilt);
-
 class DualCsrTransactionCoordinator final
 {
  public:
@@ -265,13 +223,14 @@ class DualCsrTransactionCoordinator final
       DualCsrVerifiedStage staged,
       DualCsrPublishFailpoint failpoint = DualCsrPublishFailpoint::kNone);
   [[nodiscard]] DualCsrTransactionStatus recover(
-      DualCsrVerifiedRecovery rebuilt);
-  [[nodiscard]] DualCsrTransactionStatus recover(
       DualCsrVerifiedModeRecovery rebuilt);
 
  private:
   [[nodiscard]] DualCsrTransactionStatus reject(
       DualCsrTransactionCode code) const noexcept;
+
+  friend DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(const CommittedDualCsrAnalysisState&, CommittedDualCsrAnalysisState,
+                                                                        DualCsrModeRecoveryBatchSource&);
 
   CommittedDualCsrAnalysisState _committed;
   bool _poisoned{false};

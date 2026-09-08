@@ -612,12 +612,7 @@ PendingStructuredBatch DualCsrStructuredBatchPreparer::prepare(
   detail::requireStructuredSelectedBefore(
       exact_committed_graph, committed_resolver,
       committed_arc_group_index, committed_view, capture_plan);
-  ExpectedBeforeBinding binding{exact_committed_graph,
-                                committed_resolver,
-                                exact_committed_identity,
-                                committed_arc_group_index,
-                                detail::structuredGraphValueCopyMinimumBytes(
-                                    exact_committed_graph)};
+  ExpectedBeforeBinding binding{exact_committed_graph, committed_resolver, exact_committed_identity, committed_arc_group_index};
   return PendingStructuredBatch{std::move(prepared), std::move(staged),
                                 std::move(capture_plan),
                                 std::move(binding)};

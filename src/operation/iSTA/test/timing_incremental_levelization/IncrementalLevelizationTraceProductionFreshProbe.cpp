@@ -28,7 +28,6 @@
 #include "DualCsrTraceProductionFreshAdapter.hpp"
 #include "IncreGpuStaPerformanceJson.hpp"
 #include "Stage6ProductionTargetedAdapter.hpp"
-#include "Stage6ReceiptJson.hpp"
 
 namespace {
 
@@ -150,24 +149,16 @@ void fresh(const Options& options)
   const std::uint64_t prefix = parseU64(options.at("--prefix"), "prefix");
   auto receipt = timing_dual_csr::test::runProductionFreshSemanticPrefix(
       artifact.replay, static_cast<std::size_t>(prefix));
-  Json envelope{
-      {"schema_version", "ista-dual-csr-trace-process/1.0.0"},
-      {"role", "fresh-oracle"},
-      {"prefix_batches", prefix},
-      {"functional",
-       timing_dual_csr::test::functionalSemanticReceiptToJson(
-           receipt.functional)},
-      {"stage6_receipt",
-       timing_dual_csr::test::stage6SeparatedReceiptToJson(
-           receipt.functional, prefix)},
-      {"source_isolation",
-       timing_dual_csr::test::sourceIsolationToJson(
-           receipt.source_isolation)},
-      {"run", {{"child_pid", static_cast<std::uint64_t>(::getpid())},
-                {"loader_invocation_count", receipt.loader_invocation_count},
-                {"guarded_work_invocation_count",
-                 receipt.guarded_work_invocation_count},
-                {"one_shot_state", "finished"}}}};
+  Json envelope{{"schema_version", "ista-stage6-trace-process/2.0.0"},
+                {"role", "fresh-oracle"},
+                {"prefix_batches", prefix},
+                {"functional", timing_dual_csr::test::functionalSemanticReceiptToJson(receipt.functional)},
+                {"source_isolation", timing_dual_csr::test::sourceIsolationToJson(receipt.source_isolation)},
+                {"run",
+                 {{"child_pid", static_cast<std::uint64_t>(::getpid())},
+                  {"loader_invocation_count", receipt.loader_invocation_count},
+                  {"guarded_work_invocation_count", receipt.guarded_work_invocation_count},
+                  {"one_shot_state", "finished"}}}};
   writeText(options.at("--output"), envelope.dump(2));
 }
 
@@ -190,10 +181,7 @@ void targeted(const Options& options)
   }
 
   Json observations = Json::array();
-  Json stage6_observations = Json::array();
-  std::uint64_t generation = 0;
   for (const auto& observation : result.replay.published_observations) {
-    ++generation;
     observations.push_back(
         {{"functional",
           timing_dual_csr::test::functionalSemanticReceiptToJson(
@@ -201,16 +189,12 @@ void targeted(const Options& options)
          {"structural",
           timing_dual_csr::test::structuralReceiptToJson(
               observation.structural)}});
-    stage6_observations.push_back(
-        timing_dual_csr::test::stage6SeparatedReceiptToJson(
-            observation.functional, generation));
   }
-  Json envelope{{"schema_version", "ista-dual-csr-trace-process/1.0.0"},
+  Json envelope{{"schema_version", "ista-stage6-trace-process/2.0.0"},
                 {"role", "targeted-under-test"},
                 {"prefix_batches", prefix},
                 {"receipt_validated", true},
                 {"published_observations", std::move(observations)},
-                {"stage6_observations", std::move(stage6_observations)},
                 {"exact_receipt", timing_dual_csr::test::exactReceiptToJson(result.replay.exact_receipt.value())},
                 {"source_isolation", timing_dual_csr::test::sourceIsolationToJson(result.source_isolation)},
                 {"run",

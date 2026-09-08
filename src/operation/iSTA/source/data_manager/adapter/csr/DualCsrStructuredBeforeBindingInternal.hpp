@@ -35,8 +35,5 @@ void requireStructuredSelectedBefore(
     const DualSemanticReadView& view,
     const AffectedCapturePlan& plan);
 
-[[nodiscard]] std::uint64_t structuredGraphValueCopyMinimumBytes(
-    const DualCsrState& graph) noexcept;
-
 }  // namespace detail
 }  // namespace ista::timing_dual_csr

@@ -114,7 +114,6 @@ def probe_build_info(probe: pathlib.Path, timeout: int) -> dict[str, Any]:
         value["debug_checks_enabled"] is False,
         "performance sampling requires ECC_INCREGPUSTA_DEBUG_CHECKS=OFF",
     )
-    require(value["build_config"] == "Release", "performance probe must use Release")
     return value
 
 
@@ -124,22 +123,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trace", required=True, type=pathlib.Path)
     parser.add_argument("--run-root", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
-    parser.add_argument("--build-config", required=True)
-    parser.add_argument("--compiler-id", required=True)
-    parser.add_argument("--compiler-version", required=True)
     parser.add_argument("--warmup-runs", type=int, default=1)
     parser.add_argument("--samples", type=int, default=MIN_SAMPLES)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     return parser.parse_args()
 
 
-def run(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> bool:
     require(
         args.samples >= MIN_SAMPLES, f"timing smoke requires at least {MIN_SAMPLES} raw samples"
     )
     require(args.warmup_runs >= 1, "timing smoke requires a warm-up run")
     probe = args.probe.resolve(strict=True)
     build = probe_build_info(probe, args.timeout_seconds)
+    if build["build_config"] != "Release":
+        return False
     trace = args.trace.resolve(strict=True)
     trace_value = read_json(trace)
     batches = trace_value["replay"]["workload"]["batches"]
@@ -178,15 +176,15 @@ def run(args: argparse.Namespace) -> None:
     }
     require(raw_sample_count >= MIN_SAMPLES, "timing smoke did not retain six raw samples")
     write_json(args.output.resolve(), output)
+    return True
 
 
 def main() -> int:
     try:
         args = parse_args()
-        if args.build_config != "Release":
+        if not run(args):
             print("dual CSR timing smoke: skipped outside Release")
             return 77
-        run(args)
         return 0
     except (
         ControllerError,

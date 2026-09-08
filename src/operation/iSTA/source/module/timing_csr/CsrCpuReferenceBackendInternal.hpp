@@ -34,6 +34,15 @@ using ActiveCsrFifoReplayFunction = CsrFifoLevelization (*)(const ActiveCsrEdgeV
 [[nodiscard]] CsrComputationWithTelemetry computeCsrCpuReferenceWithReplay(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
                                                                           ActiveCsrFifoReplayFunction replay);
 
+// Controlled Stage 5/6 entrypoints: graph state and generated levels are owned
+// by the stage factory. Public arbitrary-view/level and replay APIs validate
+// their inputs before reaching the shared propagation implementation.
+namespace detail {
+[[nodiscard]] CsrComputationWithTelemetry computeCsrCpuReferenceForStage(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads);
+[[nodiscard]] CsrComputationWithTelemetry propagateCsrCpuReferenceWithLevels(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+                                                                             const CsrFifoLevelization& levels, CsrComputationWithTelemetry output = {});
+}  // namespace detail
+
 enum class CsrCpuReferenceStageStatus : std::uint8_t
 {
   kSuccess,

@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -26,7 +25,8 @@ DualCsrModeRecoveryReplayAttempt reject(
         mixed_failure = std::nullopt)
 {
   DualCsrModeRecoveryReplayAttempt attempt;
-  attempt.evidence = evidence;
+  if constexpr (incregpusta_debug_checks_enabled)
+    attempt.evidence = evidence;
   attempt.failure = DualCsrModeRecoveryReplayFailure{
       .code = code,
       .generation = generation,
@@ -35,14 +35,6 @@ DualCsrModeRecoveryReplayAttempt reject(
       .mixed_failure = std::move(mixed_failure),
       .detail = std::move(detail)};
   return attempt;
-}
-
-bool checkedIncrement(std::uint64_t& value) noexcept
-{
-  if (value == std::numeric_limits<std::uint64_t>::max())
-    return false;
-  ++value;
-  return true;
 }
 
 template <typename T>
@@ -71,22 +63,6 @@ bool stageMatchesPersistedPrefix(
   return validateLevelizationExecutionTraceShape(record)
          && record.generation()
                 == timing_edit::TransactionGeneration{length};
-}
-
-bool validReplayEvidence(
-    const DualCsrModeRecoveryReplayEvidence& evidence) noexcept
-{
-  std::uint64_t mode_records = 0;
-  return evidence.recovery_replay_count == 1
-         && evidence.generation_zero == 0
-         && evidence.descriptors_replayed
-                == evidence.generation_recovered
-         && evidence.full_records_replayed
-                <= std::numeric_limits<std::uint64_t>::max()
-                   - evidence.mixed_records_replayed
-         && (mode_records = evidence.full_records_replayed
-                            + evidence.mixed_records_replayed,
-             mode_records == evidence.descriptors_replayed);
 }
 
 }  // namespace
@@ -183,12 +159,8 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
             full_attempt.violations, std::move(failure));
       }
       staged.emplace(std::move(*full_attempt.staged));
-      if (!checkedIncrement(evidence.full_records_replayed))
-        return reject(
-            evidence,
-            DualCsrModeRecoveryReplayCode::kModeRecordMismatch,
-            coordinator.committed().generation.value(),
-            "full replay record counter overflowed");
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++evidence.full_records_replayed;
     } else if (persisted_execution.mode()
                == LevelizationExecutionMode::kMixedStage6) {
       auto mixed_attempt = makeMixedLevelizedDualCsrAnalysisState(
@@ -213,12 +185,8 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
             std::nullopt, std::move(*mixed));
       staged.emplace(std::move(
           std::get<DualCsrVerifiedStage>(mixed_attempt)));
-      if (!checkedIncrement(evidence.mixed_records_replayed))
-        return reject(
-            evidence,
-            DualCsrModeRecoveryReplayCode::kModeRecordMismatch,
-            coordinator.committed().generation.value(),
-            "mixed replay record counter overflowed");
+      if constexpr (incregpusta_debug_checks_enabled)
+        ++evidence.mixed_records_replayed;
     } else {
       return reject(
           evidence,
@@ -241,18 +209,15 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
           DualCsrModeRecoveryReplayCode::kPublishRejected,
           coordinator.committed().generation.value(),
           "recovery replay publish rejected a verified stage");
-    if (!checkedIncrement(evidence.descriptors_replayed))
-      return reject(
-          evidence,
-          DualCsrModeRecoveryReplayCode::kModeRecordMismatch,
-          coordinator.committed().generation.value(),
-          "descriptor replay counter overflowed");
+    if constexpr (incregpusta_debug_checks_enabled)
+      ++evidence.descriptors_replayed;
   }
 
-  evidence.generation_recovered
-      = coordinator.committed().generation.value();
-  evidence.recovery_replay_count = 1;
-  if (!validReplayEvidence(evidence) || (incregpusta_debug_checks_enabled && !(coordinator.committed() == *expected)))
+  if constexpr (incregpusta_debug_checks_enabled) {
+    evidence.generation_recovered = coordinator.committed().generation.value();
+    evidence.recovery_replay_count = 1;
+  }
+  if (coordinator.committed().generation != poisoned_committed.generation || (incregpusta_debug_checks_enabled && !(coordinator.committed() == *expected)))
     return reject(
         evidence,
         DualCsrModeRecoveryReplayCode::kDeterministicMismatch,
@@ -260,9 +225,9 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
         "mode-dispatched replay differs from the typed-rebound deterministic aggregate");
 
   DualCsrModeRecoveryReplayAttempt attempt;
-  attempt.evidence = evidence;
-  attempt.recovery.emplace(DualCsrVerifiedModeRecovery(
-      poisoned_committed, coordinator.committed(), evidence));
+  if constexpr (incregpusta_debug_checks_enabled)
+    attempt.evidence = evidence;
+  attempt.recovery.emplace(DualCsrVerifiedModeRecovery(poisoned_committed, std::move(coordinator._committed)));
   return attempt;
 }
 
@@ -271,12 +236,12 @@ DualCsrTransactionStatus DualCsrTransactionCoordinator::recover(
 {
   if (!_poisoned)
     return reject(DualCsrTransactionCode::kRecoveryNotPoisoned);
-  if (!(verified._expected_poisoned.matches(_committed)) || !validReplayEvidence(verified._evidence))
+  if (!verified._expected_poisoned.matches(_committed))
     return reject(DualCsrTransactionCode::kTraceMismatch);
   if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(verified._state).empty())
     return reject(DualCsrTransactionCode::kInvalidStagedState);
-  if (verified._state.graph.session_token
-      == _committed.graph.session_token)
+  if (verified._state.generation != _committed.generation || verified._state.graph.session_token.value() == 0
+      || verified._state.graph.session_token == _committed.graph.session_token)
     return reject(DualCsrTransactionCode::kTraceMismatch);
 
   if constexpr (incregpusta_debug_checks_enabled) {

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <variant>
 
+#include "../timing_edit/TimingEditSemanticJson.hpp"
 #include "DualCsrReceiptJsonCommon.hpp"
 #include "TimingSemanticKey.hpp"
 
@@ -18,6 +19,11 @@ namespace {
 
 using namespace json_detail;
 
+using timing_edit::test::semantic_json::creationToken;
+using timing_edit::test::semantic_json::stableArc;
+using timing_edit::test::semantic_json::stableNet;
+using timing_edit::test::semantic_json::stableNode;
+
 template <typename... Visitors>
 struct Overloaded : Visitors...
 {
@@ -25,35 +31,6 @@ struct Overloaded : Visitors...
 };
 template <typename... Visitors>
 Overloaded(Visitors...) -> Overloaded<Visitors...>;
-
-Json creationToken(const timing_edit::CreationToken& value)
-{
-  return {{"schema_version", value.schema_version},
-          {"case_id", value.case_id},
-          {"profile_id", value.profile_id},
-          {"seed", value.seed},
-          {"batch_ordinal", value.batch_ordinal},
-          {"accepted_ordinal", value.accepted_ordinal}};
-}
-
-Json tableSignature(const csr::TimingTableSignature& value)
-{
-  return {{"present", value.present},
-          {"variable1", csr::token(value.variable1)},
-          {"variable2", csr::token(value.variable2)}};
-}
-
-Json librarySignature(const csr::LibraryArcSignature& value)
-{
-  return {{"library_name", value.library_name},
-          {"arc_index", value.arc_index},
-          {"sense", csr::token(value.sense)},
-          {"trigger_transition", csr::token(value.trigger_transition)},
-          {"check_transition", csr::token(value.check_transition)},
-          {"sdf_condition", value.sdf_condition},
-          {"delay_tables", arrayOf(value.delay_tables, tableSignature)},
-          {"slew_tables", arrayOf(value.slew_tables, tableSignature)}};
-}
 
 Json fingerprints(const timing_edit::ComponentFingerprints& value)
 {
@@ -413,73 +390,6 @@ std::string_view deactivationReason(LogicalArcDeactivateReason value)
 }
 
 }  // namespace
-
-Json stableNode(const timing_edit::StableNodeRef& value)
-{
-  return std::visit(
-      Overloaded{
-          [](const timing_edit::ExistingNodeRef& item) {
-            return Json{{"kind", "existing"},
-                        {"baseline_key", nodeKey(item.baseline_key)}};
-          },
-          [](const timing_edit::CreatedNodeRef& item) {
-            return Json{{"kind", "created"},
-                        {"creation_token", creationToken(item.creation_token)},
-                        {"role", timing_edit::token(item.role)}};
-          }},
-      value);
-}
-
-Json stableNet(const timing_edit::StableNetRef& value)
-{
-  return std::visit(
-      Overloaded{
-          [](const timing_edit::ExistingNetRef& item) {
-            return Json{{"kind", "existing"},
-                        {"baseline_name", item.baseline_name}};
-          },
-          [](const timing_edit::CreatedNetRef& item) {
-            return Json{{"kind", "created"},
-                        {"creation_token", creationToken(item.creation_token)},
-                        {"role", timing_edit::token(item.role)}};
-          }},
-      value);
-}
-
-Json stableArc(const timing_edit::StableArcRef& value)
-{
-  return std::visit(
-      Overloaded{
-          [](const timing_edit::ExistingArcRef& item) {
-            return Json{{"kind", "existing"},
-                        {"baseline_key", arcKey(item.baseline_key)}};
-          },
-          [](const timing_edit::CreatedCellArcRef& item) {
-            return Json{{"kind", "created_cell"},
-                        {"creation_token", creationToken(item.creation_token)},
-                        {"library_source_port", item.library_source_port},
-                        {"library_sink_port", item.library_sink_port},
-                        {"ordered_library_arcs",
-                         arrayOf(item.ordered_library_arcs, librarySignature)},
-                        {"stable_equivalence_ordinal",
-                         item.stable_equivalence_ordinal}};
-          },
-          [](const timing_edit::CreatedOldNetArcRef& item) {
-            return Json{{"kind", "created_old_net"},
-                        {"net", stableNet(item.net)},
-                        {"driver", stableNode(item.driver)},
-                        {"sink", stableNode(item.sink)},
-                        {"stable_ordinal", item.stable_ordinal}};
-          },
-          [](const timing_edit::CreatedNewNetArcRef& item) {
-            return Json{{"kind", "created_new_net"},
-                        {"creation_token", creationToken(item.creation_token)},
-                        {"driver", stableNode(item.driver)},
-                        {"sink", stableNode(item.sink)},
-                        {"stable_ordinal", item.stable_ordinal}};
-          }},
-      value);
-}
 
 Json resolver(const timing_edit::TimingEditResolverState& value)
 {

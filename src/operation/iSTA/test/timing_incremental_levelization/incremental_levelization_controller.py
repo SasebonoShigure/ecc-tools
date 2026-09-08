@@ -10,7 +10,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
-import time
+from itertools import pairwise
 from typing import Any
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -26,6 +26,7 @@ from dual_csr_trace_controller import (  # noqa: E402
     normalized_source,
     read_json,
     require,
+    run_child,
     validate_fresh,
     validate_targeted,
     write_json,
@@ -43,8 +44,7 @@ from stage6_winner_equivalence import (  # noqa: E402
     compare_timing_with_admissible_winners,
 )
 
-SEPARATED_SCHEMA = "ista-stage6-separated-receipt/1.0.0"
-LEVEL_SCHEMA = "ista-stage6-levelization-receipt/1.0.0"
+WIRE_SCHEMA = "ista-stage6-trace-process/2.0.0"
 LEVEL_FIELDS = {
     "level_offsets", "level_nodes", "node_to_level", "timing_order",
 }
@@ -128,20 +128,14 @@ def validate_offsets(value: object, node_count: int, label: str) -> list[int]:
     else:
         require(len(offsets) >= 2
                 and all(left < right
-                        for left, right in zip(offsets, offsets[1:])),
+                        for left, right in pairwise(offsets)),
                 f"{label} contains an empty or reversed level")
     return offsets
 
 
-def validate_levelization(graph: dict[str, Any], value: object,
-                          generation: int, label: str) -> dict[str, Any]:
-    keys = {"schema", "generation", "complete", "level_offsets",
-            "level_nodes", "node_to_level", "timing_order"}
-    item = exact_object(value, keys, label)
-    require(item["schema"] == LEVEL_SCHEMA
-            and item["generation"] == generation
-            and item["complete"] is True,
-            f"{label} schema/generation/completion differs")
+def validate_levelization(graph: dict[str, Any], timing: dict[str, Any],
+                          label: str) -> dict[str, Any]:
+    item = timing
     graph_nodes = node_keys(graph, f"{label}.graph")
     offsets = validate_offsets(
         item["level_offsets"], len(graph_nodes), f"{label}.level_offsets")
@@ -152,35 +146,26 @@ def validate_levelization(graph: dict[str, Any], value: object,
 
     inverse_raw = item["node_to_level"]
     require(isinstance(inverse_raw, list)
-            and len(inverse_raw) == len(graph_nodes),
-            f"{label}.node_to_level does not cover every NodeKey")
-    inverse: dict[str, int] = {}
-    for index, raw in enumerate(inverse_raw):
-        entry = exact_object(raw, {"node", "level"},
-                             f"{label}.node_to_level[{index}]")
-        encoded = canonical(entry["node"])
-        level = entry["level"]
-        require(encoded not in inverse and type(level) is int
-                and 1 <= level < len(offsets),
-                f"{label}.node_to_level[{index}] is duplicate/out of range")
-        inverse[encoded] = level
-    require(set(inverse) == set(map(canonical, graph_nodes)),
-            f"{label}.node_to_level NodeKey domain differs")
+            and len(inverse_raw) == len(graph_nodes)
+            and all(type(level) is int and 1 <= level < len(offsets)
+                    for level in inverse_raw),
+            f"{label}.node_to_level is malformed or out of range")
+    inverse = dict(zip(map(canonical, graph_nodes), inverse_raw, strict=True))
     for level, (begin, end) in enumerate(
-            zip(offsets, offsets[1:]), start=1):
+            pairwise(offsets), start=1):
         for position in range(begin, end):
             require(inverse[canonical(level_nodes[position])] == level,
                     f"{label}.node_to_level is not the exact inverse")
 
     order_levels = [inverse[canonical(node)] for node in timing_order]
     require(all(left <= right for left, right
-                in zip(order_levels, order_levels[1:])),
+                in pairwise(order_levels)),
             f"{label}.timing_order moves backwards across levels")
     order_counts = [0] * (len(offsets) - 1)
     for level in order_levels:
         order_counts[level - 1] += 1
     expected_counts = [right - left for left, right
-                       in zip(offsets, offsets[1:])]
+                       in pairwise(offsets)]
     require(order_counts == expected_counts,
             f"{label}.timing_order level cardinalities differ")
 
@@ -205,53 +190,19 @@ def validate_levelization(graph: dict[str, Any], value: object,
             "timing_order_levels": order_levels}
 
 
-def validate_separated_receipt(value: object, generation: int,
-                               label: str) -> tuple[dict[str, Any],
-                                                    dict[str, Any]]:
-    item = exact_object(value, {"schema", "functional", "levelization"}, label)
-    require(item["schema"] == SEPARATED_SCHEMA, f"{label}.schema differs")
-    functional = exact_object(item["functional"], {"graph", "timing"},
-                              f"{label}.functional")
-    graph = exact_object(functional["graph"],
+def validate_functional(value: object, label: str
+                        ) -> tuple[dict[str, Any], dict[str, Any]]:
+    full = exact_object(value, {"graph", "timing"}, label)
+    graph = exact_object(full["graph"],
                          {"nodes", "active_arcs", "reference_payload"},
-                         f"{label}.functional.graph")
-    timing = exact_object(functional["timing"], TIMING_VALUE_FIELDS,
-                          f"{label}.functional.timing")
-    require(not LEVEL_FIELDS & set(timing),
-            f"{label}.functional illegally contains level assignments")
-    details = validate_levelization(
-        graph, item["levelization"], generation, f"{label}.levelization")
-    return functional, details
-
-
-def expected_separation(full: dict[str, Any], generation: int) -> dict[str, Any]:
-    functional = copy.deepcopy(full)
-    timing = functional["timing"]
-    graph_nodes = [node["key"] for node in functional["graph"]["nodes"]]
-    levelization = {
-        "schema": LEVEL_SCHEMA,
-        "generation": generation,
-        "complete": True,
-        "level_offsets": timing.pop("level_offsets"),
-        "level_nodes": timing.pop("level_nodes"),
-        "node_to_level": [
-            {"node": node, "level": level}
-            for node, level in zip(graph_nodes,
-                                   timing.pop("node_to_level"), strict=True)
-        ],
-        "timing_order": timing.pop("timing_order"),
-    }
-    return {"schema": SEPARATED_SCHEMA, "functional": functional,
-            "levelization": levelization}
-
-
-def validate_receipt_binding(separated: dict[str, Any],
-                             full: dict[str, Any], generation: int,
-                             label: str) -> None:
-    expected = expected_separation(full, generation)
-    difference = first_exact_difference(separated, expected, label)
-    require(difference is None,
-            f"{label} is not a faithful typed separation: {difference}")
+                         f"{label}.graph")
+    timing = exact_object(full["timing"], TIMING_VALUE_FIELDS | LEVEL_FIELDS,
+                          f"{label}.timing")
+    validate_levelization(graph, timing, f"{label}.timing")
+    # Shallow views: level layout is checked independently of timing values.
+    return ({"graph": graph,
+             "timing": {field: timing[field] for field in TIMING_VALUE_FIELDS}},
+            timing)
 
 
 def semantic_edge_classes(graph: dict[str, Any], n_last: int,
@@ -331,13 +282,11 @@ def validate_mixed_execution(targeted: dict[str, Any], prefix: int,
                              label: str) -> list[dict[str, Any]]:
     transaction = targeted["exact_receipt"]["transaction"]
     records = transaction["execution_trace"]
-    observations = targeted["stage6_observations"]
-    structural_observations = targeted["published_observations"]
+    observations = targeted["published_observations"]
     require(len(records) == prefix == len(observations),
             f"{label} execution/observation cardinality differs")
     bindings = validate_execution_observation_bindings(
-        transaction, observations, structural_observations,
-        first_exact_difference, require, label)
+        transaction, observations, first_exact_difference, require, label)
     evidence: list[dict[str, Any]] = []
     for index, record in enumerate(records):
         mixed = record["mixed"]
@@ -375,7 +324,7 @@ def validate_mixed_execution(targeted: dict[str, Any], prefix: int,
             require(len(keys) == mixed[category],
                     f"{label}.generation[{index + 1}] {category} count differs")
         aux = semantic_aux_keys(
-            structural_observations[index]["structural"], graph,
+            observations[index]["structural"], graph,
             f"{label}.generation[{index + 1}].aux")
         require(len(aux) == mixed["aux_out"],
                 f"{label}.generation[{index + 1}] Aux visits differ by ArcKey")
@@ -398,58 +347,25 @@ def validate_mixed_execution(targeted: dict[str, Any], prefix: int,
     return evidence
 
 
-def run_child(probe: pathlib.Path, role: str, trace: pathlib.Path, prefix: int,
-              output: pathlib.Path, timeout: int) -> tuple[dict[str, Any], float]:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    command = [str(probe), role, "--trace", str(trace), "--prefix", str(prefix),
-               "--output", str(output)]
-    started = time.perf_counter()
-    completed = subprocess.run(
-        command, cwd=trace.parent.parent, check=False, capture_output=True,
-        text=True, timeout=timeout,
-    )
-    output.with_suffix(".stdout.txt").write_text(
-        completed.stdout, encoding="utf-8")
-    output.with_suffix(".stderr.txt").write_text(
-        completed.stderr, encoding="utf-8")
-    require(completed.returncode == 0,
-            f"{' '.join(command)} failed ({completed.returncode}): "
-            f"{completed.stderr.strip()}")
-    return read_json(output), (time.perf_counter() - started) * 1000.0
-
-
 def validate_stage6_targeted(value: dict[str, Any], prefix: int,
                              batches: list[dict[str, Any]], label: str
                              ) -> tuple[dict[str, Any], list[dict[str, Any]],
-                                        list[dict[str, Any]],
-                                        dict[str, Any]]:
+                                        list[dict[str, Any]], dict[str, Any]]:
     _, timings, resources = validate_targeted(
-        value, prefix, batches, label)
+        value, prefix, batches, label, wire_schema=WIRE_SCHEMA)
     validate_exact_semantic_trace(
         value, batches, first_exact_difference, require, label)
-    receipts = value.get("stage6_observations")
-    full = value["published_observations"]
-    require(isinstance(receipts, list) and len(receipts) == prefix,
-            f"{label}.stage6_observations cardinality differs")
-    functional: dict[str, Any] = {}
-    for index, receipt in enumerate(receipts):
-        functional, _ = validate_separated_receipt(
-            receipt, index + 1, f"{label}.stage6_observations[{index}]")
-        validate_receipt_binding(
-            receipt, full[index]["functional"], index + 1,
-            f"{label}.stage6_observations[{index}]")
-    return functional, timings, resources, receipts[-1]["levelization"]
+    for index, observation in enumerate(value["published_observations"]):
+        functional, levels = validate_functional(
+            observation["functional"],
+            f"{label}.published_observations[{index}].functional")
+    return functional, timings, resources, levels
 
 
 def validate_stage6_fresh(value: dict[str, Any], prefix: int,
                           label: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    full = validate_fresh(value, prefix, label)
-    receipt = value.get("stage6_receipt")
-    functional, _ = validate_separated_receipt(
-        receipt, prefix, f"{label}.stage6_receipt")
-    validate_receipt_binding(receipt, full, prefix,
-                             f"{label}.stage6_receipt")
-    return functional, receipt["levelization"]
+    full = validate_fresh(value, prefix, label, wire_schema=WIRE_SCHEMA)
+    return validate_functional(full, f"{label}.functional")
 
 
 def compare_functional(targeted: dict[str, Any], fresh: dict[str, Any],
@@ -465,11 +381,7 @@ def compare_functional(targeted: dict[str, Any], fresh: dict[str, Any],
 
 def level_assignments_differ(targeted: dict[str, Any],
                              fresh: dict[str, Any]) -> bool:
-    def signature(value: dict[str, Any]) -> list[tuple[str, int]]:
-        return sorted((canonical(entry["node"]), entry["level"])
-                      for entry in value["node_to_level"])
-
-    return signature(targeted) != signature(fresh)
+    return targeted["node_to_level"] != fresh["node_to_level"]
 
 
 def replay(args: argparse.Namespace) -> None:
@@ -519,7 +431,7 @@ def replay(args: argparse.Namespace) -> None:
         require(len(pids) == 2 and not pids & all_pids,
                 f"prefix {prefix} did not use two new isolated processes")
         all_pids |= pids
-        observations = targeted["stage6_observations"]
+        observations = targeted["published_observations"]
         for index, prior in enumerate(prior_observations):
             difference = first_exact_difference(observations[index], prior)
             require(difference is None,
@@ -553,7 +465,7 @@ def replay(args: argparse.Namespace) -> None:
             "batch_resource_observations": resources,
         })
     write_json(root / "controller-summary.json", {
-        "schema_version": "ista-stage6-differential-verdict/1.0.0",
+        "schema_version": "ista-stage6-differential-verdict/2.0.0",
         "trace": str(trace),
         "controller_pid": os.getpid(),
         "all_process_ids_distinct": True,
@@ -578,20 +490,15 @@ def canary_receipt(level_offsets: list[int], level_nodes: list[dict[str, str]],
              "reference_payload": {}}
     timing = {field: {} for field in TIMING_VALUE_FIELDS}
     timing["schema_version"] = "canary"
-    return {"schema": SEPARATED_SCHEMA,
-            "functional": {"graph": graph, "timing": timing},
-            "levelization": {
-                "schema": LEVEL_SCHEMA, "generation": 1, "complete": True,
-                "level_offsets": level_offsets, "level_nodes": level_nodes,
-                "node_to_level": [
-                    {"node": key, "level": level}
-                    for key, level in zip(keys, inverse, strict=True)],
-                "timing_order": timing_order}}
+    timing.update({
+        "level_offsets": level_offsets, "level_nodes": level_nodes,
+        "node_to_level": inverse, "timing_order": timing_order})
+    return {"graph": graph, "timing": timing}
 
 
 def expect_rejected(value: dict[str, Any], label: str) -> None:
     try:
-        validate_separated_receipt(value, 1, label)
+        validate_functional(value, label)
     except ControllerError:
         return
     raise ControllerError(f"{label} canary was accepted")
@@ -603,29 +510,29 @@ def self_test() -> None:
             for name in ("a", "b", "c")]
     compact = canary_receipt([0, 2, 3], keys, [1, 1, 2], keys)
     noncompact = canary_receipt([0, 1, 2, 3], keys, [1, 2, 3], keys)
-    left, _ = validate_separated_receipt(compact, 1, "compact")
-    right, _ = validate_separated_receipt(noncompact, 1, "noncompact")
+    left, _ = validate_functional(compact, "compact")
+    right, _ = validate_functional(noncompact, "noncompact")
     require(first_exact_difference(left, right) is None,
             "different legal levels changed Stage 6 functional equality")
-    require(level_assignments_differ(compact["levelization"],
-                                     noncompact["levelization"])
-            and not level_assignments_differ(compact["levelization"],
-                                             compact["levelization"]),
+    require(level_assignments_differ(compact["timing"],
+                                     noncompact["timing"])
+            and not level_assignments_differ(compact["timing"],
+                                             compact["timing"]),
             "legal_noncompact report-only comparison differs")
     same_level_order = copy.deepcopy(compact)
-    same_level_order["levelization"]["timing_order"] = [keys[1], keys[0], keys[2]]
-    validate_separated_receipt(same_level_order, 1, "same-level-order")
+    same_level_order["timing"]["timing_order"] = [keys[1], keys[0], keys[2]]
+    validate_functional(same_level_order, "same-level-order")
     missing = copy.deepcopy(compact)
-    missing["levelization"]["level_nodes"].pop()
+    missing["timing"]["level_nodes"].pop()
     expect_rejected(missing, "missing-node")
     inverse = copy.deepcopy(compact)
-    inverse["levelization"]["node_to_level"][2]["level"] = 1
+    inverse["timing"]["node_to_level"][2] = 1
     expect_rejected(inverse, "inverse")
     order = copy.deepcopy(compact)
-    order["levelization"]["timing_order"][2] = {"unknown": "node"}
+    order["timing"]["timing_order"][2] = {"unknown": "node"}
     expect_rejected(order, "timing-order")
     reverse = copy.deepcopy(compact)
-    reverse["levelization"]["timing_order"] = [keys[2], keys[0], keys[1]]
+    reverse["timing"]["timing_order"] = [keys[2], keys[0], keys[1]]
     expect_rejected(reverse, "timing-order-reverse")
     edge = canary_receipt([0, 1, 2, 3], [keys[2], keys[1], keys[0]],
                           [3, 2, 1], keys)

@@ -24,46 +24,6 @@ Json number(double value)
           {"negative_zero", value == 0.0 && std::signbit(value)}};
 }
 
-Json nodeKey(const csr::NodeKey& value)
-{
-  return {{"kind", csr::token(value.kind)},
-          {"full_name", value.full_name},
-          {"instance_name", value.instance_name},
-          {"pin_name", value.pin_name}};
-}
-
-Json tableSignature(const csr::TimingTableSignature& value)
-{
-  return {{"present", value.present},
-          {"variable1", csr::token(value.variable1)},
-          {"variable2", csr::token(value.variable2)}};
-}
-
-Json librarySignature(const csr::LibraryArcSignature& value)
-{
-  return {{"library_name", value.library_name},
-          {"arc_index", value.arc_index},
-          {"sense", csr::token(value.sense)},
-          {"trigger_transition", csr::token(value.trigger_transition)},
-          {"check_transition", csr::token(value.check_transition)},
-          {"sdf_condition", value.sdf_condition},
-          {"delay_tables", arrayOf(value.delay_tables, tableSignature)},
-          {"slew_tables", arrayOf(value.slew_tables, tableSignature)}};
-}
-
-Json arcKey(const csr::ArcKey& value)
-{
-  return {{"source", nodeKey(value.base.source)},
-          {"sink", nodeKey(value.base.sink)},
-          {"kind", csr::token(value.base.kind)},
-          {"owner_name", value.base.owner_name},
-          {"library_source_port", value.base.library_source_port},
-          {"library_sink_port", value.base.library_sink_port},
-          {"library_arcs", arrayOf(value.base.library_arcs,
-                                    librarySignature)},
-          {"parallel_ordinal", value.parallel_ordinal}};
-}
-
 Json laneMatrix(const csr::OptionalLaneMatrix& value)
 {
   return arrayOf(value, [](const auto& analysis) {

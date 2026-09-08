@@ -6,11 +6,9 @@
 // ***************************************************************************************
 #include "DualCsrTransactionCoordinator.hpp"
 
-#include <array>
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -120,27 +118,6 @@ DualCsrVerifiedStage verifiedStage(
               && !trace.front().mixed().has_value(),
           "Stage 5 full factory did not seal a real full execution record");
   return std::move(*attempt.staged);
-}
-
-CommittedDualCsrAnalysisState freshEquivalent(
-    const CommittedDualCsrAnalysisState& committed,
-    std::uint64_t session)
-{
-  auto rebind = rebindRecoveredAggregateSession(
-      committed, committed.graph.session_token,
-      timing_edit::TimingEditSessionToken{session});
-  require(rebind.success(),
-          "typed recovery aggregate rebind was rejected");
-  CommittedDualCsrAnalysisState rebuilt
-      = std::move(*rebind.rebound);
-  ++rebuilt.graph.telemetry.full_rebuild_count;
-  const auto violations = validateCommittedDualCsrAnalysisState(rebuilt);
-  require(violations.empty(),
-          "fresh equivalent aggregate was invalid"
-              + (violations.empty()
-                     ? std::string{}
-                     : ": " + violations.front().field));
-  return rebuilt;
 }
 
 DualCsrTransactionEvidence successfulEvidence(
@@ -301,12 +278,9 @@ void mixedFactoryAndAtomicityContracts()
     auto attempt = makeMixedLevelizedDualCsrAnalysisState(
         malformed, std::move(verified));
     const auto* failure = std::get_if<DualCsrStageFailure>(&attempt);
-    require(failure != nullptr
-                && failure->origin
-                       == DualCsrStageFailureOrigin::kExactBefore
-                && !failure->violations.empty()
-                && malformed == before,
-            "malformed exact-before was erased into a mixed failure or mutated");
+    require(failure != nullptr && failure->origin == DualCsrStageFailureOrigin::kCapability && !failure->violations.empty()
+                && failure->violations.front().code == DualCsrViolationCode::kGeneration && malformed == before,
+            "malformed generation bypassed the capability boundary or mutated input");
     require(session.closeAndRelease().ok(),
             "mixed typed-failure session close failed");
   }
@@ -383,20 +357,16 @@ void mixedFactoryFailureInputContracts()
     auto injected_descriptor = verified.descriptor();
     DualCsrStageFactoryFaultAdapter::corruptIndexDelta(
         injected_descriptor);
-    const auto expected = validateDualCsrArcGroupIndexDelta(
-        initial.graph, initial.arc_group_index, injected_descriptor);
-    require(!expected.empty(),
-            "wrong-index input did not fail the real delta validator");
+    const auto expected_attempt = DualCsrUpdater::stage(initial.graph, initial.arc_group_index, injected_descriptor);
+    require(!expected_attempt.success() && !expected_attempt.violations.empty(), "wrong-index input did not fail the real updater/index boundary");
     DualCsrStageFactoryFaultAdapter::corruptIndexDelta(verified);
     const auto before = initial;
     auto attempt = makeMixedLevelizedDualCsrAnalysisState(
         initial, std::move(verified));
     const auto* failure = std::get_if<DualCsrStageFailure>(&attempt);
-    require(failure != nullptr
-                && failure->origin
-                       == DualCsrStageFailureOrigin::kIndexDelta
-                && failure->violations == expected && initial == before,
-            "wrong-index failure was erased, changed, or mutated committed");
+    require(
+        failure != nullptr && failure->origin == DualCsrStageFailureOrigin::kUpdater && failure->violations == expected_attempt.violations && initial == before,
+        "wrong-index failure was erased, changed, or mutated committed");
     require(session.closeAndRelease().ok(),
             "wrong-index session close failed");
   }
@@ -490,88 +460,6 @@ void mixedFactoryFailureInputContracts()
     require(session.closeAndRelease().ok(),
             "intrinsic timing session close failed");
   }
-}
-
-void recoveryContracts()
-{
-  timing_edit::test::installNativeTransactionBaseline();
-  timing_edit::test::GuardedTestSession session;
-  const StructuredFixture fixture
-      = structured_support::makeStructuredFixture(
-          STADM.getDatabase(), session.token());
-  const auto initial = initialAggregate(fixture);
-  DualCsrTransactionCoordinator coordinator(initial);
-  const auto poisoned = coordinator.publish(
-      verifiedStage(session, fixture, initial),
-      DualCsrPublishFailpoint::kAfterSwap);
-  require(poisoned.poisoned, "recovery fixture did not poison");
-
-  const auto poisoned_state = coordinator.committed();
-  const auto clean_rebuilt = freshEquivalent(
-      poisoned_state, session.token().value() + 1000);
-  using TelemetryCounter = std::uint64_t DualCsrTelemetry::*;
-  const std::array<TelemetryCounter, 17> non_rebuild_counters{
-      &DualCsrTelemetry::generation_before,
-      &DualCsrTelemetry::generation_after,
-      &DualCsrTelemetry::logical_edges_before,
-      &DualCsrTelemetry::logical_edges_after,
-      &DualCsrTelemetry::base_physical_edges,
-      &DualCsrTelemetry::base_active_edges,
-      &DualCsrTelemetry::base_tombstones,
-      &DualCsrTelemetry::aux_rows,
-      &DualCsrTelemetry::aux_edges,
-      &DualCsrTelemetry::tombstone_reuse_count,
-      &DualCsrTelemetry::base_change_count,
-      &DualCsrTelemetry::reverse_change_count,
-      &DualCsrTelemetry::nodes_appended,
-      &DualCsrTelemetry::arcs_appended,
-      &DualCsrTelemetry::payload_change_count,
-      &DualCsrTelemetry::aux_rebuild_count,
-      &DualCsrTelemetry::fallback_count};
-  for (const TelemetryCounter counter : non_rebuild_counters) {
-    auto forged = clean_rebuilt;
-    ++(forged.graph.telemetry.*counter);
-    require(!makeDualCsrVerifiedRecovery(
-                 poisoned_state, std::move(forged))
-                 .success(),
-            "recovery accepted a changed non-rebuild telemetry counter");
-  }
-  auto forged_capacity = clean_rebuilt;
-  forged_capacity.graph.telemetry.capacity_grow_events.push_back({});
-  require(!makeDualCsrVerifiedRecovery(
-               poisoned_state, std::move(forged_capacity))
-               .success(),
-          "recovery accepted changed capacity-grow telemetry");
-  auto forged_traversal = clean_rebuilt;
-  ++forged_traversal.graph.telemetry.traversal.levelization.base_out;
-  require(!makeDualCsrVerifiedRecovery(
-               poisoned_state, std::move(forged_traversal))
-               .success(),
-          "recovery accepted changed graph traversal telemetry");
-  auto double_rebuild = clean_rebuilt;
-  ++double_rebuild.graph.telemetry.full_rebuild_count;
-  require(!makeDualCsrVerifiedRecovery(
-               poisoned_state, std::move(double_rebuild))
-               .success(),
-          "recovery accepted a full-rebuild increment other than one");
-  auto overflow_poisoned = poisoned_state;
-  overflow_poisoned.graph.telemetry.full_rebuild_count
-      = std::numeric_limits<std::uint64_t>::max();
-  auto wrapped_rebuilt = freshEquivalent(
-      overflow_poisoned, session.token().value() + 2000);
-  require(!makeDualCsrVerifiedRecovery(
-               overflow_poisoned, std::move(wrapped_rebuilt))
-               .success(),
-          "recovery accepted a wrapped full-rebuild counter");
-
-  auto clone_rebind_bypass = freshEquivalent(
-      coordinator.committed(), session.token().value() + 3000);
-  const auto bypass = makeDualCsrVerifiedRecovery(
-      coordinator.committed(), std::move(clone_rebind_bypass));
-  require(!bypass.success() && coordinator.poisoned(),
-          "legacy clone/rebind recovery bypassed persisted mode replay");
-  require(session.closeAndRelease().ok(),
-          "transaction recovery session close failed");
 }
 
 void splitReceiptContracts()
@@ -671,7 +559,6 @@ int main()
     ista::timing_dual_csr::test::verifiedCapabilityAndPublishContracts();
     ista::timing_dual_csr::test::mixedFactoryAndAtomicityContracts();
     ista::timing_dual_csr::test::mixedFactoryFailureInputContracts();
-    ista::timing_dual_csr::test::recoveryContracts();
     ista::timing_dual_csr::test::splitReceiptContracts();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

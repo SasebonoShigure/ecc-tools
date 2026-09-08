@@ -9,6 +9,7 @@
 #include <optional>
 #include <vector>
 
+#include "../timing_edit/TimingEditSemanticJson.hpp"
 #include "DualCsrFunctionalProjection.hpp"
 #include "json.hpp"
 
@@ -16,14 +17,11 @@ namespace ista::timing_dual_csr::test::json_detail {
 
 using Json = nlohmann::json;
 
-template <typename Range, typename Convert>
-Json arrayOf(const Range& values, Convert convert)
-{
-  Json result = Json::array();
-  for (const auto& value : values)
-    result.push_back(convert(value));
-  return result;
-}
+using timing_edit::test::semantic_json::arcKey;
+using timing_edit::test::semantic_json::arrayOf;
+using timing_edit::test::semantic_json::librarySignature;
+using timing_edit::test::semantic_json::nodeKey;
+using timing_edit::test::semantic_json::tableSignature;
 
 template <typename Range>
 Json scalarArray(const Range& values)
@@ -45,8 +43,6 @@ Json optionalSoa(const csr::OptionalSoa<T>& value, Convert convert)
 }
 
 [[nodiscard]] Json number(double value);
-[[nodiscard]] Json nodeKey(const csr::NodeKey& value);
-[[nodiscard]] Json arcKey(const csr::ArcKey& value);
 [[nodiscard]] Json laneMatrix(const csr::OptionalLaneMatrix& value);
 [[nodiscard]] Json loadMatrix(const csr::ArcOutputLoadMatrix& value);
 [[nodiscard]] Json transfer(const csr::CellTransferModel& value);

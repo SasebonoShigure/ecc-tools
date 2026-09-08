@@ -11,12 +11,6 @@
 
 namespace ista::timing_dual_csr::test::semantic_json {
 
-[[nodiscard]] nlohmann::json stableNode(
-    const timing_edit::StableNodeRef& value);
-[[nodiscard]] nlohmann::json stableNet(
-    const timing_edit::StableNetRef& value);
-[[nodiscard]] nlohmann::json stableArc(
-    const timing_edit::StableArcRef& value);
 [[nodiscard]] nlohmann::json resolver(
     const timing_edit::TimingEditResolverState& value);
 [[nodiscard]] nlohmann::json identity(

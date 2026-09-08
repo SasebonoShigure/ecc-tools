@@ -15,8 +15,8 @@
 #include <utility>
 #include <variant>
 
-#include "CsrCpuReferenceBackend.hpp"
 #include "../CsrCpuReferenceTestFixture.hpp"
+#include "CsrCpuReferenceBackendInternal.hpp"
 #include "CsrFifoLevelizationValidation.hpp"
 #include "FlatCsrEdgeView.hpp"
 #include "FlatTimingPayloadView.hpp"
@@ -96,6 +96,11 @@ void runExternalLevelBackendContracts()
   requireCpuReference(external.phase_timings.levelization_ms == 0.0, "external-level backend reported levelization time");
   requireCpuReference(external.telemetry.levelization == CsrStageStorageVisits{}, "external-level backend forged FIFO traversal telemetry");
   requireExactComputationResult(external.computation, full.computation, "external levels versus full backend");
+
+  const auto controlled_full = csr::detail::computeCsrCpuReferenceForStage(edges, payloads);
+  const auto controlled_levels = csr::detail::propagateCsrCpuReferenceWithLevels(edges, payloads, supplied);
+  requireExactComputationResult(controlled_full.computation, full.computation, "controlled full versus public backend");
+  requireExactComputationResult(controlled_levels.computation, external.computation, "controlled levels versus public backend");
 
   CsrFifoLevelization embedded_error = supplied;
   embedded_error.view_error = CsrViewError::kCallbackError;

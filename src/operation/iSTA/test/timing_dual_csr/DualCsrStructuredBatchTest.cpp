@@ -117,11 +117,6 @@ void requireCapturePlan(const PendingStructuredBatch& pending)
 {
   require(!pending.preparedBatch().sealed(),
           "structured preparer sealed the Stage-3 batch");
-  require(pending.expectedBefore().graphValueCopyCount() == 1
-              && pending.expectedBefore().graphValueCopyMinimumBytes()
-                     >= sizeof(DualCsrState),
-          "expected-before graph value copy is not reported");
-
   const auto& plan = pending.capturePlan();
   const auto& staged = pending.stagedResolver();
   std::uint64_t deactivations = 0;
@@ -428,10 +423,11 @@ void requireVerifiedDescriptor(const StructuredFixture& fixture,
   const auto& before = fixture.graph;
   require(!verified.preparedBatch().sealed()
               && verified.expectedBefore().graph() == before
-              && verified.expectedBefore().resolver() == fixture.resolver
               && verified.expectedBefore().arcGroupIndex()
                      == fixture.arc_group_index,
           "verified capability lost its exact-before binding");
+  if constexpr (incregpusta_debug_checks_enabled)
+    require(verified.expectedBefore().resolver() == fixture.resolver, "verified capability lost its diagnostic resolver binding");
   require(descriptor.node_appends.size() == 2
               && descriptor.arc_appends.size() == 4
               && descriptor.node_payload_changes.size() == 2

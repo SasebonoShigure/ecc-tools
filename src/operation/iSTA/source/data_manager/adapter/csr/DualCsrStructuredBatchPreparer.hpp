@@ -7,22 +7,21 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 
 #include "AffectedCapturePlan.hpp"
 #include "DualCsrArcGroupIndex.hpp"
 #include "DualSemanticReadView.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "TimingEditResolver.hpp"
 
 namespace ista::timing_dual_csr {
 
 class TimingEditDualCsrDescriptorBuilder;
 
-// A DB-free, field-for-field binding of the committed values used while a
-// native candidate is detached. It deliberately contains neither a nonce nor
-// a digest: a later transaction can compare the graph, resolver, and semantic
-// identity directly without introducing a dependency on the transaction
-// aggregate into the native adapter.
+// Own the graph and index needed to build the detached candidate descriptor.
+// Resolver and identity copies serve only the diagnostic exact-before proof.
 class ExpectedBeforeBinding final
 {
  public:
@@ -30,53 +29,31 @@ class ExpectedBeforeBinding final
   {
     return _graph;
   }
-  [[nodiscard]] const timing_edit::TimingEditResolverState& resolver()
-      const noexcept
-  {
-    return _resolver;
-  }
-  [[nodiscard]] const timing_edit::CommittedEditIdentity& identity()
-      const noexcept
-  {
-    return _identity;
-  }
+  [[nodiscard]] const timing_edit::TimingEditResolverState& resolver() const { return _resolver.value(); }
+  [[nodiscard]] const timing_edit::CommittedEditIdentity& identity() const { return _identity.value(); }
   [[nodiscard]] const DualCsrArcGroupIndex& arcGroupIndex()
       const noexcept
   {
     return _arc_group_index;
   }
-  [[nodiscard]] std::uint64_t graphValueCopyCount() const noexcept
-  {
-    return 1;
-  }
-  [[nodiscard]] std::uint64_t graphValueCopyMinimumBytes() const noexcept
-  {
-    return _graph_value_copy_minimum_bytes;
-  }
-
   friend bool operator==(const ExpectedBeforeBinding&,
                          const ExpectedBeforeBinding&) = default;
 
  private:
-  ExpectedBeforeBinding(
-      DualCsrState graph,
-      timing_edit::TimingEditResolverState resolver,
-      timing_edit::CommittedEditIdentity identity,
-      DualCsrArcGroupIndex arc_group_index,
-      std::uint64_t graph_value_copy_minimum_bytes)
-      : _graph(std::move(graph)),
-        _resolver(std::move(resolver)),
-        _identity(std::move(identity)),
-        _arc_group_index(std::move(arc_group_index)),
-        _graph_value_copy_minimum_bytes(graph_value_copy_minimum_bytes)
+  ExpectedBeforeBinding(DualCsrState graph, const timing_edit::TimingEditResolverState& resolver, const timing_edit::CommittedEditIdentity& identity,
+                        DualCsrArcGroupIndex arc_group_index)
+      : _graph(std::move(graph)), _arc_group_index(std::move(arc_group_index))
   {
+    if constexpr (incregpusta_debug_checks_enabled) {
+      _resolver.emplace(resolver);
+      _identity.emplace(identity);
+    }
   }
 
   DualCsrState _graph;
-  timing_edit::TimingEditResolverState _resolver;
-  timing_edit::CommittedEditIdentity _identity;
+  std::optional<timing_edit::TimingEditResolverState> _resolver;
+  std::optional<timing_edit::CommittedEditIdentity> _identity;
   DualCsrArcGroupIndex _arc_group_index;
-  std::uint64_t _graph_value_copy_minimum_bytes{0};
 
   friend class DualCsrStructuredBatchPreparer;
 };

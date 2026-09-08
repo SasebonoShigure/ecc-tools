@@ -112,22 +112,15 @@ class DualCsrVerifiedModeRecovery final
   {
     return _state;
   }
-  [[nodiscard]] const DualCsrModeRecoveryReplayEvidence& evidence()
-      const noexcept
-  {
-    return _evidence;
-  }
 
  private:
-  DualCsrVerifiedModeRecovery(const CommittedDualCsrAnalysisState& expected_poisoned, CommittedDualCsrAnalysisState state,
-                              DualCsrModeRecoveryReplayEvidence evidence)
-      : _expected_poisoned(expected_poisoned), _state(std::move(state)), _evidence(evidence)
+  DualCsrVerifiedModeRecovery(const CommittedDualCsrAnalysisState& expected_poisoned, CommittedDualCsrAnalysisState state)
+      : _expected_poisoned(expected_poisoned), _state(std::move(state))
   {
   }
 
   DualCsrCommitBinding _expected_poisoned;
   CommittedDualCsrAnalysisState _state;
-  DualCsrModeRecoveryReplayEvidence _evidence;
 
   friend DualCsrModeRecoveryReplayAttempt
   replayDualCsrModesForRecovery(
@@ -141,7 +134,8 @@ struct DualCsrModeRecoveryReplayAttempt
 {
   std::optional<DualCsrVerifiedModeRecovery> recovery;
   std::optional<DualCsrModeRecoveryReplayFailure> failure;
-  DualCsrModeRecoveryReplayEvidence evidence;
+  // Absent when diagnostic checks were not executed. Never grants commit authority.
+  std::optional<DualCsrModeRecoveryReplayEvidence> evidence;
 
   [[nodiscard]] bool success() const noexcept
   {

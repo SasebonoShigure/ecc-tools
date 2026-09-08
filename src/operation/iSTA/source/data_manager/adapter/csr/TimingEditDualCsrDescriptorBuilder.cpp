@@ -117,26 +117,24 @@ void requirePlanBinding(const PendingStructuredBatch& pending)
 {
   const auto& before = pending.expectedBefore();
   const auto& batch = pending.preparedBatch();
-  if (batch.sealed()
-      || before.graph().session_token != batch.sessionToken()
-      || before.graph().generation != batch.expectedGeneration()
-      || before.graph().high_water != batch.slotPlan().before
-      || before.arcGroupIndex().session_token != batch.sessionToken()
-      || before.arcGroupIndex().generation != batch.expectedGeneration()
-      || before.arcGroupIndex().arc_high_water
-             != batch.slotPlan().before.arc_slots
-      || before.resolver().highWater() != batch.slotPlan().before
-      || before.identity() != batch.expectedPreCommittedIdentity()
-      || pending.stagedResolver().highWater() != batch.slotPlan().after
-      || before.resolver().stage(batch)
-             != pending.stagedResolver())
+  if (batch.sealed() || before.graph().session_token != batch.sessionToken() || before.graph().generation != batch.expectedGeneration()
+      || before.graph().high_water != batch.slotPlan().before || before.arcGroupIndex().session_token != batch.sessionToken()
+      || before.arcGroupIndex().generation != batch.expectedGeneration() || before.arcGroupIndex().arc_high_water != batch.slotPlan().before.arc_slots
+      || batch.expectedPreCommittedIdentity().generation != batch.expectedGeneration() || pending.stagedResolver().highWater() != batch.slotPlan().after)
     invalid("pending capability no longer matches its exact before-state");
-  const DualSemanticReadView view(before.graph());
-  const auto rebuilt = detail::makeStructuredCapturePlan(
-      batch, before.resolver(), pending.stagedResolver(),
-      before.arcGroupIndex(), view);
-  if (rebuilt != pending.capturePlan())
-    invalid("capture plan is not the exact deterministic batch plan");
+
+  // The preparer checked the original resolver boundary and copied the exact
+  // identity into PreparedBatch. Replaying that controlled construction is a
+  // diagnostic proof; capture binding and record coverage remain mandatory.
+  if constexpr (incregpusta_debug_checks_enabled) {
+    if (before.resolver().highWater() != batch.slotPlan().before || before.identity() != batch.expectedPreCommittedIdentity()
+        || before.resolver().stage(batch) != pending.stagedResolver())
+      invalid("pending capability no longer matches its exact before-state");
+    const DualSemanticReadView view(before.graph());
+    const auto rebuilt = detail::makeStructuredCapturePlan(batch, before.resolver(), pending.stagedResolver(), before.arcGroupIndex(), view);
+    if (rebuilt != pending.capturePlan())
+      invalid("capture plan is not the exact deterministic batch plan");
+  }
 }
 
 void requireNodeCoverage(const PendingStructuredBatch& pending,

@@ -11,12 +11,15 @@ import subprocess
 import sys
 import tempfile
 import time
+from itertools import pairwise
 from typing import Any
 
 from dual_csr_arc_group_validator import validate_arc_group_index
 from dual_csr_timing_evidence import (
-    duration_ms, validate_batch_phase_timings,
-    validate_resource_observations)
+    duration_ms,
+    validate_batch_phase_timings,
+    validate_resource_observations,
+)
 from dual_csr_trace_controller_selftest import run_controller_self_test
 from dual_csr_transaction_validator import validate_transaction as validate_full_transaction
 
@@ -30,7 +33,7 @@ class ControllerError(RuntimeError):
     pass
 
 
-def require(condition: bool, message: str) -> None:
+def require(condition: bool, message: str) -> None:  # noqa: FBT001
     if not condition:
         raise ControllerError(message)
 
@@ -108,7 +111,7 @@ def validate_offsets(offsets: object, rows: int, entries: int, label: str) -> No
             f"{label} endpoints differ")
     require(all(isinstance(item, int) and item >= 0 for item in offsets),
             f"{label} contains a non-index")
-    require(all(left <= right for left, right in zip(offsets, offsets[1:])),
+    require(all(left <= right for left, right in pairwise(offsets)),
             f"{label} is not monotonic")
 
 
@@ -259,8 +262,9 @@ def normalized_source(value: object, label: str) -> dict[str, Any]:
     return result
 
 
-def validate_fresh(value: dict[str, Any], prefix: int, label: str) -> dict[str, Any]:
-    require(value.get("schema_version") == WIRE_SCHEMA
+def validate_fresh(value: dict[str, Any], prefix: int, label: str,
+                   *, wire_schema: str = WIRE_SCHEMA) -> dict[str, Any]:
+    require(value.get("schema_version") == wire_schema
             and value.get("role") == "fresh-oracle"
             and value.get("prefix_batches") == prefix,
             f"{label} envelope differs")
@@ -278,9 +282,10 @@ def validate_fresh(value: dict[str, Any], prefix: int, label: str) -> dict[str, 
 
 def validate_targeted(value: dict[str, Any], prefix: int,
                       expected_batches: list[dict[str, Any]],
-                      label: str) -> tuple[dict[str, Any], list[dict[str, Any]],
-                                           list[dict[str, Any]]]:
-    require(value.get("schema_version") == WIRE_SCHEMA
+                      label: str, *, wire_schema: str = WIRE_SCHEMA
+                      ) -> tuple[dict[str, Any], list[dict[str, Any]],
+                                 list[dict[str, Any]]]:
+    require(value.get("schema_version") == wire_schema
             and value.get("role") == "targeted-under-test"
             and value.get("prefix_batches") == prefix,
             f"{label} envelope differs")
@@ -349,7 +354,8 @@ def run_child(probe: pathlib.Path, role: str, trace: pathlib.Path, prefix: int,
     output.with_suffix(".stderr.txt").write_text(
         completed.stderr, encoding="utf-8")
     require(completed.returncode == 0,
-            f"{' '.join(command)} failed ({completed.returncode})")
+            f"{' '.join(command)} failed ({completed.returncode}): "
+            f"{completed.stderr.strip()}")
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     return read_json(output), elapsed_ms
 

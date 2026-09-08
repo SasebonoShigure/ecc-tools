@@ -89,22 +89,4 @@ void requireStructuredSelectedBefore(
   }
 }
 
-std::uint64_t structuredGraphValueCopyMinimumBytes(
-    const DualCsrState& graph) noexcept
-{
-  return sizeof(graph)
-         + graph.nodes.size() * sizeof(csr::NodeRecord)
-         + graph.arc_slots.size() * sizeof(DualCsrArcSlot)
-         + graph.base_out.row_offsets.size() * sizeof(std::uint64_t)
-         + graph.base_out.physical_slots.size()
-               * sizeof(std::optional<csr::ArcId>)
-         + graph.base_in.row_offsets.size() * sizeof(std::uint64_t)
-         + graph.base_in.physical_slots.size()
-               * sizeof(std::optional<csr::ArcId>)
-         + graph.aux_out.row_offsets.size() * sizeof(std::uint64_t)
-         + graph.aux_out.row_sources.size() * sizeof(csr::NodeId)
-         + graph.aux_out.arc_ids.size() * sizeof(csr::ArcId)
-         + graph.aux_out.source_to_aux_row.size() * sizeof(std::int64_t);
-}
-
 }  // namespace ista::timing_dual_csr::detail

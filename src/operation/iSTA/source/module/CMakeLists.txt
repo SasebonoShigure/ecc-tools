@@ -1,4 +1,7 @@
 add_subdirectory(${ISTA_MODULE}/timing_csr)
+if(ISTA_ENABLE_CUDA)
+    add_subdirectory(${ISTA_MODULE}/timing_cuda)
+endif()
 add_subdirectory(${ISTA_MODULE}/timing_csr_snapshot)
 add_subdirectory(${ISTA_MODULE}/timing_edit_contract)
 add_subdirectory(${ISTA_MODULE}/timing_incremental_levelization)

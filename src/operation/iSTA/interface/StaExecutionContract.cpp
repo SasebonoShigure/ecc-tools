@@ -16,6 +16,11 @@
 // ***************************************************************************************
 #include "StaExecutionContract.hpp"
 
+#include "IncreGpuStaBuildConfig.hpp"
+#if ISTA_ENABLE_CUDA
+#include "CsrCudaBackend.hpp"
+#endif
+
 #include <stdexcept>
 #include <utility>
 
@@ -190,6 +195,8 @@ std::string toString(StaCapabilityReason value)
   switch (value) {
     case StaCapabilityReason::kBackendUnavailable:
       return "backend_unavailable";
+    case StaCapabilityReason::kUnsupportedAnalysisFeatures:
+      return "unsupported_analysis_features";
   }
   throw std::logic_error("unknown StaCapabilityReason value");
 }
@@ -271,14 +278,26 @@ std::optional<std::string> validateStaExecutionRecord(const StaExecutionRecord& 
 StaExecutionResult resolveStage1StaExecution(const StaExecutionRequest& request)
 {
   if (request.backend == StaBackend::kCuda) {
-    return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kUnsupported, StaSessionState::kCreated,
-                                                          "CUDA STA backend is unavailable in stage 1", StaCapabilityReason::kBackendUnavailable));
+#if ISTA_ENABLE_CUDA
+    if (request.update_strategy != StaUpdateStrategy::kFull)
+      return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kUnsupported, StaSessionState::kCreated,
+                                                            "CUDA incremental updates are not available", StaCapabilityReason::kBackendUnavailable));
+    try {
+      csr::CsrCudaBackend::requireDevice();
+    } catch (const std::exception& error) {
+      return StaExecutionResult::failure(
+          StaStatus::failure(StaSessionStatusCode::kUnsupported, StaSessionState::kCreated, error.what(), StaCapabilityReason::kBackendUnavailable));
+    }
+#else
+    return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kUnsupported, StaSessionState::kCreated, "CUDA STA backend was not built",
+                                                          StaCapabilityReason::kBackendUnavailable));
+#endif
   }
   const bool incremental = request.update_strategy == StaUpdateStrategy::kIncremental;
   StaExecutionRecord record{.requested_backend = request.backend,
                             .requested_update_strategy = request.update_strategy,
                             .fallback_policy = request.fallback_policy,
-                            .executed_backend = StaBackend::kCpu,
+                            .executed_backend = request.backend,
                             .executed_update_strategy = StaUpdateStrategy::kFull,
                             .execution_kind = incremental ? StaExecutionKind::kBaselineOnly : StaExecutionKind::kFullUpdate,
                             .propagation_scope = StaPropagationScope::kFullGraph,

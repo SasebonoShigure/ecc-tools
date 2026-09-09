@@ -6,6 +6,7 @@ add_library(ista_interface
     ${ISTA_INTERFACE}/StaCsrSessionContext.cpp
     ${ISTA_INTERFACE}/STAInterface.cpp
     ${ISTA_INTERFACE}/STAInterfaceOperations.cpp
+    ${ISTA_INTERFACE}/STAInterfaceCuda.cpp
 )
 
 target_link_libraries(ista_interface
@@ -21,3 +22,7 @@ target_include_directories(ista_interface
     PUBLIC
     ${ISTA_INTERFACE}
 )
+
+if(ISTA_ENABLE_CUDA)
+  target_link_libraries(ista_interface PRIVATE ista_cuda)
+endif()

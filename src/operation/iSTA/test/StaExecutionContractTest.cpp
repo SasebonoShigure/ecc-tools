@@ -18,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "StaExecutionContract.hpp"
 
 namespace {
@@ -60,13 +61,14 @@ int main()
       for (StaFallbackPolicy policy : {StaFallbackPolicy::kError, StaFallbackPolicy::kFullWithRecord}) {
         StaExecutionRequest request{backend, strategy, policy};
         StaExecutionResult result = resolveStage1StaExecution(request);
-        if (backend == StaBackend::kCuda) {
+        if (backend == StaBackend::kCuda && (!incregpusta_cuda_enabled || strategy != StaUpdateStrategy::kFull)) {
           require(!result.ok() && !result.record, "CUDA must be unsupported without a record");
           require(result.status.code == StaSessionStatusCode::kUnsupported, "CUDA status code");
           require(result.status.capability_reason == StaCapabilityReason::kBackendUnavailable, "CUDA capability reason");
           continue;
         }
-        require(result.ok(), "CPU request must resolve");
+        require(result.ok(), "available backend request must resolve");
+        require(result.record->executed_backend == backend, "resolved backend must match request");
         require(!validateStaExecutionRecord(*result.record), "resolved record must validate");
         require(result.record->fallback_policy == policy, "fallback policy must be recorded exactly");
         if (strategy == StaUpdateStrategy::kFull) {

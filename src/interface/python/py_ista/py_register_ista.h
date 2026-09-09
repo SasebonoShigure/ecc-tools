@@ -67,6 +67,8 @@ void register_ista(py::module& m)
   py::dict attributes;
   attributes["incregpusta_debug_checks_enabled"]
       = builtins.attr("property")(py::cpp_function([](py::object) { return ista::incregpusta_debug_checks_enabled; }));
+  attributes["incregpusta_cuda_enabled"]
+      = builtins.attr("property")(py::cpp_function([](py::object) { return ista::incregpusta_cuda_enabled; }));
   m.attr("__class__") = builtins.attr("type")("_IncreGpuStaModule", py::make_tuple(py::type::of(m)), attributes);
   m.def("init_sta", initSTA, py::arg("config") = "", py::arg("config_dict") = std::map<std::string, std::string>{});
   m.def("run_sta", runSTA);

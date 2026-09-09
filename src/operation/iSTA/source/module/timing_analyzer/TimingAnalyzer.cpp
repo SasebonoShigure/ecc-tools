@@ -54,12 +54,17 @@ void TimingAnalyzer::analyze()
 {
   Monitor monitor;
   STALOG.info(Loc::current(), "Starting...");
-  TAModel ta_model = initTAModel();
   propagateRequired();
+  analyzePropagatedTiming();
+  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
+}
+
+void TimingAnalyzer::analyzePropagatedTiming()
+{
+  TAModel ta_model = initTAModel();
   analyzeEndPointList(ta_model);
   uploadTimingPathGroupList(ta_model);
   updateSummary(ta_model);
-  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
 }
 
 // private

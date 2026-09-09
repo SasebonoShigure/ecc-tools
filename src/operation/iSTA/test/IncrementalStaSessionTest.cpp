@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "CsrSnapshotObservation.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "IncrementalStaSession.hpp"
 #include "StaCsrSessionContext.hpp"
 
@@ -60,6 +61,7 @@ class FakeOperations final : public ista::StaSessionOperations
   ista::StaStatus runFullBaseline(std::uint64_t token, ista::StaCsrSessionContext* context) override
   {
     ++run_calls;
+    received_context = context != nullptr;
     if (throw_run)
       throw std::runtime_error("injected run throw");
     if (context != nullptr)
@@ -103,6 +105,7 @@ class FakeOperations final : public ista::StaSessionOperations
   int run_calls = 0;
   int close_calls = 0;
   int* close_observer = nullptr;
+  bool received_context = false;
   bool throw_initialize = false;
   bool throw_run = false;
   bool throw_close = false;
@@ -157,10 +160,31 @@ int main()
 
   auto cuda_operations = std::make_unique<FakeOperations>();
   FakeOperations* cuda_fake = cuda_operations.get();
-  IncrementalStaSession cuda_session({StaBackend::kCuda, StaUpdateStrategy::kFull, StaFallbackPolicy::kFullWithRecord}, std::move(cuda_operations));
+  IncrementalStaSession cuda_session({StaBackend::kCuda, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kFullWithRecord}, std::move(cuda_operations));
   StaStatus unsupported = cuda_session.initialize(testAnalysisContext(), {});
   require(unsupported.code == StaSessionStatusCode::kUnsupported && cuda_fake->initialize_calls == 0, "unsupported before native init");
   require(cuda_session.state() == StaSessionState::kClosed, "unsupported closes handle");
+
+  if constexpr (incregpusta_cuda_enabled) {
+    for (bool fail : {false, true}) {
+      auto operations = std::make_unique<FakeOperations>();
+      auto* fake = operations.get();
+      fake->throw_run = fail;
+      IncrementalStaSession session({StaBackend::kCuda, StaUpdateStrategy::kFull, StaFallbackPolicy::kError}, std::move(operations));
+      require(session.initialize(testAnalysisContext(), {}).ok(), "CUDA full initializes on an available device");
+      const auto result = session.runFullBaseline();
+      require(fake->received_context, "CUDA full receives its owned session context");
+      if (fail) {
+        require(!result.ok() && session.state() == StaSessionState::kPoisoned, "CUDA run failure poisons the session");
+        require(session.runFullBaseline().status.code == StaSessionStatusCode::kInvalidState, "poisoned CUDA session cannot run again");
+      } else {
+        require(result.ok() && result.record->executed_backend == StaBackend::kCuda && result.record->execution_kind == StaExecutionKind::kFullUpdate
+                    && !result.record->fallback_to_full,
+                "CUDA full records the actual backend without fallback");
+      }
+      require(session.close().ok() && fake->close_calls == 1, "CUDA full closes after success or failure");
+    }
+  }
 
   auto created_operations = std::make_unique<FakeOperations>();
   FakeOperations* created_fake = created_operations.get();

@@ -98,18 +98,18 @@ std::map<std::string, std::any> makeConfig(const fs::path& run_directory)
           {"-timing_corner", std::string{}}};
 }
 
-void requireCpuFullRecord(const StaExecutionRecord& record)
+void requireFullRecord(const StaExecutionRecord& record, StaBackend backend)
 {
-  if (record.requested_backend != StaBackend::kCpu
+  if (record.requested_backend != backend
       || record.requested_update_strategy != StaUpdateStrategy::kFull
       || record.fallback_policy != StaFallbackPolicy::kError
-      || record.executed_backend != StaBackend::kCpu
+      || record.executed_backend != backend
       || record.executed_update_strategy != StaUpdateStrategy::kFull
       || record.execution_kind != StaExecutionKind::kFullUpdate
       || record.propagation_scope != StaPropagationScope::kFullGraph
       || record.incremental_batch_executed || record.fallback_to_full
       || record.fallback_reason) {
-    fail("native baseline did not execute the exact CPU/full contract");
+    fail("native baseline did not execute the requested full backend contract");
   }
 }
 
@@ -129,7 +129,7 @@ void loadArtifacts(const FreshBaselineArtifacts& artifacts)
 }  // namespace
 
 void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
-                                       const ProductionFreshSessionWork& work)
+                                       const ProductionFreshSessionWork& work, StaBackend backend)
 {
   if (!work) {
     fail("guarded work callback is empty");
@@ -161,14 +161,14 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
 
   loadArtifacts(artifacts);
   IncrementalStaSession session(
-      {StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
+      {backend, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
   throwOnStaFailure(session.initialize(analysisContext(), makeConfig(artifacts.run_directory)),
                     session.request());
   const auto token = session.sessionToken();
   if (!token || *token == 0 || session.state() != StaSessionState::kInitialized) {
     fail("initialized session token/state differs");
   }
-  requireCpuFullRecord(requireStaExecutionRecord(session.runFullBaseline(), session.request()));
+  requireFullRecord(requireStaExecutionRecord(session.runFullBaseline(), session.request()), backend);
   if (session.state() != StaSessionState::kBaselineExecuted) {
     fail("baseline session state differs");
   }

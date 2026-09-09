@@ -28,25 +28,6 @@
 namespace ista::csr::detail {
 namespace {
 
-struct ResolvedNodeTarget
-{
-  ista::TimingPoint* point{nullptr};
-  const std::string* full_name{nullptr};
-};
-
-struct ResolvedArcTarget
-{
-  ista::Arc* arc{nullptr};
-  std::size_t native_rank{0};
-};
-
-struct StableScatterTargets
-{
-  std::vector<ResolvedNodeTarget> nodes;
-  std::vector<ResolvedArcTarget> arcs;
-  std::vector<std::string>* timing_order{nullptr};
-};
-
 [[nodiscard]] constexpr std::size_t nodeLane(std::size_t node, std::size_t analysis, std::size_t transition) noexcept
 {
   return (node * kAnalysisCount + analysis) * kTransitionCount + transition;
@@ -179,26 +160,78 @@ struct StableScatterTargets
 
 [[nodiscard]] const ResolvedNodeTarget* resolvedNode(const StableScatterTargets& targets, NodeId node) noexcept
 {
-  return node.value() < targets.nodes.size() ? &targets.nodes[node.value()] : nullptr;
+  return node.value() < targets.nodes.size() && targets.nodes[node.value()].point != nullptr && targets.nodes[node.value()].full_name != nullptr
+             ? &targets.nodes[node.value()]
+             : nullptr;
 }
 
 [[nodiscard]] const ResolvedArcTarget* resolvedArc(const StableScatterTargets& targets, ArcId arc) noexcept
 {
-  return arc.value() < targets.arcs.size() ? &targets.arcs[arc.value()] : nullptr;
+  return arc.value() < targets.arcs.size() && targets.arcs[arc.value()].arc != nullptr ? &targets.arcs[arc.value()] : nullptr;
 }
 
-[[nodiscard]] bool prepareClockState(const ClockResultSoa& source, const CsrReferenceInput& committed_input, const StableScatterTargets& targets,
-                                     std::size_t node, PreparedClockState& prepared)
+// Only dimensions here: row bounds and paired presence are checked while
+// preparing their actual values, without another full result traversal.
+template <class... Soas>
+bool matchingSoaSizes(std::size_t count, const Soas&... values)
+{
+  return ((values.presence.size() == count && values.values.size() == count) && ...);
+}
+
+template <class... Soas>
+bool lanePresence(std::size_t index, std::uint8_t expected, const Soas&... values)
+{
+  return ((values.presence[index] == expected) && ...);
+}
+
+bool matchingClockSizes(const ClockResultSoa& values, std::size_t count)
+{
+  return matchingSoaSizes(count, values.arrivals, values.slews, values.predecessor_nodes, values.predecessor_arc_delays, values.predecessor_transitions);
+}
+
+bool validResolvedTimingShapes(const CsrTimingValues& result, std::size_t node_count, std::size_t arc_count)
+{
+  constexpr auto maximum = std::numeric_limits<std::size_t>::max();
+  if (node_count > (maximum - 1) / 8 || arc_count > (maximum - 1) / 8)
+    return false;
+  const auto& nodes = result.nodes;
+  const auto& paths = result.paths;
+  const auto& arcs = result.arcs;
+  const auto child_count = arcs.timing_arc_indices.size();
+  if (child_count > maximum / 8)
+    return false;
+  return result.node_to_level.size() == node_count && result.timing_order.size() == node_count
+         && matchingSoaSizes(node_count, nodes.is_clock_point, nodes.arrivals, nodes.requireds, nodes.slacks, nodes.launches, nodes.clock_names,
+                             nodes.predecessor_nodes, nodes.predecessor_arcs)
+         && matchingClockSizes(result.effective_clock, node_count * 4) && matchingClockSizes(result.physical_clock, node_count * 4)
+         && matchingSoaSizes(node_count * 4, result.data_slews) && paths.row_offsets.size() == node_count * 8 + 1 && paths.row_offsets.front() == 0
+         && paths.row_offsets.back() == paths.clock_tags.values.size()
+         && matchingSoaSizes(paths.clock_tags.values.size(), paths.clock_tags, paths.arrivals, paths.slews, paths.launches, paths.start_nodes,
+                             paths.predecessor_nodes, paths.predecessor_arcs, paths.predecessor_arc_delays, paths.predecessor_transitions, paths.crpr_nodes,
+                             paths.crpr_transitions)
+         && matchingSoaSizes(arc_count, arcs.delays, arcs.min_delays, arcs.max_delays) && matchingSoaSizes(arc_count * 4, arcs.transition_delays)
+         && matchingSoaSizes(arc_count * 8, arcs.input_output_delays, arcs.graph_delays) && matchingSoaSizes(arc_count * 2, arcs.transition_types)
+         && arcs.timing_arc_row_offsets.size() == arc_count + 1 && arcs.timing_arc_row_offsets.front() == 0 && arcs.timing_arc_row_offsets.back() == child_count
+         && matchingSoaSizes(child_count * 8, arcs.timing_arc_delays, arcs.timing_arc_fallbacks);
+}
+
+[[nodiscard]] bool prepareClockState(const ClockResultSoa& source, const TimingScatterLayout& layout, const StableScatterTargets& targets, std::size_t node,
+                                     PreparedClockState& prepared)
 {
   for (std::size_t analysis_index = 0; analysis_index < kAnalysisCount; ++analysis_index) {
-    const auto analysis = nativeAnalysis(committed_input.analysis_order[analysis_index]);
+    const auto analysis = nativeAnalysis(layout.analysis_order[analysis_index]);
     if (!analysis)
       return false;
     for (std::size_t transition_index = 0; transition_index < kTransitionCount; ++transition_index) {
-      const auto transition = nativeTransition(committed_input.transition_order[transition_index]);
+      const auto transition = nativeTransition(layout.transition_order[transition_index]);
       if (!transition)
         return false;
       const std::size_t lane = nodeLane(node, analysis_index, transition_index);
+      const auto arrival_present = source.arrivals.presence[lane];
+      const auto predecessor_present = source.predecessor_nodes.presence[lane];
+      if (arrival_present > 1 || predecessor_present > 1 || !lanePresence(lane, arrival_present, source.slews)
+          || !lanePresence(lane, predecessor_present, source.predecessor_arc_delays, source.predecessor_transitions))
+        return false;
       if (source.arrivals.presence[lane] != 0)
         prepared.arrivals[*analysis][*transition] = source.arrivals.values[lane];
       if (source.slews.presence[lane] != 0)
@@ -222,20 +255,20 @@ struct StableScatterTargets
   return true;
 }
 
-[[nodiscard]] std::optional<CsrScatterCode> preparePathStates(const CsrTimingResult& result, const CsrReferenceInput& committed_input,
+[[nodiscard]] std::optional<CsrScatterCode> preparePathStates(const CsrTimingValues& result, const TimingScatterLayout& layout,
                                                               const StableScatterTargets& targets, std::size_t node, NativePathStateMap& prepared)
 {
   const PathResultSoa& paths = result.paths;
   for (std::size_t analysis_index = 0; analysis_index < kAnalysisCount; ++analysis_index) {
-    const auto analysis = nativeAnalysis(committed_input.analysis_order[analysis_index]);
+    const auto analysis = nativeAnalysis(layout.analysis_order[analysis_index]);
     if (!analysis)
       return CsrScatterCode::kIdMappingMismatch;
     for (std::size_t source_index = 0; source_index < kPathSourceCount; ++source_index) {
-      const auto source = nativePathSource(committed_input.path_source_order[source_index]);
+      const auto source = nativePathSource(layout.path_source_order[source_index]);
       if (!source)
         return CsrScatterCode::kIdMappingMismatch;
       for (std::size_t transition_index = 0; transition_index < kTransitionCount; ++transition_index) {
-        const auto transition = nativeTransition(committed_input.transition_order[transition_index]);
+        const auto transition = nativeTransition(layout.transition_order[transition_index]);
         if (!transition)
           return CsrScatterCode::kIdMappingMismatch;
         const std::size_t row = pathRow(node, analysis_index, source_index, transition_index);
@@ -247,10 +280,14 @@ struct StableScatterTargets
           continue;
         auto& native_row = prepared[*analysis][*source][*transition];
         for (std::size_t entry = *begin; entry < *end; ++entry) {
+          if (!lanePresence(entry, 1, paths.clock_tags, paths.arrivals, paths.slews, paths.launches, paths.start_nodes)
+              || paths.predecessor_nodes.presence[entry] > 1 || paths.predecessor_arcs.presence[entry] > 1 || paths.predecessor_arc_delays.presence[entry] > 1
+              || paths.predecessor_transitions.presence[entry] > 1 || paths.crpr_nodes.presence[entry] > 1 || paths.crpr_transitions.presence[entry] > 1)
+            return CsrScatterCode::kShapeMismatch;
           const std::uint64_t tag_index = paths.clock_tags.values[entry].value();
-          if (tag_index >= committed_input.clock_tags.size())
+          if (tag_index >= layout.clock_tags.size())
             return CsrScatterCode::kIdMappingMismatch;
-          const std::string& clock_tag = committed_input.clock_tags[tag_index];
+          const std::string& clock_tag = layout.clock_tags[tag_index];
           const auto* start = resolvedNode(targets, paths.start_nodes.values[entry]);
           if (start == nullptr)
             return CsrScatterCode::kIdMappingMismatch;
@@ -300,9 +337,13 @@ struct StableScatterTargets
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<CsrScatterCode> prepareNodeState(const CsrTimingResult& result, const CsrReferenceInput& committed_input,
+[[nodiscard]] std::optional<CsrScatterCode> prepareNodeState(const CsrTimingValues& result, const TimingScatterLayout& layout,
                                                              const StableScatterTargets& targets, std::size_t node, PreparedTimingPointState& prepared)
 {
+  const auto& nodes = result.nodes;
+  if (!lanePresence(node, 1, nodes.is_clock_point, nodes.arrivals, nodes.requireds, nodes.slacks, nodes.launches) || nodes.clock_names.presence[node] > 1
+      || nodes.predecessor_nodes.presence[node] > 1 || nodes.predecessor_arcs.presence[node] > 1)
+    return CsrScatterCode::kShapeMismatch;
   const auto level = nativeSize(result.node_to_level[node]);
   if (!level || *level > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
     return CsrScatterCode::kResultNumericInvalid;
@@ -330,50 +371,58 @@ struct StableScatterTargets
     prepared.predecessor_arc_index = predecessor_arc->native_rank;
   }
 
-  if (!prepareClockState(result.effective_clock, committed_input, targets, node, prepared.effective_clock)
-      || !prepareClockState(result.physical_clock, committed_input, targets, node, prepared.physical_clock))
+  if (!prepareClockState(result.effective_clock, layout, targets, node, prepared.effective_clock)
+      || !prepareClockState(result.physical_clock, layout, targets, node, prepared.physical_clock))
     return CsrScatterCode::kIdMappingMismatch;
 
   for (std::size_t analysis_index = 0; analysis_index < kAnalysisCount; ++analysis_index) {
-    const auto analysis = nativeAnalysis(committed_input.analysis_order[analysis_index]);
+    const auto analysis = nativeAnalysis(layout.analysis_order[analysis_index]);
     if (!analysis)
       return CsrScatterCode::kIdMappingMismatch;
     for (std::size_t transition_index = 0; transition_index < kTransitionCount; ++transition_index) {
-      const auto transition = nativeTransition(committed_input.transition_order[transition_index]);
+      const auto transition = nativeTransition(layout.transition_order[transition_index]);
       if (!transition)
         return CsrScatterCode::kIdMappingMismatch;
       const std::size_t lane = nodeLane(node, analysis_index, transition_index);
+      if (result.data_slews.presence[lane] > 1)
+        return CsrScatterCode::kShapeMismatch;
       if (result.data_slews.presence[lane] != 0)
         prepared.data_slews[*analysis][*transition] = result.data_slews.values[lane];
     }
   }
-  return preparePathStates(result, committed_input, targets, node, prepared.path_states);
+  return preparePathStates(result, layout, targets, node, prepared.path_states);
 }
 
-[[nodiscard]] std::optional<CsrScatterCode> prepareArcState(const CsrTimingResult& result, const CsrReferenceInput& committed_input,
+[[nodiscard]] std::optional<CsrScatterCode> prepareArcState(const CsrTimingValues& result, const TimingScatterLayout& layout,
                                                             const StableScatterTargets& targets, std::size_t arc, PreparedArcState& prepared)
 {
   const ArcResultSoa& arcs = result.arcs;
+  if (!lanePresence(arc, 1, arcs.delays, arcs.min_delays, arcs.max_delays))
+    return CsrScatterCode::kShapeMismatch;
   prepared.target = targets.arcs[arc].arc;
   prepared.delay = arcs.delays.values[arc];
   prepared.minimum_delay = arcs.min_delays.values[arc];
   prepared.maximum_delay = arcs.max_delays.values[arc];
 
   for (std::size_t analysis_index = 0; analysis_index < kAnalysisCount; ++analysis_index) {
-    const auto analysis = nativeAnalysis(committed_input.analysis_order[analysis_index]);
+    const auto analysis = nativeAnalysis(layout.analysis_order[analysis_index]);
     if (!analysis)
       return CsrScatterCode::kIdMappingMismatch;
     for (std::size_t input_index = 0; input_index < kTransitionCount; ++input_index) {
-      const auto input_transition = nativeTransition(committed_input.transition_order[input_index]);
+      const auto input_transition = nativeTransition(layout.transition_order[input_index]);
       if (!input_transition)
         return CsrScatterCode::kIdMappingMismatch;
       const std::size_t transition_lane = arcTransitionLane(arc, analysis_index, input_index);
+      if (arcs.transition_delays.presence[transition_lane] != 1)
+        return CsrScatterCode::kShapeMismatch;
       prepared.transition_delays[*analysis][*input_transition] = arcs.transition_delays.values[transition_lane];
       for (std::size_t output_index = 0; output_index < kTransitionCount; ++output_index) {
-        const auto output_transition = nativeTransition(committed_input.transition_order[output_index]);
+        const auto output_transition = nativeTransition(layout.transition_order[output_index]);
         if (!output_transition)
           return CsrScatterCode::kIdMappingMismatch;
         const std::size_t lane = arcIoLane(arc, analysis_index, input_index, output_index);
+        if (arcs.input_output_delays.presence[lane] > 1 || arcs.graph_delays.presence[lane] > 1)
+          return CsrScatterCode::kShapeMismatch;
         if (arcs.input_output_delays.presence[lane] != 0)
           prepared.input_output_delays[*analysis][*input_transition][*output_transition] = arcs.input_output_delays.values[lane];
         if (arcs.graph_delays.presence[lane] != 0)
@@ -383,10 +432,12 @@ struct StableScatterTargets
   }
 
   for (std::size_t input_index = 0; input_index < kTransitionCount; ++input_index) {
-    const auto input_transition = nativeTransition(committed_input.transition_order[input_index]);
+    const auto input_transition = nativeTransition(layout.transition_order[input_index]);
     if (!input_transition)
       return CsrScatterCode::kIdMappingMismatch;
     const std::size_t lane = arcTypeLane(arc, input_index);
+    if (arcs.transition_types.presence[lane] > 1)
+      return CsrScatterCode::kShapeMismatch;
     if (arcs.transition_types.presence[lane] != 0) {
       const auto output_transition = nativeTransition(arcs.transition_types.values[lane]);
       if (!output_transition)
@@ -402,18 +453,20 @@ struct StableScatterTargets
   for (std::size_t child = *begin; child < *end; ++child) {
     const std::int32_t timing_arc_index = arcs.timing_arc_indices[child];
     for (std::size_t analysis_index = 0; analysis_index < kAnalysisCount; ++analysis_index) {
-      const auto analysis = nativeAnalysis(committed_input.analysis_order[analysis_index]);
+      const auto analysis = nativeAnalysis(layout.analysis_order[analysis_index]);
       if (!analysis)
         return CsrScatterCode::kIdMappingMismatch;
       for (std::size_t input_index = 0; input_index < kTransitionCount; ++input_index) {
-        const auto input_transition = nativeTransition(committed_input.transition_order[input_index]);
+        const auto input_transition = nativeTransition(layout.transition_order[input_index]);
         if (!input_transition)
           return CsrScatterCode::kIdMappingMismatch;
         for (std::size_t output_index = 0; output_index < kTransitionCount; ++output_index) {
-          const auto output_transition = nativeTransition(committed_input.transition_order[output_index]);
+          const auto output_transition = nativeTransition(layout.transition_order[output_index]);
           if (!output_transition)
             return CsrScatterCode::kIdMappingMismatch;
           const std::size_t lane = timingArcLane(child, analysis_index, input_index, output_index);
+          if (arcs.timing_arc_delays.presence[lane] > 1 || arcs.timing_arc_fallbacks.presence[lane] > 1)
+            return CsrScatterCode::kShapeMismatch;
           const bool has_delay = arcs.timing_arc_delays.presence[lane] != 0;
           if (has_delay != (arcs.timing_arc_fallbacks.presence[lane] != 0))
             return CsrScatterCode::kShapeMismatch;
@@ -438,22 +491,38 @@ TimingResultPreparationResult prepareTimingResultScatter(ista::Database& databas
   if (!targets)
     return TimingResultPreparationFailure{CsrScatterCode::kIdMappingMismatch};
 
+  return prepareResolvedTimingResult(
+      *targets, {committed_input.analysis_order, committed_input.path_source_order, committed_input.transition_order, committed_input.clock_tags}, result);
+}
+
+TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTargets& targets, const TimingScatterLayout& layout, const CsrTimingValues& result)
+{
+  if (targets.timing_order == nullptr || !validResolvedTimingShapes(result, targets.nodes.size(), targets.arcs.size()))
+    return TimingResultPreparationFailure{CsrScatterCode::kShapeMismatch};
   PreparedTimingResult prepared;
-  prepared.nodes.resize(committed_input.nodes.size());
-  prepared.arcs.resize(committed_input.arcs.size());
-  prepared.timing_order_target = targets->timing_order;
+  prepared.nodes.resize(targets.nodes.size());
+  prepared.arcs.reserve(targets.arcs.size());
+  prepared.timing_order_target = targets.timing_order;
   prepared.timing_order.reserve(result.timing_order.size());
 
-  for (std::size_t node = 0; node < prepared.nodes.size(); ++node)
-    if (const auto failure = prepareNodeState(result, committed_input, *targets, node, prepared.nodes[node]))
+  for (std::size_t node = 0; node < prepared.nodes.size(); ++node) {
+    if (resolvedNode(targets, NodeId{node}) == nullptr)
+      return TimingResultPreparationFailure{CsrScatterCode::kIdMappingMismatch};
+    if (const auto failure = prepareNodeState(result, layout, targets, node, prepared.nodes[node]))
       return TimingResultPreparationFailure{*failure};
-
-  for (std::size_t arc = 0; arc < prepared.arcs.size(); ++arc)
-    if (const auto failure = prepareArcState(result, committed_input, *targets, arc, prepared.arcs[arc]))
+  }
+  for (std::size_t arc = 0; arc < targets.arcs.size(); ++arc) {
+    if (targets.arcs[arc].arc == nullptr) {
+      if (!lanePresence(arc, 0, result.arcs.delays, result.arcs.min_delays, result.arcs.max_delays))
+        return TimingResultPreparationFailure{CsrScatterCode::kIdMappingMismatch};
+      continue;
+    }
+    prepared.arcs.emplace_back();
+    if (const auto failure = prepareArcState(result, layout, targets, arc, prepared.arcs.back()))
       return TimingResultPreparationFailure{*failure};
-
+  }
   for (NodeId node : result.timing_order) {
-    const auto* target = resolvedNode(*targets, node);
+    const auto* target = resolvedNode(targets, node);
     if (target == nullptr)
       return TimingResultPreparationFailure{CsrScatterCode::kIdMappingMismatch};
     prepared.timing_order.push_back(*target->full_name);

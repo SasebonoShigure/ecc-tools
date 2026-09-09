@@ -136,6 +136,7 @@ class STAInterface
   bool getClocks(const std::vector<std::string>& clock_name_list, std::vector<std::string>& resolved_clock_list, std::string& error_message);
   StaStatus initializeSession(uint64_t token, std::map<std::string, std::any>& config_map);
   StaStatus runSessionBaseline(uint64_t token, StaCsrSessionContext* capture_or_null);
+  StaStatus runSessionCudaBaseline(uint64_t token, StaCsrSessionContext* context);
   StaStatus closeSession(uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* released_out);
   StaStatus copySessionCsrSnapshotObservation(uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* detached_out);
   StaCsrReferenceAttempt computeSessionCsrReferenceForTesting(uint64_t token, StaCsrSessionContext* context);

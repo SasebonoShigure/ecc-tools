@@ -183,7 +183,7 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
 
 }  // namespace
 
-CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay, CsrCpuReferenceWorkState& work)
+CsrCpuReferenceStageStatus initializeCsrCpuReferenceSeeds(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
   work.node_count = payloads.nodeCount();
   work.clock_tag_count = payloads.clockTags().size();
@@ -191,11 +191,6 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadVi
       || !checkedMultiply(work.node_count, kAnalysisCount * kPathSourceCount * kTransitionCount, work.path_row_count)
       || work.path_row_count == std::numeric_limits<std::size_t>::max())
     return CsrCpuReferenceStageStatus::kInvariantViolation;
-
-  work.result.level_offsets = replay.level_offsets;
-  work.result.level_nodes = replay.level_nodes;
-  work.result.node_to_level = replay.node_to_level;
-  work.result.timing_order = replay.level_nodes;
 
   resetRequiredSoa(work.result.nodes.is_clock_point, work.node_count, std::uint8_t{0});
   resetRequiredSoa(work.result.nodes.arrivals, work.node_count, -std::numeric_limits<double>::infinity());
@@ -217,6 +212,15 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadVi
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
   return initializeStarts(payloads, work);
+}
+
+CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay, CsrCpuReferenceWorkState& work)
+{
+  work.result.level_offsets = replay.level_offsets;
+  work.result.level_nodes = replay.level_nodes;
+  work.result.node_to_level = replay.node_to_level;
+  work.result.timing_order = replay.level_nodes;
+  return initializeCsrCpuReferenceSeeds(payloads, work);
 }
 
 }  // namespace ista::csr

@@ -1,8 +1,10 @@
 #pragma once
 
 #cmakedefine01 ECC_INCREGPUSTA_DEBUG_CHECKS
+#cmakedefine01 ISTA_ENABLE_CUDA
 
 namespace ista {
+inline constexpr bool incregpusta_cuda_enabled = ISTA_ENABLE_CUDA;
 inline constexpr char incregpusta_build_config[] = "@CMAKE_BUILD_TYPE@";
 inline constexpr char incregpusta_compiler_id[] = "@CMAKE_CXX_COMPILER_ID@";
 inline constexpr char incregpusta_compiler_version[] = "@CMAKE_CXX_COMPILER_VERSION@";

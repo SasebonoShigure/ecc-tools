@@ -18,6 +18,7 @@
 
 #include <algorithm>
 
+#include "CanonicalGraphConstruction.hpp"
 #include "DataManager.hpp"
 #include "DelayCalculator.hpp"
 #include "Logger.hpp"
@@ -57,6 +58,15 @@ void GraphBuilder::build()
 {
   Monitor monitor;
   STALOG.info(Loc::current(), "Starting...");
+  buildStructure();
+  buildTimingOrder();
+  printLoopInfo();
+  initializeArcTiming();
+  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
+}
+
+void GraphBuilder::buildStructure()
+{
   buildTimingPointList();
   normalizePinDirectionByTimingCell();
   buildCellArcs();
@@ -65,10 +75,6 @@ void GraphBuilder::build()
   buildNetArcs();
   buildStartEndPointList();
   breakLoopArcList();
-  buildTimingOrder();
-  printLoopInfo();
-  initializeArcTiming();
-  STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());
 }
 
 // private
@@ -124,65 +130,7 @@ void GraphBuilder::buildCellArcs()
 
 bool GraphBuilder::buildLibraryCellArcs(Instance& instance)
 {
-  Database& database = STADM.getDatabase();
-  std::map<std::string, TimingCell>& timing_cell_map = database.get_timing_library().get_cell_map();
-  if (timing_cell_map.count(instance.get_cell_name()) == 0) {
-    return false;
-  }
-
-  TimingCell& timing_cell = timing_cell_map[instance.get_cell_name()];
-  if (timing_cell.get_cell_arc_list().empty()) {
-    return false;
-  }
-
-  for (TimingCellArc& timing_cell_arc : timing_cell.get_cell_arc_list()) {
-    if (!timing_cell_arc.get_is_timing_graph_arc()) {
-      continue;
-    }
-    addCellArc(instance, timing_cell_arc);
-  }
-  return true;
-}
-
-std::string GraphBuilder::getInstancePinName(Instance& instance, std::string& port_name)
-{
-  return instance.get_instance_name() + ":" + port_name;
-}
-
-void GraphBuilder::addCellArc(Instance& instance, TimingCellArc& timing_cell_arc)
-{
-  Database& database = STADM.getDatabase();
-  std::string source_pin = getInstancePinName(instance, timing_cell_arc.get_source_port());
-  std::string sink_pin = getInstancePinName(instance, timing_cell_arc.get_sink_port());
-  if (database.get_pin_map().count(source_pin) == 0 || database.get_pin_map().count(sink_pin) == 0) {
-    return;
-  }
-  bool is_disable_arc = timing_cell_arc.get_is_disable_arc();
-  addArc(source_pin, sink_pin, ArcType::kCell, instance.get_instance_name(), timing_cell_arc.get_source_port(), timing_cell_arc.get_sink_port(),
-         timing_cell_arc.get_is_clock_arc(), is_disable_arc, &timing_cell_arc);
-}
-
-void GraphBuilder::addArc(const std::string& source_pin, const std::string& sink_pin, ArcType type, const std::string& owner_name,
-                          const std::string& library_source_port, const std::string& library_sink_port, bool is_clock_arc, bool is_disable_arc,
-                          TimingCellArc* timing_cell_arc)
-{
-  Database& database = STADM.getDatabase();
-  Arc arc;
-  arc.set_arc_name(owner_name + ":" + source_pin + "->" + sink_pin);
-  arc.set_source_pin(source_pin);
-  arc.set_sink_pin(sink_pin);
-  arc.set_owner_name(owner_name);
-  arc.set_library_source_port(library_source_port);
-  arc.set_library_sink_port(library_sink_port);
-  arc.set_type(type);
-  arc.set_is_clock_arc(is_clock_arc);
-  arc.set_is_disable_arc(is_disable_arc);
-  arc.set_timing_cell_arc(timing_cell_arc);
-
-  database.get_arc_list().push_back(arc);
-  const std::size_t arc_idx = database.get_arc_list().size() - 1;
-  database.get_outgoing_arc_list_map()[source_pin].push_back(arc_idx);
-  database.get_incoming_arc_list_map()[sink_pin].push_back(arc_idx);
+  return canonical_graph::appendLibraryCellArcs(STADM.getDatabase(), instance);
 }
 
 std::vector<std::string> GraphBuilder::collectInputPins(Instance& instance)
@@ -456,33 +404,7 @@ void GraphBuilder::buildNetDriverLoadList()
 
 void GraphBuilder::makeNetDriverLoad(Net& net)
 {
-  Database& database = STADM.getDatabase();
-  net.get_driver_pin().clear();
-  net.get_driver_pin_list().clear();
-  net.get_load_pin_list().clear();
-
-  for (std::string& pin_name : net.get_pin_name_list()) {
-    Pin& pin = database.get_pin_map()[pin_name];
-    if (isDriverPin(pin)) {
-      net.set_driver_pin(pin_name);
-      net.get_driver_pin_list().push_back(pin_name);
-    } else {
-      net.get_load_pin_list().push_back(pin_name);
-    }
-  }
-
-  std::ranges::sort(net.get_driver_pin_list());
-  std::ranges::sort(net.get_load_pin_list());
-
-  if (net.get_driver_pin_list().size() > 1) {
-    STALOG.error(Loc::current(), "The net has multiple driver pins: net=", net.get_net_name(),
-                 " drivers=", getPinNameListString(net.get_driver_pin_list()));
-  }
-}
-
-bool GraphBuilder::isDriverPin(Pin& pin)
-{
-  return isDriverDirection(pin, pin.get_direction());
+  canonical_graph::refreshNetDriverLoad(STADM.getDatabase(), net);
 }
 
 std::string GraphBuilder::getPinNameListString(std::vector<std::string>& pin_name_list)
@@ -515,42 +437,8 @@ void GraphBuilder::buildNetArcs()
 
 void GraphBuilder::addArc(const std::string& source_pin, const std::string& sink_pin, ArcType type, const std::string& owner_name)
 {
-  Database& database = STADM.getDatabase();
-  Arc arc;
-  arc.set_arc_name(owner_name + ":" + source_pin + "->" + sink_pin);
-  arc.set_source_pin(source_pin);
-  arc.set_sink_pin(sink_pin);
-  arc.set_owner_name(owner_name);
-  arc.set_type(type);
-  arc.set_is_disable_arc(shouldDisableNetArc(source_pin, sink_pin));
-
-  database.get_arc_list().push_back(arc);
-  const std::size_t arc_idx = database.get_arc_list().size() - 1;
-  database.get_outgoing_arc_list_map()[source_pin].push_back(arc_idx);
-  database.get_incoming_arc_list_map()[sink_pin].push_back(arc_idx);
-}
-
-bool GraphBuilder::shouldDisableNetArc(const std::string& source_pin, const std::string& sink_pin)
-{
-  Database& database = STADM.getDatabase();
-  Pin& source_pin_inst = database.get_pin_map()[source_pin];
-  Pin& sink_pin_inst = database.get_pin_map()[sink_pin];
-  if (source_pin_inst.get_is_port() || sink_pin_inst.get_is_port()) {
-    return false;
-  }
-  if (database.get_instance_map().count(source_pin_inst.get_instance_name()) == 0
-      || database.get_instance_map().count(sink_pin_inst.get_instance_name()) == 0) {
-    return false;
-  }
-  Instance& source_instance = database.get_instance_map()[source_pin_inst.get_instance_name()];
-  Instance& sink_instance = database.get_instance_map()[sink_pin_inst.get_instance_name()];
-  std::map<std::string, TimingCell>& timing_cell_map = database.get_timing_library().get_cell_map();
-  if (timing_cell_map.count(source_instance.get_cell_name()) == 0) {
-    return false;
-  }
-  TimingCell& source_cell = timing_cell_map[source_instance.get_cell_name()];
-  return source_cell.get_is_sequential() && !source_cell.get_is_clock_gating() && !source_cell.get_is_macro()
-         && sink_pin == sink_instance.get_clock_pin_name();
+  auto& database = STADM.getDatabase();
+  canonical_graph::appendArc(database, canonical_graph::makeNetArc(database, source_pin, sink_pin, type, owner_name));
 }
 
 bool GraphBuilder::isDisableArc(Arc& arc)

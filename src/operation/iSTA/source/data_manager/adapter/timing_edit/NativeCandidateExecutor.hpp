@@ -143,10 +143,26 @@ class NativeExecutionAuthority final
 class NativeCandidateExecutor final
 {
  public:
+  [[nodiscard]] static InstalledNativeDatabase installPreparedGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate);
+
+  // Prepare canonical graph/library state without executing CPU timing.
+  [[nodiscard]] static InstalledNativeDatabase installAndPrepareGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate);
+
   [[nodiscard]] static InstalledNativeDatabase installAndExecute(
       const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate,
       NativeExecutionFailpoint failpoint = NativeExecutionFailpoint::kNone,
       NativeRollbackFailpoint rollback_failpoint = NativeRollbackFailpoint::kNone);
+
+ private:
+  enum class Execution
+  {
+    kCpuTiming,
+    kGraphPreparation,
+    kPreparedGraph
+  };
+  [[nodiscard]] static InstalledNativeDatabase installAndRun(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate,
+                                                             Execution execution, NativeExecutionFailpoint failpoint,
+                                                             NativeRollbackFailpoint rollback_failpoint);
 };
 
 }  // namespace ista::timing_edit

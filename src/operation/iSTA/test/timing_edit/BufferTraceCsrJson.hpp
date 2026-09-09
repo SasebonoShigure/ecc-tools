@@ -17,6 +17,7 @@ namespace ista::buffer_trace::test {
 // timing lanes.
 [[nodiscard]] nlohmann::json csrReferenceInputToJson(
     const csr::CsrReferenceInput& input);
+[[nodiscard]] nlohmann::json csrTimingValuesToJson(const csr::CsrTimingValues& result);
 [[nodiscard]] nlohmann::json csrTimingResultToJson(
     const csr::CsrTimingResult& result);
 

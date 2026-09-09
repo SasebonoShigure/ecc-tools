@@ -1,5 +1,6 @@
 add_library(ista_graph_builder
     ${ISTA_MODULE}/graph_builder/GraphBuilder.cpp
+    ${ISTA_MODULE}/graph_builder/CanonicalGraphConstruction.cpp
 )
 
 target_link_libraries(ista_graph_builder

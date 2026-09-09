@@ -56,6 +56,7 @@ struct Options
   fs::path run_dir;
   fs::path snapshot;
   std::string expected_clock;
+  ista::StaBackend backend;
 };
 std::string ordinalSuffix(std::size_t ordinal)
 {
@@ -521,6 +522,8 @@ Options parseOptions(int argc, char* argv[])
       throw std::runtime_error("duplicate option: " + std::string(argv[index]));
     }
   }
+  const auto backend_option = values.extract("--backend");
+  const auto backend = backend_option.empty() ? ista::StaBackend::kCpu : ista::parseStaBackend(backend_option.mapped());
   const std::vector<std::string> required
       = {"--tech-lef", "--cell-lef", "--liberty", "--verilog", "--sdc", "--top", "--case-name", "--run-dir", "--snapshot", "--expected-clock"};
   for (const std::string& name : required) {
@@ -531,8 +534,17 @@ Options parseOptions(int argc, char* argv[])
   if (values.size() != required.size()) {
     throw std::runtime_error("unknown command-line option");
   }
-  return {values.at("--tech-lef"), values.at("--cell-lef"),  values.at("--liberty"), values.at("--verilog"),  values.at("--sdc"),
-          values.at("--top"),      values.at("--case-name"), values.at("--run-dir"), values.at("--snapshot"), values.at("--expected-clock")};
+  return {values.at("--tech-lef"),
+          values.at("--cell-lef"),
+          values.at("--liberty"),
+          values.at("--verilog"),
+          values.at("--sdc"),
+          values.at("--top"),
+          values.at("--case-name"),
+          values.at("--run-dir"),
+          values.at("--snapshot"),
+          values.at("--expected-clock"),
+          backend};
 }
 
 void validateInputs(const Options& options)
@@ -622,8 +634,9 @@ int main(int argc, char* argv[])
       if (!dmInst->readLib(std::vector<std::string>{options.liberty.string()})) {
         throw std::runtime_error("failed to read Liberty");
       }
-      const ista::StaUpdateStrategy strategy = run == 0 ? ista::StaUpdateStrategy::kFull : ista::StaUpdateStrategy::kIncremental;
-      ista::IncrementalStaSession session({ista::StaBackend::kCpu, strategy, ista::StaFallbackPolicy::kError});
+      const ista::StaUpdateStrategy strategy
+          = run == 0 || options.backend == ista::StaBackend::kCuda ? ista::StaUpdateStrategy::kFull : ista::StaUpdateStrategy::kIncremental;
+      ista::IncrementalStaSession session({options.backend, strategy, ista::StaFallbackPolicy::kError});
       ista::throwOnStaFailure(session.initialize(ista::csr::StaAnalysisContext{"slow", "25", "__no_rc_corner__"}, config), session.request());
       if (run == 0) {
         ista::IncrementalStaSession overlap({ista::StaBackend::kCpu, ista::StaUpdateStrategy::kFull, ista::StaFallbackPolicy::kError});
@@ -640,10 +653,11 @@ int main(int argc, char* argv[])
         }
       }
       ista::StaExecutionRecord record = ista::requireStaExecutionRecord(session.runFullBaseline(), session.request());
-      const bool expected_record = run == 0 ? record.execution_kind == ista::StaExecutionKind::kFullUpdate && !record.fallback_reason
-                                            : record.execution_kind == ista::StaExecutionKind::kBaselineOnly
-                                                  && record.fallback_reason == ista::StaFallbackReason::kNotApplicableNoMutation;
-      if (!expected_record || record.fallback_to_full) {
+      const bool expected_record
+          = strategy == ista::StaUpdateStrategy::kFull
+                ? record.execution_kind == ista::StaExecutionKind::kFullUpdate && !record.fallback_reason
+                : record.execution_kind == ista::StaExecutionKind::kBaselineOnly && record.fallback_reason == ista::StaFallbackReason::kNotApplicableNoMutation;
+      if (!expected_record || record.fallback_to_full || record.executed_backend != options.backend) {
         throw std::runtime_error("full/baseline-only execution record mismatch");
       }
       requireOracleState(options);

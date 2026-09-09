@@ -22,6 +22,9 @@
 
 namespace ista::csr::detail {
 
+// Intrinsic checks for one external transfer, without rebuilding a full input.
+void validateTransfer(const CellTransferModel& transfer, std::vector<CsrContractViolation>& errors, const std::string& field);
+
 void validateReferenceNativeModels(const CsrReferenceInput& input, std::vector<CsrContractViolation>& errors);
 
 [[nodiscard]] std::vector<CsrContractViolation> validateParasiticContextCrossField(const CsrReferenceInput& input);

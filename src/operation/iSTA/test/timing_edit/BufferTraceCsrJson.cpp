@@ -504,11 +504,9 @@ Json csrReferenceInputToJson(const csr::CsrReferenceInput& input)
                                             })}};
 }
 
-Json csrTimingResultToJson(const csr::CsrTimingResult& result)
+Json csrTimingValuesToJson(const csr::CsrTimingValues& result)
 {
-  return {{"schema_version", result.schema_version},
-          {"source_identity", identity(result.source_identity)},
-          {"level_offsets", scalarArray(result.level_offsets)},
+  return {{"level_offsets", scalarArray(result.level_offsets)},
           {"level_nodes", ids(result.level_nodes)},
           {"node_to_level", scalarArray(result.node_to_level)},
           {"timing_order", ids(result.timing_order)},
@@ -518,6 +516,14 @@ Json csrTimingResultToJson(const csr::CsrTimingResult& result)
           {"data_slews", optionalSoa(result.data_slews, number)},
           {"paths", pathResult(result.paths)},
           {"arcs", arcResult(result.arcs)}};
+}
+
+Json csrTimingResultToJson(const csr::CsrTimingResult& result)
+{
+  auto value=csrTimingValuesToJson(result);
+  value["schema_version"]=result.schema_version;
+  value["source_identity"]=identity(result.source_identity);
+  return value;
 }
 
 }  // namespace ista::buffer_trace::test

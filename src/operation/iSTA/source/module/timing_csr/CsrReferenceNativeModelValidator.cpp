@@ -162,6 +162,8 @@ void validateChild(const ChildTimingArcModel& child, Violations& errors, const s
   }
 }
 
+}  // namespace
+
 void validateTransfer(const CellTransferModel& transfer, Violations& errors, const std::string& field)
 {
   if (!isFinite(transfer.delay) || !isFinite(transfer.delay_min) || !isFinite(transfer.delay_max))
@@ -176,6 +178,8 @@ void validateTransfer(const CellTransferModel& transfer, Violations& errors, con
   if (std::ranges::adjacent_find(child_indices) != child_indices.end())
     reject(errors, field + ".children.signature.arc_index", "arc indices must be unique");
 }
+namespace {
+
 const ReferencedLibraryCellModel* findReferencedCell(const CsrReferenceInput& input, const std::string& cell_name)
 {
   const auto found = std::lower_bound(input.referenced_library_cells.begin(), input.referenced_library_cells.end(), cell_name,

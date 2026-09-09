@@ -30,6 +30,7 @@ class TimingAnalyzer
   static void destroyInst();
   // function
   void analyze();
+  void analyzePropagatedTiming();
 
  private:
   // self

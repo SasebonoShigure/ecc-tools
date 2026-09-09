@@ -31,6 +31,8 @@ class GraphBuilder
   static void destroyInst();
   // function
   void build();
+  // Canonical topology for backends that own levelization and timing.
+  void buildStructure();
 
  private:
   // self
@@ -47,11 +49,6 @@ class GraphBuilder
   void normalizePinDirectionByTimingCell();
   void buildCellArcs();
   bool buildLibraryCellArcs(Instance& instance);
-  std::string getInstancePinName(Instance& instance, std::string& port_name);
-  void addCellArc(Instance& instance, TimingCellArc& timing_cell_arc);
-  void addArc(const std::string& source_pin, const std::string& sink_pin, ArcType type, const std::string& owner_name,
-              const std::string& library_source_port, const std::string& library_sink_port, bool is_clock_arc, bool is_disable_arc,
-              TimingCellArc* timing_cell_arc);
   std::vector<std::string> collectInputPins(Instance& instance);
   bool isInputLike(PinDirection direction);
   std::vector<std::string> collectOutputPins(Instance& instance);
@@ -78,11 +75,9 @@ class GraphBuilder
   void rebuildCellArcListByPinDirection();
   void buildNetDriverLoadList();
   void makeNetDriverLoad(Net& net);
-  bool isDriverPin(Pin& pin);
   std::string getPinNameListString(std::vector<std::string>& pin_name_list);
   void buildNetArcs();
   void addArc(const std::string& source_pin, const std::string& sink_pin, ArcType type, const std::string& owner_name);
-  bool shouldDisableNetArc(const std::string& source_pin, const std::string& sink_pin);
   bool isDisableArc(Arc& arc);
   void buildStartEndPointList();
   bool isStartPoint(const std::string& pin_name, Pin& pin);

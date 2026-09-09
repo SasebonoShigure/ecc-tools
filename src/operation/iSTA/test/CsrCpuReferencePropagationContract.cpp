@@ -47,7 +47,7 @@ void requireStrict(const CsrReferenceInput& input, const std::string& name)
 
 const CsrTimingResult& computeTiming(const CsrReferenceInput& input, CsrComputationResult& computation, const std::string& name)
 {
-  computation = CsrCpuReferenceBackend{}.compute(input);
+  computation = computeContractTiming(input);
   const auto* result = std::get_if<CsrTimingResult>(&computation.outcome);
   requireCpuReference(result != nullptr, name + " did not return timing");
   requireCpuReference(validateTimingResult(input, *result).empty(), name + " returned an invalid timing result");

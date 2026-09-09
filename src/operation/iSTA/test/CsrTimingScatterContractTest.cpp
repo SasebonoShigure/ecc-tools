@@ -21,6 +21,7 @@
 
 namespace ista::csr::test {
 void runTimingScatterStaleContracts();
+void runResolvedTimingScatterContracts();
 
 namespace {
 
@@ -185,6 +186,7 @@ void testStableStorageRelocation()
 int main()
 {
   try {
+    ista::csr::test::runResolvedTimingScatterContracts();
     ista::csr::test::testSignedZeroRoundTrip();
     ista::csr::test::testEmptyAndIdempotence();
     ista::csr::test::testExplicitSuccessShapes();

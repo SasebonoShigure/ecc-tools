@@ -38,6 +38,34 @@ using NativeArcTransitionMap = std::map<ista::TransType, ista::TransType>;
 using NativePathStateMap
     = std::map<ista::AnalysisType, std::map<ista::PathSourceType, std::map<ista::TransType, std::map<std::string, ista::TimingPathState>>>>;
 
+struct ResolvedNodeTarget
+{
+  ista::TimingPoint* point{nullptr};
+  const std::string* full_name{nullptr};
+};
+
+struct ResolvedArcTarget
+{
+  // Null means an inactive stable ArcId, never a valid predecessor.
+  ista::Arc* arc{nullptr};
+  std::size_t native_rank{0};
+};
+
+struct StableScatterTargets
+{
+  std::vector<ResolvedNodeTarget> nodes;
+  std::vector<ResolvedArcTarget> arcs;
+  std::vector<std::string>* timing_order{nullptr};
+};
+
+struct TimingScatterLayout
+{
+  const std::array<AnalysisMode, kAnalysisCount>& analysis_order;
+  const std::array<PathSource, kPathSourceCount>& path_source_order;
+  const std::array<Transition, kTransitionCount>& transition_order;
+  const std::vector<std::string>& clock_tags;
+};
+
 struct PreparedClockState
 {
   NativeLaneDoubleMap arrivals;
@@ -106,11 +134,22 @@ using PrepublishScatterResult = std::variant<PreparedScatterEnvelope, CsrTimingR
 [[nodiscard]] std::optional<CsrScatterCode> firstTimingResultScatterFailure(const CsrReferenceInput& committed_input, const CsrTimingResult& result);
 [[nodiscard]] std::optional<std::uint64_t> timingScatterWriteCount(std::size_t node_count, std::size_t arc_count) noexcept;
 
+// Internal values-only boundary. Caller owns stable mappings and holds the
+// operation guard; all candidate container growth must precede target lookup.
+[[nodiscard]] TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTargets& targets, const TimingScatterLayout& layout,
+                                                                        const CsrTimingValues& values);
+
 [[nodiscard]] TimingResultPreparationResult prepareTimingResultScatter(Database& database, const CsrReferenceInput& committed_input,
                                                                        const CsrReferenceInput& current_input, const CsrTimingResult& result);
 [[nodiscard]] PrepublishScatterResult prepareScatterAttempt(Database& database, const CsrReferenceInput& committed_input, const CsrTimingResult& result,
                                                             const StaAnalysisContext& current_context, std::uint64_t active_session_token,
                                                             std::uint64_t active_graph_generation);
+
+// Internal computed-result path: the caller must hold one operation guard
+// across export, checked computation and publication, with unchanged Database.
+// External or test-injected results must use scatterCsrTimingResult instead.
+[[nodiscard]] CsrScatterCode publishComputedTimingResult(Database& database, const CsrReferenceInput& input, const CsrTimingResult& result,
+                                                         std::uint64_t session_token);
 
 void publishPreparedTimingResult(PreparedTimingResult& prepared) noexcept;
 

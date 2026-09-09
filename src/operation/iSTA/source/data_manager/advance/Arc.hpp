@@ -52,6 +52,10 @@ class Arc
 {
  public:
   Arc() = default;
+  Arc(const Arc&) = default;
+  Arc& operator=(const Arc&) = default;
+  Arc(Arc&&) noexcept = default;
+  Arc& operator=(Arc&&) noexcept = default;
   ~Arc() = default;
   // getter
   std::string& get_arc_name() { return _arc_name; }

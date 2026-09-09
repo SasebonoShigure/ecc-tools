@@ -379,17 +379,21 @@ void testPresentEmptyOrdering()
   requireCpuReference(replay_calls == 1, "valid present-empty scaled-slew overflow did not call FIFO exactly once");
 }
 
-void testNumericCategories()
+std::vector<std::pair<std::string, CsrReferenceInput>> numericFailureFixtures()
 {
-  const std::vector<std::pair<std::string, CsrReferenceInput>> cases{
+  return {
       {"negative computed slew", negativeComputedSlewInput()},
       {"path rounding scale overflow", roundedOverflowInput()},
       {"arrival addition overflow", arrivalAdditionOverflowInput()},
       {"required subtraction overflow", singletonOverflowInput(1.0, -std::numeric_limits<double>::max())},
       {"slack subtraction overflow", singletonOverflowInput(-std::numeric_limits<double>::max(), 0.0)},
   };
+}
+
+void testNumericCategories()
+{
   replay_case = ReplayCase::kComplete;
-  for (const auto& [name, input] : cases) {
+  for (const auto& [name, input] : numericFailureFixtures()) {
     requireStrictOutcome(input, name);
     replay_calls = 0;
     expectCode(computeCsrCpuReferenceWithReplay(input, &countingReplay), CsrComputationCode::kNumericFailure, name);
@@ -438,6 +442,16 @@ void testOutcomeProjection()
 }
 
 }  // namespace
+
+void runComputedNumericFailureContracts()
+{
+  for (const auto& [name, input] : numericFailureFixtures()) {
+    requireStrictOutcome(input, name);
+    expectCode(computeContractTiming(input), CsrComputationCode::kNumericFailure, name);
+    const auto healthy = computeContractTiming(makeCpuReferenceNetFixture());
+    requireCpuReference(std::holds_alternative<CsrTimingResult>(healthy.outcome), name + " prevented the next healthy computation");
+  }
+}
 
 void runCpuReferenceOutcomeContracts()
 {

@@ -23,6 +23,7 @@
 
 #include "CsrReferenceValidator.hpp"
 #include "Database.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "TimingResultScatterInternal.hpp"
 
 namespace ista::csr {
@@ -54,6 +55,25 @@ static_assert(std::is_nothrow_destructible_v<CsrTimingResultScatterAttempt>);
 }  // namespace
 
 namespace detail {
+
+CsrScatterCode publishComputedTimingResult(Database& database, const CsrReferenceInput& input, const CsrTimingResult& result, std::uint64_t session_token)
+{
+  if (!validTimingScatterGuard(input, session_token, input.source_identity.graph_generation))
+    return CsrScatterCode::kInvalidState;
+  if (result.source_identity != input.source_identity)
+    return CsrScatterCode::kSourceIdentityMismatch;
+  if constexpr (incregpusta_debug_checks_enabled)
+    if (const auto error = firstTimingResultScatterFailure(input, result))
+      return *error;
+  auto preparation = prepareTimingResultScatter(database, input, input, result);
+  if (const auto* error = std::get_if<TimingResultPreparationFailure>(&preparation))
+    return error->code;
+  auto& prepared = std::get<PreparedTimingResult>(preparation);
+  if (!timingScatterWriteCount(prepared.nodes.size(), prepared.arcs.size()))
+    return CsrScatterCode::kShapeMismatch;
+  publishPreparedTimingResult(prepared);
+  return CsrScatterCode::kSuccess;
+}
 
 [[nodiscard]] PrepublishScatterResult prepareScatterAttempt(ista::Database& database, const CsrReferenceInput& committed_input, const CsrTimingResult& result,
                                                             const StaAnalysisContext& current_context, std::uint64_t active_session_token,

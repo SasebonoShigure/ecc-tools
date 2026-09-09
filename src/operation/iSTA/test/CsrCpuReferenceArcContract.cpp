@@ -137,7 +137,7 @@ void synchronizeCell(CsrReferenceInput& input, const std::string& name)
 
 CsrTimingResult runTiming(const CsrReferenceInput& input, const std::string& name)
 {
-  const CsrComputationResult computation = CsrCpuReferenceBackend{}.compute(input);
+  const CsrComputationResult computation = computeContractTiming(input);
   return requireTiming(input, computation, name);
 }
 
@@ -174,7 +174,7 @@ void requireCache(const CsrTimingResult& result, std::size_t child, std::size_t 
 void testNetIdentity()
 {
   const CsrReferenceInput input = makeCpuReferenceNetFixture();
-  const CsrComputationResult outcome = CsrCpuReferenceBackend{}.compute(input);
+  const CsrComputationResult outcome = computeContractTiming(input);
   const CsrTimingResult result = requireTiming(input, outcome, "net identity");
   requirePresent(result.arcs.delays, 0, 0.0, "net scalar delay");
   requirePresent(result.arcs.min_delays, 0, 0.0, "net scalar min");
@@ -206,7 +206,7 @@ void testEmptyCellFallback()
   input.arc_ids_by_key[cell_arc].key = arc.key;
   input.referenced_library_cells.front().cell_arcs.front().transfer = arc.transfer;
   refreshCpuReferenceIdentity(input);
-  const CsrComputationResult outcome = CsrCpuReferenceBackend{}.compute(input);
+  const CsrComputationResult outcome = computeContractTiming(input);
   const CsrTimingResult result = requireTiming(input, outcome, "empty-cell fallback");
   requirePresent(result.arcs.delays, cell_arc, 3.0, "empty-cell scalar delay");
   requirePresent(result.arcs.min_delays, cell_arc, 1.0, "empty-cell scalar min");
@@ -349,7 +349,7 @@ void testNonconstantChildInitAndDynamic()
 {
   const CsrReferenceInput input = makeCpuReferenceCellFixture();
   const std::size_t cell_arc = cellArcIndex(input);
-  const CsrComputationResult outcome = CsrCpuReferenceBackend{}.compute(input);
+  const CsrComputationResult outcome = computeContractTiming(input);
   const CsrTimingResult result = requireTiming(input, outcome, "nonconstant child");
   requirePresent(result.arcs.delays, cell_arc, 1.0, "child immutable scalar delay");
   requirePresent(result.arcs.min_delays, cell_arc, 1.0, "ordinary child scalar min");

@@ -25,6 +25,7 @@ ista_add_step5_target(
 )
 
 set(ISTA_STEP5_CONTRACT_SOURCES
+    CsrCpuReferenceContractMain.cpp
     CsrCpuReferenceContractTest.cpp
     CsrCpuReferenceOutcomeContract.cpp
     CsrCpuReferenceArcContract.cpp

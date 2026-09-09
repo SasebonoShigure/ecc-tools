@@ -18,6 +18,15 @@
 cmake_minimum_required(VERSION 3.11)
 project(ecc)
 
+option(ISTA_ENABLE_CUDA "Build the optional IncreGPUSTA CUDA backend" OFF)
+if(ISTA_ENABLE_CUDA)
+    if(CMAKE_VERSION VERSION_LESS 3.18)
+        message(FATAL_ERROR "ISTA_ENABLE_CUDA requires CMake 3.18 or later")
+    endif()
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+endif()
+
 include(CTest)
 
 set(CMAKE_CXX_STANDARD 20)

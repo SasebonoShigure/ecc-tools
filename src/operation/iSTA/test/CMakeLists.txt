@@ -6,6 +6,7 @@ if(BUILD_TESTING)
     find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
     set(ISTA_TEST_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
   endif()
+  include(CsrCudaTests.cmake)
 
   add_executable(ista_arc_timing_arc_delay_test
       ArcTimingArcDelayTest.cpp

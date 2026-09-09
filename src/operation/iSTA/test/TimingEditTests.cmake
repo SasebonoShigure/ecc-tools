@@ -233,3 +233,12 @@ ista_register_timing_edit_test(ista_timing_edit_prepare_property_test)
 set_tests_properties(ista_timing_edit_prepare_property_test
     PROPERTIES LABELS "ista_unit;ista_property;ista_timing_edit"
 )
+
+add_executable(ista_native_targeted_edit_test
+    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/NativeTargetedEditTest.cpp"
+    ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
+)
+target_link_libraries(ista_native_targeted_edit_test PRIVATE
+    ista_timing_edit_native ista_timing_graph_csr_adapter ista_timing_database_headers
+    ista_graph_builder ista_data_manager ista_toolkit)
+ista_register_timing_edit_test(ista_native_targeted_edit_test)

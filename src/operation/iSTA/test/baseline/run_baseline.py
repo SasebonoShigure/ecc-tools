@@ -114,12 +114,14 @@ def run_self_test(manifest_path: Path) -> int:
 
 
 def run_probe(
-    probe: Path, case: dict[str, Any], baseline_dir: Path, run_dir: Path
+    probe: Path, case: dict[str, Any], baseline_dir: Path, run_dir: Path, *, backend: str = "cpu"
 ) -> dict[str, Any]:
     fixture = baseline_dir / "fixtures"
     snapshot_path = run_dir / "snapshot.json"
     command = [
         str(probe),
+        "--backend",
+        backend,
         "--tech-lef",
         str(fixture / "stage0_tech.lef"),
         "--cell-lef",

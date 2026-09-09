@@ -53,6 +53,11 @@ class TimingEditResolverState final
   friend bool operator==(const TimingEditResolverState&, const TimingEditResolverState&) = default;
 
  private:
+  template <typename CanonicalRecords>
+  [[nodiscard]] static TimingEditResolverState bindRecords(const Database& database, const CanonicalRecords& input);
+  [[nodiscard]] static TimingEditResolverState bindReferenceBaseline(const Database& database, const csr::CsrReferenceInput& input);
+  [[nodiscard]] TimingEditResolverState stageAssignments(const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const;
+  friend class NativeTargetedEditPreparer;
   [[nodiscard]] std::string materializedNodeName(const StableNodeRef& ref) const;
   [[nodiscard]] std::string materializedNetName(const StableNetRef& ref) const;
 

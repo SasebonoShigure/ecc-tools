@@ -57,6 +57,7 @@ set(ISTA_STEP6_SCATTER_CONTRACT_SOURCES
     CsrTimingResultFromNativeOracle.cpp
     CsrTimingScatterContractTest.cpp
     CsrTimingScatterStaleContract.cpp
+    CsrResolvedTimingScatterContract.cpp
 )
 ista_add_step6_target(
     ista_csr_timing_scatter_contract_test

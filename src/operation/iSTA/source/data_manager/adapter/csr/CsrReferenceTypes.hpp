@@ -183,10 +183,10 @@ struct ArcResultSoa
   friend bool operator==(const ArcResultSoa&, const ArcResultSoa&) = default;
 };
 
-struct CsrTimingResult
+// Computed values without a snapshot identity. Internal device sessions bind
+// these to their own session/generation before native publication.
+struct CsrTimingValues
 {
-  std::string schema_version{kCsrSchemaVersion};
-  CsrSnapshotIdentity source_identity;
   std::vector<std::uint64_t> level_offsets;
   std::vector<NodeId> level_nodes;
   std::vector<std::uint64_t> node_to_level;
@@ -197,6 +197,14 @@ struct CsrTimingResult
   OptionalSoa<double> data_slews;
   PathResultSoa paths;
   ArcResultSoa arcs;
+
+  friend bool operator==(const CsrTimingValues&, const CsrTimingValues&) = default;
+};
+
+struct CsrTimingResult : CsrTimingValues
+{
+  std::string schema_version{kCsrSchemaVersion};
+  CsrSnapshotIdentity source_identity;
 
   friend bool operator==(const CsrTimingResult&, const CsrTimingResult&) = default;
 };

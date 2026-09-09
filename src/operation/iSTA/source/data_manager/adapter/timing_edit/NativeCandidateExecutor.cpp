@@ -517,6 +517,23 @@ InstalledNativeDatabase NativeCandidateExecutor::installAndExecute(const NativeE
                                                                     NativeExecutionFailpoint failpoint,
                                                                     NativeRollbackFailpoint rollback_failpoint)
 {
+  return installAndRun(authority, std::move(candidate), Execution::kCpuTiming, failpoint, rollback_failpoint);
+}
+
+InstalledNativeDatabase NativeCandidateExecutor::installAndPrepareGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate)
+{
+  return installAndRun(authority, std::move(candidate), Execution::kGraphPreparation, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
+}
+
+InstalledNativeDatabase NativeCandidateExecutor::installPreparedGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate)
+{
+  return installAndRun(authority, std::move(candidate), Execution::kPreparedGraph, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
+}
+
+InstalledNativeDatabase NativeCandidateExecutor::installAndRun(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate,
+                                                               Execution execution, NativeExecutionFailpoint failpoint,
+                                                               NativeRollbackFailpoint rollback_failpoint)
+{
   if (!incregpusta_debug_checks_enabled && (failpoint != NativeExecutionFailpoint::kNone || rollback_failpoint != NativeRollbackFailpoint::kNone)) {
     throw std::invalid_argument("native fault injection requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
   }
@@ -547,10 +564,19 @@ InstalledNativeDatabase NativeCandidateExecutor::installAndExecute(const NativeE
     inject(failpoint, NativeExecutionFailpoint::kBeforeDelayRuntimeInit);
     STADC.init();
 
-    runFourTimingStages(failpoint);
+    if (execution == Execution::kCpuTiming) {
+      runFourTimingStages(failpoint);
+    } else if (execution == Execution::kGraphPreparation) {
+      GraphBuilder::initInst();
+      STAGB.buildStructure();
+      GraphBuilder::destroyInst();
+    }
     inject(failpoint, NativeExecutionFailpoint::kBeforeValidation);
-    if constexpr (incregpusta_debug_checks_enabled)
-      requireValidNativeDatabase(installed.database());
+    if constexpr (incregpusta_debug_checks_enabled) {
+      // Full timing/order proof belongs after the selected backend computes.
+      if (execution == Execution::kCpuTiming)
+        requireValidNativeDatabase(installed.database());
+    }
 
     inject(failpoint, NativeExecutionFailpoint::kBeforeDelayRuntimeDestroy);
     destroyTransientSingletons();

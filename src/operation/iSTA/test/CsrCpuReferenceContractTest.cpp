@@ -33,7 +33,7 @@ void requireStrictLiteral(const CsrReferenceInput& input, const std::string& nam
 
 const CsrTimingResult& computeLiteralTiming(const CsrReferenceInput& input, CsrComputationResult& computation, const std::string& name)
 {
-  computation = CsrCpuReferenceBackend{}.compute(input);
+  computation = computeContractTiming(input);
   const auto* result = std::get_if<CsrTimingResult>(&computation.outcome);
   requireCpuReference(result != nullptr, name + " did not return timing");
   requireCpuReference(validateTimingResult(input, *result).empty(), name + " returned an invalid timing result");
@@ -245,17 +245,3 @@ void runWholeResultLiteralContract()
 }
 
 }  // namespace ista::csr::test
-int main()
-{
-  try {
-    ista::csr::test::runExactTimingResultComparatorCanaries();
-    ista::csr::test::runCpuReferenceOutcomeContracts();
-    ista::csr::test::runWholeResultLiteralContract();
-    ista::csr::test::runCpuReferenceArcContracts();
-    ista::csr::test::runCpuReferencePropagationContracts();
-  } catch (const std::exception& error) {
-    std::cerr << error.what() << '\n';
-    return 1;
-  }
-  return 0;
-}

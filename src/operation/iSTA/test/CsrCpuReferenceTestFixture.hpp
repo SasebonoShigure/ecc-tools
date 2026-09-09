@@ -30,7 +30,12 @@ void requireExactTimingResult(const CsrTimingResult& actual, const CsrTimingResu
 void requireExactComputationResult(const CsrComputationResult& actual, const CsrComputationResult& expected, const std::string& name);
 void runExactTimingResultComparatorCanaries();
 
+// The CPU and CUDA contract executables provide their own compute entrypoint
+// so the same literal arc/path expectations exercise both implementations.
+[[nodiscard]] CsrComputationResult computeContractTiming(const CsrReferenceInput& input);
+void runWholeResultLiteralContract();
 void runCpuReferenceOutcomeContracts();
+void runComputedNumericFailureContracts();
 void runCpuReferenceArcContracts();
 void runCpuReferencePropagationContracts();
 

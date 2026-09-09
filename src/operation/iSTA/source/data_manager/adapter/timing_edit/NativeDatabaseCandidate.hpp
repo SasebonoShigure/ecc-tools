@@ -18,6 +18,9 @@
 
 namespace ista {
 class Database;
+namespace csr {
+class CudaTargetedTraceReplayer;
+}
 }
 
 namespace ista::timing_edit {
@@ -31,8 +34,8 @@ class NativeExecutionAuthority;
 class NativeExecutionScopeState;
 class TimingEditCoordinator;
 
-// Owns a detached raw-input clone. Derived timing state is always empty while
-// the candidate is detached, so no copied Arc pointer may be observed.
+// Owns a detached Database. Raw-input creation clears derived state; graph-
+// preserving creation rebinds every library pointer to the candidate owner.
 class NativeDatabaseCandidate final
 {
  public:
@@ -43,6 +46,7 @@ class NativeDatabaseCandidate final
   ~NativeDatabaseCandidate();
 
   [[nodiscard]] static NativeDatabaseCandidate create(const Database& source);
+  [[nodiscard]] static NativeDatabaseCandidate createPreservingGraph(const Database& source);
   [[nodiscard]] Database& database();
   [[nodiscard]] const Database& database() const;
   [[nodiscard]] bool empty() const noexcept { return _database == nullptr; }
@@ -102,6 +106,7 @@ class InstalledNativeDatabase final
   bool _scope_attached{false};
   bool _installed{false};
 
+  friend class ::ista::csr::CudaTargetedTraceReplayer;
   friend class NativeDatabaseCandidate;
   friend class NativeCandidateExecutor;
   friend class TimingEditCoordinator;

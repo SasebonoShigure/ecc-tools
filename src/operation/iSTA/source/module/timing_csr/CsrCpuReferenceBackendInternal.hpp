@@ -135,6 +135,10 @@ struct CsrDynamicArcValue
          + csrTransitionIndex(output_transition);
 }
 
+// Shared input/ideal-clock seed initialization; performs no graph traversal
+// or arc/timing propagation. CUDA packs these constraints before device work.
+[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceSeeds(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work);
+
 // Precondition: the backend boundary has accepted replay through
 // validateCsrFifoLevelization().
 [[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay,

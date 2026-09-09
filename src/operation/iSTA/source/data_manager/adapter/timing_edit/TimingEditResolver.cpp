@@ -120,14 +120,25 @@ TimingEditResolverState TimingEditResolverState::bindBaseline(const Database& da
     invalid("cannot bind an invalid baseline CSR graph");
   }
 
+  return bindRecords(database, *snapshot);
+}
+
+TimingEditResolverState TimingEditResolverState::bindReferenceBaseline(const Database& database, const csr::CsrReferenceInput& input)
+{
+  return bindRecords(database, input);
+}
+
+template <typename CanonicalRecords>
+TimingEditResolverState TimingEditResolverState::bindRecords(const Database& database, const CanonicalRecords& input)
+{
   TimingEditResolverState result;
-  for (std::size_t index = 0; index < snapshot->nodes.size(); ++index) {
-    const auto& key = snapshot->nodes[index].key;
+  for (std::size_t index = 0; index < input.nodes.size(); ++index) {
+    const auto& key = input.nodes[index].key;
     if (!result._nodes.emplace(ExistingNodeRef{key}, NativeSlotBinding{AppendOnlySlot{index}, key.full_name, false}).second) {
       invalid("baseline NodeKey collision");
     }
   }
-  result._high_water.node_slots = snapshot->nodes.size();
+  result._high_water.node_slots = input.nodes.size();
 
   std::uint64_t net_slot = 0;
   for (const auto& [name, net] : database.get_net_map()) {
@@ -138,24 +149,29 @@ TimingEditResolverState TimingEditResolverState::bindBaseline(const Database& da
   }
   result._high_water.net_slots = net_slot;
 
-  for (std::size_t index = 0; index < snapshot->arcs.size(); ++index) {
-    if (!result._arcs.emplace(ExistingArcRef{snapshot->arcs[index].key}, NativeSlotBinding{AppendOnlySlot{index}, {}, false}).second) {
+  for (std::size_t index = 0; index < input.arcs.size(); ++index) {
+    if (!result._arcs.emplace(ExistingArcRef{input.arcs[index].key}, NativeSlotBinding{AppendOnlySlot{index}, {}, false}).second) {
       invalid("baseline ArcKey collision");
     }
   }
-  result._high_water.arc_slots = snapshot->arcs.size();
+  result._high_water.arc_slots = input.arcs.size();
   return result;
 }
 
 TimingEditResolverState TimingEditResolverState::stage(const PreparedBatch& batch) const
 {
-  requireHighWater(_high_water, batch.slotPlan().before);
+  return stageAssignments(batch.slotPlan(), batch.tokenMaterializations());
+}
+
+TimingEditResolverState TimingEditResolverState::stageAssignments(const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const
+{
+  requireHighWater(_high_water, plan.before);
   TimingEditResolverState staged = *this;
 
   std::set<std::string> instance_names;
   std::set<std::string> net_names;
   std::set<std::string> pin_names;
-  for (const auto& value : batch.tokenMaterializations()) {
+  for (const auto& value : values) {
     if (value.instance_name.empty() || value.output_net_name.empty() || value.input_pin_name.empty() || value.output_pin_name.empty()) {
       invalid("token materialization contains an empty native name");
     }
@@ -169,7 +185,6 @@ TimingEditResolverState TimingEditResolverState::stage(const PreparedBatch& batc
     }
   }
 
-  const auto& plan = batch.slotPlan();
   applyAssignments(staged._nodes, plan.nodes, plan.before.node_slots, plan.after.node_slots,
                    [&staged](const StableNodeRef& ref) { return staged.materializedNodeName(ref); });
   applyAssignments(staged._nets, plan.nets, plan.before.net_slots, plan.after.net_slots,

@@ -90,6 +90,7 @@ StaCsrScatterAttempt invalidScatterAttempt()
 class ProductionStaSessionOperations final : public StaSessionOperations
 {
  public:
+  explicit ProductionStaSessionOperations(StaBackend backend) : _backend(backend) {}
   StaStatus initialize(std::uint64_t token, std::map<std::string, std::any>& config_map) override
   {
     return STAInterface::getInst().initializeSession(token, config_map);
@@ -97,7 +98,8 @@ class ProductionStaSessionOperations final : public StaSessionOperations
 
   StaStatus runFullBaseline(std::uint64_t token, StaCsrSessionContext* capture_or_null) override
   {
-    return STAInterface::getInst().runSessionBaseline(token, capture_or_null);
+    return _backend == StaBackend::kCuda ? STAInterface::getInst().runSessionCudaBaseline(token, capture_or_null)
+                                         : STAInterface::getInst().runSessionBaseline(token, capture_or_null);
   }
 
   StaStatus close(std::uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* released_out) override
@@ -119,12 +121,15 @@ class ProductionStaSessionOperations final : public StaSessionOperations
   {
     return STAInterface::getInst().scatterSessionCsrTimingResultForTesting(token, context, result);
   }
+
+ private:
+  StaBackend _backend;
 };
 
 }  // namespace
 
 IncrementalStaSession::IncrementalStaSession(StaExecutionRequest request)
-    : IncrementalStaSession(std::move(request), std::make_unique<ProductionStaSessionOperations>())
+    : IncrementalStaSession(request, std::make_unique<ProductionStaSessionOperations>(request.backend))
 {
 }
 
@@ -244,7 +249,8 @@ StaExecutionResult IncrementalStaSession::runFullBaseline()
 
   StaStatus status;
   try {
-    status = _operations->runFullBaseline(_token.load(std::memory_order_acquire), isIncrementalRequest() ? _context.get() : nullptr);
+    status = _operations->runFullBaseline(_token.load(std::memory_order_acquire),
+                                          (isIncrementalRequest() || _request.backend == StaBackend::kCuda) ? _context.get() : nullptr);
   } catch (...) {
     _state.store(StaSessionState::kPoisoned, std::memory_order_release);
     return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), "STA baseline threw: " + exceptionMessage()));

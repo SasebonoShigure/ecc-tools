@@ -148,3 +148,62 @@ foreach(stage IN ITEMS dual_csr stage6)
       LABELS "ista_smoke;ista_cpu;ista_dual_csr" TIMEOUT 7200
       SKIP_RETURN_CODE 77 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endforeach()
+
+if(ISTA_ENABLE_CUDA)
+  set(ISTA_CUDA_TRACE_PROBE_SOURCES ${ISTA_DUAL_CSR_FRESH_PROBE_SOURCES})
+  list(REMOVE_ITEM ISTA_CUDA_TRACE_PROBE_SOURCES timing_dual_csr/DualCsrTraceProductionFreshProbe.cpp)
+  add_executable(ista_cuda_full_trace_probe CudaFullTraceProbe.cpp ${ISTA_CUDA_TRACE_PROBE_SOURCES})
+  target_include_directories(ista_cuda_full_trace_probe PRIVATE
+      ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
+      ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
+  target_link_libraries(ista_cuda_full_trace_probe PRIVATE ista_cuda_full_trace_runtime ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS})
+  target_compile_options(ista_cuda_full_trace_probe PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
+endif()
+
+if(ISTA_ENABLE_CUDA)
+  foreach(trace IN ITEMS synthetic_two_batch real_buffer_fanout)
+    if(ECC_INCREGPUSTA_DEBUG_CHECKS)
+      set(cuda_trace_mode)
+    else()
+      set(cuda_trace_mode --performance)
+    endif()
+    add_test(NAME ista_cuda_full_trace_${trace}
+      COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/cuda_full_trace_controller.py"
+      --probe "$<TARGET_FILE:ista_cuda_full_trace_probe>"
+      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/${trace}.json"
+      --run-root "${CMAKE_CURRENT_BINARY_DIR}/cuda-full-traces/${trace}"
+      ${cuda_trace_mode})
+    set_tests_properties(ista_cuda_full_trace_${trace} PROPERTIES
+      LABELS "ista_cuda;ista_integration" TIMEOUT 2400 SKIP_RETURN_CODE 77
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endforeach()
+endif()
+
+if(ISTA_ENABLE_CUDA)
+  add_executable(ista_cuda_targeted_trace_probe CudaTargetedTraceProbe.cpp
+      timing_dual_csr/CudaTargetedTimingProjection.cpp
+      timing_dual_csr/CudaTargetedDeviceComparison.cpp ${ISTA_CUDA_TRACE_PROBE_SOURCES})
+  target_include_directories(ista_cuda_targeted_trace_probe PRIVATE
+      ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
+      ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
+  target_link_libraries(ista_cuda_targeted_trace_probe PRIVATE ista_cuda_targeted_trace_runtime ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS})
+  target_compile_options(ista_cuda_targeted_trace_probe PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
+  foreach(trace IN ITEMS synthetic_two_batch real_buffer_fanout)
+    if(ECC_INCREGPUSTA_DEBUG_CHECKS)
+      set(cuda_targeted_mode --full-probe "$<TARGET_FILE:ista_cuda_full_trace_probe>")
+    else()
+      set(cuda_targeted_mode --performance)
+    endif()
+    add_test(NAME ista_cuda_targeted_trace_${trace}
+      COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/cuda_targeted_trace_controller.py"
+      --probe "$<TARGET_FILE:ista_cuda_targeted_trace_probe>"
+      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/${trace}.json"
+      --run-root "${CMAKE_CURRENT_BINARY_DIR}/cuda-targeted-traces/${trace}"
+      ${cuda_targeted_mode})
+    set_tests_properties(ista_cuda_targeted_trace_${trace} PROPERTIES
+      LABELS "ista_cuda;ista_cuda_targeted;ista_integration" TIMEOUT 2400 SKIP_RETURN_CODE 77
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+  endforeach()
+endif()

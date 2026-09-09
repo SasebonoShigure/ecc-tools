@@ -7,9 +7,11 @@
 // ***************************************************************************************
 #include "NativeDatabaseCandidate.hpp"
 
+#include <map>
 #include <stdexcept>
 #include <utility>
 
+#include "Arc.hpp"
 #include "DataManager.hpp"
 #include "Database.hpp"
 
@@ -25,6 +27,30 @@ NativeDatabaseCandidate NativeDatabaseCandidate::create(const Database& source)
 {
   auto clone = std::make_unique<Database>(source);
   resetDerivedState(*clone);
+  return NativeDatabaseCandidate(std::move(clone));
+}
+
+NativeDatabaseCandidate NativeDatabaseCandidate::createPreservingGraph(const Database& source)
+{
+  auto clone = std::make_unique<Database>(source);
+  std::map<const TimingCellArc*, TimingCellArc*> pointers;
+  for (const auto& [name, cell] : source.get_timing_library().get_cell_map()) {
+    auto& copied = clone->get_timing_library().get_cell_map().at(name).get_cell_arc_list();
+    const auto& original = cell.get_cell_arc_list();
+    for (std::size_t i = 0; i < original.size(); ++i) {
+      pointers.emplace(&original[i], &copied[i]);
+    }
+  }
+  for (auto& arc : clone->get_arc_list()) {
+    const auto* pointer = arc.get_timing_cell_arc();
+    if (pointer == nullptr)
+      continue;
+    const auto found = pointers.find(pointer);
+    if (found == pointers.end()) {
+      throw std::invalid_argument("native graph clone contains a foreign library arc pointer");
+    }
+    arc.set_timing_cell_arc(found->second);
+  }
   return NativeDatabaseCandidate(std::move(clone));
 }
 

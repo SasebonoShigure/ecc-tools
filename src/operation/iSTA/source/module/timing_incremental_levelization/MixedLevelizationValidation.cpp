@@ -10,6 +10,7 @@
 
 #include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationInternal.hpp"
+#include "MixedTopologyInternal.hpp"
 
 namespace ista::timing_incremental_levelization {
 namespace {
@@ -108,14 +109,8 @@ MixedValidationResult validateMixedPrecedenceGraph(
   return {};
 }
 
-MixedValidationResult validateMixedKahnLevelization(
-    const MixedPrecedenceGraph& graph,
-    const MixedKahnLevelization& levels)
+MixedValidationResult detail::validateBuiltMixedResult(const MixedPrecedenceGraph& graph, const MixedKahnLevelization& levels)
 {
-  const MixedValidationResult graph_validation =
-      validateMixedPrecedenceGraph(graph);
-  if (!graph_validation.valid())
-    return graph_validation;
   const std::uint64_t count = graph.domain.mixed_vertex_count;
   if (levels.level_offsets.empty() || levels.level_offsets.front() != 0
       || levels.level_offsets.back() != count
@@ -169,6 +164,12 @@ MixedValidationResult validateMixedKahnLevelization(
     }
   }
   return {};
+}
+
+MixedValidationResult validateMixedKahnLevelization(const MixedPrecedenceGraph& graph, const MixedKahnLevelization& levels)
+{
+  const auto validation = validateMixedPrecedenceGraph(graph);
+  return validation.valid() ? detail::validateBuiltMixedResult(graph, levels) : validation;
 }
 
 }  // namespace ista::timing_incremental_levelization

@@ -115,7 +115,7 @@ class Runtime final
 
   CsrCudaTelemetry& _telemetry;
   cudaStream_t _stream{nullptr};
-  std::array<cudaEvent_t, 7> _events{};
+  std::array<cudaEvent_t, 8> _events{};
   std::vector<void*> _allocations;
 };
 

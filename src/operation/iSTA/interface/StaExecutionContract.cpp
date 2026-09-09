@@ -184,6 +184,8 @@ std::string toString(StaFallbackReason value)
       return "sequential_edit_unsupported";
     case StaFallbackReason::kBackendUnavailable:
       return "backend_unavailable";
+    case StaFallbackReason::kOldLevelOrderConflict:
+      return "old_level_order_conflict";
     case StaFallbackReason::kContractViolation:
       return "contract_violation";
   }
@@ -279,9 +281,6 @@ StaExecutionResult resolveStage1StaExecution(const StaExecutionRequest& request)
 {
   if (request.backend == StaBackend::kCuda) {
 #if ISTA_ENABLE_CUDA
-    if (request.update_strategy != StaUpdateStrategy::kFull)
-      return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kUnsupported, StaSessionState::kCreated,
-                                                            "CUDA incremental updates are not available", StaCapabilityReason::kBackendUnavailable));
     try {
       csr::CsrCudaBackend::requireDevice();
     } catch (const std::exception& error) {

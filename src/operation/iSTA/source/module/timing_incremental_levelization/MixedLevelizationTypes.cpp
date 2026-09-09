@@ -113,9 +113,7 @@ VirtualLevelMappingAttempt virtualLevelForMixedVertex(
   return VirtualOldLevel{vertex.value()};
 }
 
-VirtualLevelMappingAttempt virtualLevelForOldNode(
-    csr::NodeId node, const csr::CsrFifoLevelization& previous,
-    const MixedIdDomain& domain)
+VirtualLevelMappingAttempt detail::oldNodeLevel(csr::NodeId node, const PreviousLevels& previous, const MixedIdDomain& domain)
 {
   if (node.value() >= domain.n_last_nodes)
     return failure(MixedMappingFailureCode::kOldNodeOutOfRange,
@@ -131,6 +129,11 @@ VirtualLevelMappingAttempt virtualLevelForOldNode(
     return failure(MixedMappingFailureCode::kMalformedPreviousLevels,
                    "old node has an invalid previous level");
   return VirtualOldLevel{one_based - 1};
+}
+
+VirtualLevelMappingAttempt virtualLevelForOldNode(csr::NodeId node, const csr::CsrFifoLevelization& previous, const MixedIdDomain& domain)
+{
+  return detail::oldNodeLevel(node, previous, domain);
 }
 
 bool validateMixedTelemetryIdentities(

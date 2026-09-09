@@ -195,7 +195,8 @@
             "parasitic_changed",
             "sequential_edit_unsupported",
             "backend_unavailable",
-            "contract_violation"
+            "contract_violation",
+            "old_level_order_conflict"
           ]
         }
       },

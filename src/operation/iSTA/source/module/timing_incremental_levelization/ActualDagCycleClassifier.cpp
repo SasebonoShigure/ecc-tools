@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "MixedLevelizationInternal.hpp"
+#include "MixedTopologyInternal.hpp"
 
 namespace ista::timing_incremental_levelization {
 namespace {
@@ -26,32 +27,23 @@ ActualDagClassification classification(
 
 }  // namespace
 
-ActualDagClassification classifyActualDag(
-    const csr::ActiveCsrEdgeView& edges)
+ActualDagClassification detail::classifyActualDag(const TopologyTraversal& edges)
 {
   using EndpointPair = std::pair<std::uint64_t, std::uint64_t>;
   std::set<EndpointPair> pairs;
   std::uint64_t visits = 0;
   bool counter_overflow = false;
-  const csr::EdgeVisitResult visit =
-      edges.forEachActiveArc([&](const csr::EdgeEntry& entry) {
-        const auto payload = edges.arc(entry.arc_id);
-        if (!payload)
-          return csr::EdgeVisitResult::fail(payload.error());
-        const csr::ArcSemanticPayload& arc = payload.value();
-        if (arc.source.value() >= edges.nodeCount()
-            || arc.sink.value() >= edges.nodeCount())
-          return csr::EdgeVisitResult::fail(csr::CsrViewError::kNodeOutOfRange);
-        if (!arc.eligibility.levelization)
-          return csr::EdgeVisitResult::continueVisit();
-        if (entry.storage_kind != csr::EdgeStorageKind::kBaseOut
-            && entry.storage_kind != csr::EdgeStorageKind::kAuxOut)
-          return csr::EdgeVisitResult::fail(
-              csr::CsrViewError::kMalformedAdjacency);
-        counter_overflow |= !detail::checkedIncrement(visits);
-        pairs.emplace(arc.source.value(), arc.sink.value());
-        return csr::EdgeVisitResult::continueVisit();
-      });
+  const csr::EdgeVisitResult visit = edges.visit([&](const TopologyArc& arc) {
+    if (arc.source.value() >= edges.node_count || arc.sink.value() >= edges.node_count)
+      return csr::EdgeVisitResult::fail(csr::CsrViewError::kNodeOutOfRange);
+    if (!arc.levelization_eligible)
+      return csr::EdgeVisitResult::continueVisit();
+    if (arc.storage_kind != csr::EdgeStorageKind::kBaseOut && arc.storage_kind != csr::EdgeStorageKind::kAuxOut)
+      return csr::EdgeVisitResult::fail(csr::CsrViewError::kMalformedAdjacency);
+    counter_overflow |= !detail::checkedIncrement(visits);
+    pairs.emplace(arc.source.value(), arc.sink.value());
+    return csr::EdgeVisitResult::continueVisit();
+  });
   if (counter_overflow)
     return classification(ActualDagClassificationCode::kInvariantFailure,
                           visits, 0, 0,
@@ -62,7 +54,7 @@ ActualDagClassification classifyActualDag(
         "actual graph traversal failed or stopped unexpectedly",
         visit.error.value_or(csr::CsrViewError::kCallbackError));
 
-  const std::size_t node_count = edges.nodeCount();
+  const std::size_t node_count = edges.node_count;
   std::vector<std::vector<std::size_t>> adjacency(node_count);
   std::vector<std::uint64_t> indegree(node_count, 0);
   for (const EndpointPair& pair : pairs) {
@@ -104,6 +96,11 @@ ActualDagClassification classifyActualDag(
       visits, static_cast<std::uint64_t>(pairs.size()), processed,
       processed == node_count_u64 ? "actual graph is a DAG"
                                   : "actual graph contains a cycle");
+}
+
+ActualDagClassification classifyActualDag(const csr::ActiveCsrEdgeView& edges)
+{
+  return detail::classifyActualDag(detail::topologyTraversal(edges));
 }
 
 }  // namespace ista::timing_incremental_levelization

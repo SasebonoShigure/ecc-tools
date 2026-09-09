@@ -167,7 +167,7 @@ void compareIndependentCpu(const CsrReferenceInput& input, const CudaDualCsrPatc
     require(!wrong || static_cast<const CsrTimingValues&>(*wrong) != actual, "Aux omission canary did not change actual computation");
   }
 }
-void auxSequence(nlohmann::json* snapshots)
+void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
 {
   const auto input = csr::test::makeCpuReferenceNetFixture();
   const timing_edit::AppendOnlyHighWater water{2, 2, 1};
@@ -191,7 +191,7 @@ void auxSequence(nlohmann::json* snapshots)
   orphan.arc_appends = {appendArc(1, NodeId{0}, NodeId{1}, input.nodes[0].key, input.nodes[1].key, 1)};
   bool malformed_rejected = false;
   try {
-    static_cast<void>(owner.stage(orphan));
+    static_cast<void>(owner.stage(orphan, mode));
   } catch (const std::invalid_argument&) {
     malformed_rejected = true;
   }
@@ -200,36 +200,66 @@ void auxSequence(nlohmann::json* snapshots)
   duplicate.aux_rows[0].replacement_arc_ids.push_back(ArcId{1});
   malformed_rejected = false;
   try {
-    static_cast<void>(owner.stage(duplicate));
+    static_cast<void>(owner.stage(duplicate, mode));
   } catch (const std::invalid_argument&) {
     malformed_rejected = true;
   }
   require(malformed_rejected, "duplicate adjacency was accepted");
-  auto candidate = owner.stage(first);
+  auto candidate = owner.stage(first, mode);
   require(!candidate.computationCode(), "Aux append failed");
   require(candidate.timingValues().nodes.arrivals.values[2] == 1.0, "Aux-only endpoint arrival missing");
   require(candidate.timingValues().nodes.requireds.values[0] == -2.0, "Aux required pass missing");
-  require(candidate.telemetry().cuda.d2d_bytes > 0 && candidate.telemetry().cuda.kernel_launches == 5, "missing device stage or full compute");
+  require(candidate.telemetry().cuda.d2d_bytes > 0 && candidate.telemetry().cuda.kernel_launches > 0, "missing device stage or full compute");
   if constexpr (incregpusta_debug_checks_enabled) {
     compareIndependentCpu(input, first, nullptr, candidate.timingValues());
-    auto omitted = owner.stage(first);
-    CudaDualCsrTestReader::omitAuxAndRecompute(omitted);
-    require(omitted.computationCode() == CsrComputationCode::kCycle && !owner.publish(std::move(omitted)),
-            "actual GPU Aux omission did not fail levelization/publication");
-    require(owner.generation().value() == 0 && !owner.poisoned() && owner.timingValues() == stranger.timingValues(),
-            "GPU omission canary changed committed owner");
+    if (mode == CudaLevelizationMode::kFull) {
+      auto omitted = owner.stage(first, mode);
+      CudaDualCsrTestReader::omitAuxAndRecompute(omitted);
+      require(omitted.computationCode() == CsrComputationCode::kCycle && !owner.publish(std::move(omitted)),
+              "actual GPU Aux omission did not fail levelization/publication");
+      require(owner.generation().value() == 0 && !owner.poisoned() && owner.timingValues() == stranger.timingValues(),
+              "GPU omission canary changed committed owner");
+    }
     const auto graph = candidate.debugState();
     require(graph.out_arcs == std::vector<cuda_detail::Index>{0} && graph.aux_arcs == std::vector<cuda_detail::Index>{1},
             "Base expanded instead of genuine Aux overflow");
-    for (unsigned stage = 0; stage < 4; ++stage)
+    for (unsigned stage = mode == CudaLevelizationMode::kFull ? 0 : 1; stage < 4; ++stage)
       require(graph.storage_visits[stage * 2 + 1] > 0, "GPU pass never visited Aux");
   }
   if (snapshots)
     snapshots->push_back(CudaDualCsrTestReader::capture(candidate));
   require(!stranger.publish(std::move(candidate)), "foreign owner accepted candidate");
-  auto stale = owner.stage(first);
+  auto stale = owner.stage(first, mode);
   require(owner.publish(std::move(candidate)) && !owner.publish(std::move(candidate)), "candidate publication is not one-shot");
   require(!owner.publish(std::move(stale)), "stale sibling candidate published");
+  if (mode == CudaLevelizationMode::kMixed) {
+    auto conflict = patchFor(input, 1, first.after, {3, 3, 3});
+    conflict.arc_appends = {appendArc(2, NodeId{2}, NodeId{1}, sink.key, input.nodes[1].key, 0)};
+    conflict.removes = {{NodeId{0}, 0, ArcId{0}}};
+    conflict.logical_deactivations = {{ArcId{0}, input.arcs[0].key, NodeId{0}, NodeId{1}, LogicalArcDeactivateReason::kRemoved, true}};
+    conflict.reverse_changes = {{NodeId{1}, 0, ArcId{0}, ArcId{2}}};
+    conflict.aux_rows = {{NodeId{2}, {}, {ArcId{2}}}};
+    auto rejected = owner.stage(conflict, mode);
+    require(rejected.telemetry().mixed_failure == timing_incremental_levelization::MixedStageFailureCode::kOldLevelOrderConflict
+                && rejected.computationCode() && !owner.publish(std::move(rejected)),
+            "acyclic old-level order conflict was accepted as mixed");
+    auto full = owner.stage(conflict, CudaLevelizationMode::kFull);
+    require(!full.computationCode() && full.timingValues().node_to_level == std::vector<std::uint64_t>{1, 3, 2},
+            "explicit full retry did not execute the acyclic replacement");
+    require(owner.generation().value() == 1 && !owner.poisoned(), "unpublished full retry changed origin");
+
+    // Replacing eligibility must update the CPU topology metadata, not just
+    // the device payload. Node 2 is now an independent (noncompact) old root.
+    auto eligibility = patchFor(input, 1, first.after, first.after);
+    auto disabled = first.arc_appends[0].payload;
+    disabled.eligibility = {};
+    eligibility.payload_changes = {{ArcId{1}, first.arc_appends[0].payload, disabled}};
+    eligibility.roots = ValueReplacement<std::vector<NodeId>>{{NodeId{0}}, {NodeId{0}, NodeId{2}}};
+    auto changed_eligibility = owner.stage(eligibility, mode);
+    require(!changed_eligibility.computationCode(), "payload eligibility replacement left stale mixed topology");
+    require(changed_eligibility.timingValues().node_to_level == owner.timingValues().node_to_level,
+            "noncompact old levels were not preserved after eligibility replacement");
+  }
   auto second = patchFor(input, 1, first.after, {4, 4, 3});
   auto source = appendNode(3, "z_new_source", AppendedPortRole::kSource);
   source.payload.net_name = "n2";
@@ -251,7 +281,7 @@ void auxSequence(nlohmann::json* snapshots)
     for (auto& lane : analysis)
       lane = 0.25;
   second.appended_start_seeds = {seed};
-  auto cleared = owner.stage(second);
+  auto cleared = owner.stage(second, mode);
   require(!cleared.computationCode() && cleared.timingValues().nodes.arrivals.values[2] == 0.25, "stale previous computed value survived seed reset");
   if constexpr (incregpusta_debug_checks_enabled) {
     compareIndependentCpu(input, first, &second, cleared.timingValues());
@@ -267,7 +297,7 @@ void auxSequence(nlohmann::json* snapshots)
   bad.removes = {{NodeId{0}, 0, ArcId{1}}};
   malformed_rejected = false;
   try {
-    static_cast<void>(owner.stage(bad));
+    static_cast<void>(owner.stage(bad, mode));
   } catch (const std::invalid_argument&) {
     malformed_rejected = true;
   }
@@ -277,15 +307,15 @@ void auxSequence(nlohmann::json* snapshots)
   auto replacement = expected;
   expected.output_load = csr::test::outputLoad(0.625);
   mismatch.payload_changes = {{ArcId{0}, expected, replacement}};
-  auto failed = owner.stage(mismatch);
+  auto failed = owner.stage(mismatch, mode);
   require(failed.computationCode() == CsrComputationCode::kInvariantViolation && !owner.publish(std::move(failed)),
           "device payload expected mismatch accepted");
   require(owner.generation().value() == 2 && owner.timingValues() == committed && !owner.poisoned(), "algorithm rejection changed old device state");
-  auto no_op = owner.stage(empty);
+  auto no_op = owner.stage(empty, mode);
   require(!no_op.computationCode() && no_op.timingValues() == committed && owner.publish(std::move(no_op)), "healthy empty replay after rejection failed");
   bool rejected = false;
   try {
-    static_cast<void>(owner.stage(empty));
+    static_cast<void>(owner.stage(empty, mode));
   } catch (const std::invalid_argument&) {
     rejected = true;
   }
@@ -294,13 +324,13 @@ void auxSequence(nlohmann::json* snapshots)
   overflow.after.node_slots = std::numeric_limits<std::uint64_t>::max();
   rejected = false;
   try {
-    static_cast<void>(owner.stage(overflow));
+    static_cast<void>(owner.stage(overflow, mode));
   } catch (const std::exception&) {
     rejected = true;
   }
   require(rejected && !owner.poisoned(), "capacity rejection poisoned committed owner");
 }
-void emptyGraph()
+void emptyGraph(CudaLevelizationMode mode)
 {
   CsrReferenceInput input;
   input.analysis_context = {"slow", "25", "__no_rc_corner__"};
@@ -309,10 +339,10 @@ void emptyGraph()
   csr::test::refreshCpuReferenceIdentity(input);
   CudaDualCsrSession owner(input, {0, 0, 0});
   require(!owner.computationCode() && owner.timingValues().level_offsets == std::vector<std::uint64_t>{0}, "empty GPU graph failed");
-  auto candidate = owner.stage(patchFor(input, 0, {0, 0, 0}, {0, 0, 0}));
+  auto candidate = owner.stage(patchFor(input, 0, {0, 0, 0}, {0, 0, 0}), mode);
   require(!candidate.computationCode() && candidate.timingValues() == owner.timingValues() && owner.publish(std::move(candidate)), "empty GPU batch failed");
 }
-void removeChangeAndCycle()
+void removeChangeAndCycle(CudaLevelizationMode mode)
 {
   const auto input = csr::test::makeCpuReferenceNetFixture();
   const timing_edit::AppendOnlyHighWater water{2, 2, 1};
@@ -334,7 +364,7 @@ void removeChangeAndCycle()
     for (auto& value : row)
       value = 0.25;
   removal.appended_start_seeds = {seed};
-  auto first = owner.stage(removal);
+  auto first = owner.stage(removal, mode);
   require(!first.computationCode() && first.timingValues().nodes.arrivals.values[1] == 0.25 && owner.publish(std::move(first)),
           "Base remove/reverse-change failed");
   auto change = patchFor(input, 1, removal.after, {3, 3, 3});
@@ -343,7 +373,7 @@ void removeChangeAndCycle()
   change.logical_deactivations = {{ArcId{1}, removal.arc_appends[0].key, NodeId{2}, NodeId{1}, LogicalArcDeactivateReason::kRemoved, true}};
   change.changes = {{NodeId{0}, 0, std::nullopt, ArcId{2}}};
   change.reverse_changes = {{NodeId{1}, 0, ArcId{1}, ArcId{2}}};
-  auto second = owner.stage(change);
+  auto second = owner.stage(change, mode);
   require(!second.computationCode() && second.timingValues().nodes.arrivals.values[1] == 1.0 && owner.publish(std::move(second)),
           "Base tombstone reuse/change failed");
   auto cycle = patchFor(input, 2, change.after, {5, 5, 5});
@@ -352,14 +382,46 @@ void removeChangeAndCycle()
   cycle.arc_appends = {appendArc(3, NodeId{3}, NodeId{4}, a.key, b.key, 0), appendArc(4, NodeId{4}, NodeId{3}, b.key, a.key, 0)};
   cycle.appended_base_out_rows = {{NodeId{3}, {ArcId{3}}}, {NodeId{4}, {ArcId{4}}}};
   cycle.appended_base_in_rows = {{NodeId{3}, {ArcId{4}}}, {NodeId{4}, {ArcId{3}}}};
-  auto failed = owner.stage(cycle);
+  auto failed = owner.stage(cycle, mode);
   require(failed.computationCode() == CsrComputationCode::kCycle && !owner.publish(std::move(failed)) && !owner.poisoned(),
           "actual GPU cycle did not preserve old owner");
-  auto healthy = owner.stage(patchFor(input, 2, change.after, change.after));
+  auto healthy = owner.stage(patchFor(input, 2, change.after, change.after), mode);
   require(owner.publish(std::move(healthy)), "healthy publication after cycle failed");
 }
 
-void payloadFailures()
+void multiBlockReconstruction()
+{
+  const auto input = csr::test::makeCpuReferenceNetFixture();
+  const timing_edit::AppendOnlyHighWater water{2, 2, 1};
+  CudaDualCsrSession owner(input, water);
+  constexpr std::uint64_t count = 300;
+  auto patch = patchFor(input, 0, water, {2 + count, 2 + count, 1});
+  std::vector<NodeId> roots{NodeId{0}};
+  std::vector<NodeId> order{NodeId{0}};
+  std::vector<std::uint64_t> inverse(2 + count, 1);
+  inverse[1] = 2;
+  for (std::uint64_t id = 2; id < 2 + count; ++id) {
+    patch.node_appends.push_back(appendNode(id, "independent_source_" + std::to_string(id), AppendedPortRole::kSource));
+    patch.appended_base_out_rows.push_back({NodeId{id}, {}});
+    patch.appended_base_in_rows.push_back({NodeId{id}, {}});
+    roots.push_back(NodeId{id});
+    order.push_back(NodeId{id});
+  }
+  order.push_back(NodeId{1});
+  patch.roots = ValueReplacement<std::vector<NodeId>>{{NodeId{0}}, roots};
+  auto candidate = owner.stage(patch, CudaLevelizationMode::kMixed);
+  require(!candidate.computationCode(), "multiple CUDA blocks failed mixed reconstruction");
+  const auto& result = candidate.timingValues();
+  require(result.level_offsets == std::vector<std::uint64_t>{0, count + 1, count + 2} && result.level_nodes == order && result.timing_order == order
+              && result.node_to_level == inverse,
+          "cross-block new-node placement or inverse map is incorrect");
+  require(owner.publish(std::move(candidate)), "cross-block reconstruction could not publish");
+  auto replay = owner.stage(patchFor(input, 1, patch.after, patch.after), CudaLevelizationMode::kMixed);
+  require(!replay.computationCode() && replay.timingValues() == owner.timingValues() && owner.publish(std::move(replay)),
+          "cross-block reconstructed owner could not continue with an empty batch");
+}
+
+void payloadFailures(CudaLevelizationMode mode)
 {
   const auto input = csr::test::makeCpuReferenceCellFixture();
   const timing_edit::AppendOnlyHighWater water{input.nodes.size(), 0, input.arcs.size()};
@@ -384,7 +446,7 @@ void payloadFailures()
   patch.payload_changes = {{arc.id, expected, malformed}};
   bool rejected = false;
   try {
-    static_cast<void>(owner.stage(patch));
+    static_cast<void>(owner.stage(patch, mode));
   } catch (const std::invalid_argument&) {
     rejected = true;
   }
@@ -395,10 +457,10 @@ void payloadFailures()
       for (auto& value : table.values)
         value = std::numeric_limits<double>::max();
   patch.payload_changes = {{arc.id, expected, huge}};
-  auto failure = owner.stage(patch);
+  auto failure = owner.stage(patch, mode);
   require(failure.computationCode() == CsrComputationCode::kNumericFailure && !owner.publish(std::move(failure)) && !owner.poisoned(),
           "actual GPU numeric failure changed committed owner");
-  auto healthy = owner.stage(patchFor(input, 0, water, water));
+  auto healthy = owner.stage(patchFor(input, 0, water, water), mode);
   require(!healthy.computationCode() && owner.publish(std::move(healthy)), "healthy replay after numeric rejection failed");
 }
 
@@ -406,18 +468,23 @@ void payloadFailures()
 int main(int argc, char** argv)
 {
   try {
+    CudaLevelizationMode mode = CudaLevelizationMode::kFull;
+    if (argc > 1 && (std::string(argv[1]) == "--mixed" || std::string(argv[1]) == "--mixed-cross-build-output"))
+      mode = CudaLevelizationMode::kMixed;
     std::optional<nlohmann::json> snapshots;
     std::filesystem::path output;
-    if (argc == 3 && std::string(argv[1]) == "--cross-build-output") {
+    if (argc == 3 && (std::string(argv[1]) == "--cross-build-output" || std::string(argv[1]) == "--mixed-cross-build-output")) {
       output = argv[2];
       std::filesystem::remove(output);
       snapshots = nlohmann::json::array();
     } else
-      require(argc == 1, "unknown arguments; hardware fault modes require the ON-only target");
-    emptyGraph();
-    auxSequence(snapshots ? &*snapshots : nullptr);
-    removeChangeAndCycle();
-    payloadFailures();
+      require(argc == 1 || (argc == 2 && mode == CudaLevelizationMode::kMixed), "unknown arguments; hardware fault modes require the ON-only target");
+    if (mode == CudaLevelizationMode::kMixed)
+      multiBlockReconstruction();
+    emptyGraph(mode);
+    auxSequence(snapshots ? &*snapshots : nullptr, mode);
+    removeChangeAndCycle(mode);
+    payloadFailures(mode);
     if (snapshots) {
       std::ofstream stream(output);
       stream << snapshots->dump(2) << '\n';

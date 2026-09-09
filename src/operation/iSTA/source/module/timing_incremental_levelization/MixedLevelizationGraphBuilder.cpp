@@ -11,6 +11,7 @@
 #include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationInternal.hpp"
 #include "MixedLevelizationValidation.hpp"
+#include "MixedTopologyInternal.hpp"
 
 namespace ista::timing_incremental_levelization {
 namespace {
@@ -32,10 +33,7 @@ MixedGraphBuildFailure makeFailure(
   return {code, view_error, std::move(detail), telemetry};
 }
 
-bool addMappedPair(const csr::ArcSemanticPayload& arc,
-                   const csr::CsrFifoLevelization& previous,
-                   const MixedIdDomain& domain,
-                   std::set<EndpointPair>& mapped_pairs)
+bool addMappedPair(const detail::TopologyArc& arc, const detail::PreviousLevels& previous, const MixedIdDomain& domain, std::set<EndpointPair>& mapped_pairs)
 {
   const bool source_old = arc.source.value() < domain.n_last_nodes;
   const bool sink_old = arc.sink.value() < domain.n_last_nodes;
@@ -45,8 +43,7 @@ bool addMappedPair(const csr::ArcSemanticPayload& arc,
       MixedMappingFailure{MixedMappingFailureCode::kMalformedDomain, {}}};
 
   if (source_old) {
-    const auto source_level =
-        virtualLevelForOldNode(arc.source, previous, domain);
+    const auto source_level = detail::oldNodeLevel(arc.source, previous, domain);
     const auto* level = std::get_if<VirtualOldLevel>(&source_level);
     if (level == nullptr)
       return false;
@@ -55,8 +52,7 @@ bool addMappedPair(const csr::ArcSemanticPayload& arc,
     source_mixed = mixedVertexForNewNode(NewActualNode{arc.source}, domain);
   }
   if (sink_old) {
-    const auto sink_level =
-        virtualLevelForOldNode(arc.sink, previous, domain);
+    const auto sink_level = detail::oldNodeLevel(arc.sink, previous, domain);
     const auto* level = std::get_if<VirtualOldLevel>(&sink_level);
     if (level == nullptr)
       return false;
@@ -73,16 +69,12 @@ bool addMappedPair(const csr::ArcSemanticPayload& arc,
   return true;
 }
 
-}  // namespace
-
-MixedGraphBuildAttempt buildMixedLevelizationGraph(
-    const csr::ActiveCsrEdgeView& edges,
-    const csr::CsrFifoLevelization& previous,
-    const MixedLevelizationRequest& request)
+template <bool ValidatePrevious>
+MixedGraphBuildAttempt buildGraph(const detail::TopologyTraversal& edges, const detail::PreviousLevels& previous, const MixedLevelizationRequest& request)
 {
   MixedLevelizationTelemetry telemetry;
   telemetry.n_last_nodes = request.n_last_nodes;
-  telemetry.n_current_nodes = static_cast<std::uint64_t>(edges.nodeCount());
+  telemetry.n_current_nodes = static_cast<std::uint64_t>(edges.node_count);
 
   std::uint64_t expected_generation = 0;
   if (!detail::checkedAdd(request.generation_before, 1,
@@ -96,8 +88,9 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
                        telemetry);
 
   std::string previous_detail;
-  if (!detail::validatePreviousLevelizationShape(
-          previous, request.n_last_nodes, previous_detail))
+  const bool previous_valid = ValidatePrevious ? detail::validatePreviousLevelizationShape(previous, request.n_last_nodes, previous_detail)
+                                               : detail::validatePreviousLevelizationDimensions(previous, request.n_last_nodes, previous_detail);
+  if (!previous_valid)
     return makeFailure(MixedGraphBuildFailureCode::kMalformedPreviousLevels,
                        std::move(previous_detail), telemetry);
 
@@ -122,61 +115,51 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
   bool counter_overflow = false;
   bool mapping_error = false;
   bool old_old_conflict = false;
-  const csr::EdgeVisitResult visit =
-      edges.forEachActiveArc([&](const csr::EdgeEntry& entry) {
-        const auto payload = edges.arc(entry.arc_id);
-        if (!payload)
-          return csr::EdgeVisitResult::fail(payload.error());
-        const csr::ArcSemanticPayload& arc = payload.value();
-        if (arc.source.value() >= domain->n_current_nodes
-            || arc.sink.value() >= domain->n_current_nodes)
-          return csr::EdgeVisitResult::fail(csr::CsrViewError::kNodeOutOfRange);
-        if (!arc.eligibility.levelization)
-          return csr::EdgeVisitResult::continueVisit();
-        if (entry.storage_kind == csr::EdgeStorageKind::kBaseOut) {
-          counter_overflow |= !recordDiagnosticVisit(telemetry.base_out);
-        } else if (entry.storage_kind == csr::EdgeStorageKind::kAuxOut) {
-          counter_overflow |= !recordDiagnosticVisit(telemetry.aux_out);
-        } else {
-          return csr::EdgeVisitResult::fail(
-              csr::CsrViewError::kMalformedAdjacency);
-        }
-        counter_overflow |= !recordDiagnosticVisit(telemetry.actual_eligible_arc_visits);
+  const csr::EdgeVisitResult visit = edges.visit([&](const detail::TopologyArc& arc) {
+    if (arc.source.value() >= domain->n_current_nodes || arc.sink.value() >= domain->n_current_nodes)
+      return csr::EdgeVisitResult::fail(csr::CsrViewError::kNodeOutOfRange);
+    if (!arc.levelization_eligible)
+      return csr::EdgeVisitResult::continueVisit();
+    if (arc.storage_kind == csr::EdgeStorageKind::kBaseOut) {
+      counter_overflow |= !recordDiagnosticVisit(telemetry.base_out);
+    } else if (arc.storage_kind == csr::EdgeStorageKind::kAuxOut) {
+      counter_overflow |= !recordDiagnosticVisit(telemetry.aux_out);
+    } else {
+      return csr::EdgeVisitResult::fail(csr::CsrViewError::kMalformedAdjacency);
+    }
+    counter_overflow |= !recordDiagnosticVisit(telemetry.actual_eligible_arc_visits);
 
-        const bool source_old = arc.source.value() < domain->n_last_nodes;
-        const bool sink_old = arc.sink.value() < domain->n_last_nodes;
-        if (source_old && sink_old) {
-          counter_overflow |= !recordDiagnosticVisit(telemetry.old_old);
-          const std::uint64_t source_level = previous.node_to_level[
-              static_cast<std::size_t>(arc.source.value())];
-          const std::uint64_t sink_level = previous.node_to_level[
-              static_cast<std::size_t>(arc.sink.value())];
-          old_old_conflict |= source_level >= sink_level;
-          return csr::EdgeVisitResult::continueVisit();
-        }
+    const bool source_old = arc.source.value() < domain->n_last_nodes;
+    const bool sink_old = arc.sink.value() < domain->n_last_nodes;
+    if (source_old && sink_old) {
+      counter_overflow |= !recordDiagnosticVisit(telemetry.old_old);
+      const std::uint64_t source_level = previous.node_to_level[static_cast<std::size_t>(arc.source.value())];
+      const std::uint64_t sink_level = previous.node_to_level[static_cast<std::size_t>(arc.sink.value())];
+      if (source_level == 0 || source_level > domain->n_old_levels || sink_level == 0 || sink_level > domain->n_old_levels)
+        return csr::EdgeVisitResult::fail(csr::CsrViewError::kNodeOutOfRange);
+      old_old_conflict |= source_level >= sink_level;
+      return csr::EdgeVisitResult::continueVisit();
+    }
 
-        if (source_old) {
-          counter_overflow |= !recordDiagnosticVisit(telemetry.old_new);
-        } else if (sink_old) {
-          counter_overflow |= !recordDiagnosticVisit(telemetry.new_old);
-        } else {
-          counter_overflow |= !recordDiagnosticVisit(telemetry.new_new);
-        }
-        counter_overflow |= !recordDiagnosticVisit(telemetry.mapped_actual_arc_candidates);
+    if (source_old) {
+      counter_overflow |= !recordDiagnosticVisit(telemetry.old_new);
+    } else if (sink_old) {
+      counter_overflow |= !recordDiagnosticVisit(telemetry.new_old);
+    } else {
+      counter_overflow |= !recordDiagnosticVisit(telemetry.new_new);
+    }
+    counter_overflow |= !recordDiagnosticVisit(telemetry.mapped_actual_arc_candidates);
 
-        if constexpr (incregpusta_debug_checks_enabled) {
-          const EndpointPair actual{arc.source.value(), arc.sink.value()};
-          if (!actual_pairs.insert(actual).second) {
-            counter_overflow |= !recordDiagnosticVisit(telemetry.actual_parallel_duplicates_collapsed);
-            return csr::EdgeVisitResult::continueVisit();
-          }
-        }
-        mapping_error |= !addMappedPair(arc, previous, *domain, mapped_pairs);
-        return mapping_error
-                   ? csr::EdgeVisitResult::fail(
-                         csr::CsrViewError::kCallbackError)
-                   : csr::EdgeVisitResult::continueVisit();
-      });
+    if constexpr (incregpusta_debug_checks_enabled) {
+      const EndpointPair actual{arc.source.value(), arc.sink.value()};
+      if (!actual_pairs.insert(actual).second) {
+        counter_overflow |= !recordDiagnosticVisit(telemetry.actual_parallel_duplicates_collapsed);
+        return csr::EdgeVisitResult::continueVisit();
+      }
+    }
+    mapping_error |= !addMappedPair(arc, previous, *domain, mapped_pairs);
+    return mapping_error ? csr::EdgeVisitResult::fail(csr::CsrViewError::kCallbackError) : csr::EdgeVisitResult::continueVisit();
+  });
 
   if constexpr (incregpusta_debug_checks_enabled) {
     telemetry.unique_actual_endpoint_pairs = static_cast<std::uint64_t>(actual_pairs.size());
@@ -254,6 +237,20 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(
       return makeFailure(MixedGraphBuildFailureCode::kInvariantFailure, validation.detail, telemetry);
   }
   return graph;
+}
+
+}  // namespace
+
+MixedGraphBuildAttempt buildMixedLevelizationGraph(const csr::ActiveCsrEdgeView& edges, const csr::CsrFifoLevelization& previous,
+                                                   const MixedLevelizationRequest& request)
+{
+  return buildGraph<true>(detail::topologyTraversal(edges), previous, request);
+}
+
+MixedGraphBuildAttempt detail::buildOwnedMixedGraph(const TopologyTraversal& edges, const detail::PreviousLevels& previous,
+                                                    const MixedLevelizationRequest& request)
+{
+  return buildGraph<incregpusta_debug_checks_enabled>(edges, previous, request);
 }
 
 }  // namespace ista::timing_incremental_levelization

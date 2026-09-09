@@ -28,6 +28,8 @@ struct ArcBinding
 {
   Index source{}, sink{};
   bool active{true};
+  bool levelization{false};
+  EdgeStorageKind storage_kind{EdgeStorageKind::kBaseOut};
 };
 struct SlotPatch
 {
@@ -95,11 +97,12 @@ struct CudaDualCsrSession::Impl
   std::optional<CsrTimingValues> values;
 
   Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water);
-  Impl(std::shared_ptr<const Impl> before, const CudaDualCsrPatch& patch);
+  Impl(std::shared_ptr<const Impl> before, const CudaDualCsrPatch& patch, CudaLevelizationMode mode);
   static void validatePatch(const Impl& before, const CudaDualCsrPatch& patch);
   cuda_detail::PackedPatch prepare(const Impl& before, const CudaDualCsrPatch& patch);
   void allocate();
-  void execute();
+  void execute(CudaLevelizationMode mode = CudaLevelizationMode::kFull);
+  std::optional<CsrFifoLevelization> reconstructMixed();
   void transferPatch(const Impl& before, const CudaDualCsrPatch& patch, const cuda_detail::PackedPatch& packed);
 };
 }  // namespace ista::csr

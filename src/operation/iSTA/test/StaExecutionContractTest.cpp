@@ -61,7 +61,7 @@ int main()
       for (StaFallbackPolicy policy : {StaFallbackPolicy::kError, StaFallbackPolicy::kFullWithRecord}) {
         StaExecutionRequest request{backend, strategy, policy};
         StaExecutionResult result = resolveStage1StaExecution(request);
-        if (backend == StaBackend::kCuda && (!incregpusta_cuda_enabled || strategy != StaUpdateStrategy::kFull)) {
+        if (backend == StaBackend::kCuda && !incregpusta_cuda_enabled) {
           require(!result.ok() && !result.record, "CUDA must be unsupported without a record");
           require(result.status.code == StaSessionStatusCode::kUnsupported, "CUDA status code");
           require(result.status.capability_reason == StaCapabilityReason::kBackendUnavailable, "CUDA capability reason");

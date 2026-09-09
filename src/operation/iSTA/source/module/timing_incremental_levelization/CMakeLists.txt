@@ -56,6 +56,8 @@ if(BUILD_TESTING)
     endfunction()
 
     ista_add_incremental_levelization_test(
+        ista_mixed_topology_test MixedTopologyTest.cpp)
+    ista_add_incremental_levelization_test(
         ista_mixed_id_mapping_test MixedIdMappingTest.cpp)
     ista_add_incremental_levelization_test(
         ista_mixed_graph_builder_test MixedGraphBuilderTest.cpp)

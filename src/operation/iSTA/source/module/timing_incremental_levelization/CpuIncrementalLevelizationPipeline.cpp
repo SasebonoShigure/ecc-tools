@@ -13,6 +13,7 @@
 #include "MixedLevelizationGraphBuilder.hpp"
 #include "MixedLevelizationInternal.hpp"
 #include "MixedLevelizationValidation.hpp"
+#include "MixedTopologyInternal.hpp"
 
 namespace ista::timing_incremental_levelization {
 namespace {
@@ -104,7 +105,7 @@ MixedLevelizationAttempt runCpuIncrementalLevelization(
   graph.telemetry.mixed_build_ms =
       elapsedMilliseconds(build_begin, build_end);
   const Clock::time_point kahn_begin = Clock::now();
-  MixedKahnAttempt kahn = runCorrectedMixedKahn(graph);
+  MixedKahnAttempt kahn = detail::levelizeBuiltMixedGraph(graph);
   const Clock::time_point kahn_end = Clock::now();
   graph.telemetry.mixed_kahn_ms =
       elapsedMilliseconds(kahn_begin, kahn_end);

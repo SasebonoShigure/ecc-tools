@@ -36,19 +36,15 @@ Json functional(const csr::CsrReferenceInput& input, const csr::CsrTimingResult&
   require(projected.success(), "diagnostic timing projection failed");
   return timing_dual_csr::test::functionalSemanticReceiptToJson(*projected.receipt);
 }
-Json telemetry(const csr::CudaTargetedTraceBatch& batch)
+Json deviceTelemetry(const csr::CudaDualCsrTelemetry& device)
 {
-  const auto& c = batch.device.cuda;
-  return {{"generation_before", batch.generation_before},
-          {"generation_after", batch.generation_after},
-          {"node_count", batch.node_count},
-          {"arc_count", batch.arc_count},
-          {"native_prepare_ms", batch.native_prepare_ms},
-          {"native_install_ms", batch.native_install_ms},
-          {"update_ms", batch.device.update_ms},
-          {"grown_buffers", batch.device.grown_buffers},
-          {"scatter_ms", batch.scatter_ms},
-          {"end_to_end_ms", batch.end_to_end_ms},
+  const auto& c = device.cuda;
+  return {{"update_ms", device.update_ms},
+          {"grown_buffers", device.grown_buffers},
+          {"mixed_build_ms", device.mixed.mixed_build_ms},
+          {"mixed_kahn_ms", device.mixed.mixed_kahn_ms},
+          {"mixed_prepare_ms", device.mixed_prepare_ms},
+          {"levelization_total_ms", device.mixed.mixed_build_ms + device.mixed.mixed_kahn_ms + device.mixed_prepare_ms + c.levelization_ms},
           {"encode_ms", c.encode_ms},
           {"h2d_ms", c.h2d_ms},
           {"levelization_ms", c.levelization_ms},
@@ -64,6 +60,33 @@ Json telemetry(const csr::CudaTargetedTraceBatch& batch)
           {"driver_version", c.driver_version},
           {"runtime_version", c.runtime_version}};
 }
+Json telemetry(const csr::CudaTargetedTraceBatch& batch)
+{
+  auto result = deviceTelemetry(batch.device);
+  const auto& record = batch.execution;
+  result.update({{"generation_before", batch.generation_before},
+                 {"generation_after", batch.generation_after},
+                 {"node_count", batch.node_count},
+                 {"arc_count", batch.arc_count},
+                 {"native_prepare_ms", batch.native_prepare_ms},
+                 {"native_install_ms", batch.native_install_ms},
+                 {"scatter_ms", batch.scatter_ms},
+                 {"end_to_end_ms", batch.end_to_end_ms},
+                 {"execution",
+                  {{"requested_backend", toString(record.requested_backend)},
+                   {"requested_update_strategy", toString(record.requested_update_strategy)},
+                   {"fallback_policy", toString(record.fallback_policy)},
+                   {"executed_backend", toString(record.executed_backend)},
+                   {"executed_update_strategy", toString(record.executed_update_strategy)},
+                   {"execution_kind", toString(record.execution_kind)},
+                   {"propagation_scope", toString(record.propagation_scope)},
+                   {"incremental_batch_executed", record.incremental_batch_executed},
+                   {"fallback_to_full", record.fallback_to_full},
+                   {"fallback_reason", record.fallback_reason ? Json(toString(*record.fallback_reason)) : Json(nullptr)}}}});
+  if (batch.rejected_mixed_attempt)
+    result["rejected_mixed_attempt"] = deviceTelemetry(*batch.rejected_mixed_attempt);
+  return result;
+}
 }  // namespace
 int main(int argc, char** argv)
 {
@@ -73,10 +96,15 @@ int main(int argc, char** argv)
       std::cout << timing_dual_csr::test::incregpustaBuildInfo().dump() << '\n';
       return 0;
     }
-    require(argc == 8, "usage: probe targeted|performance|rollback --trace FILE --prefix N --output FILE");
+    require(argc == 8,
+            "usage: probe targeted|performance|rollback|incremental|incremental-performance|incremental-rollback --trace FILE --prefix N --output FILE");
     const std::string mode = argv[1];
-    require(mode == "targeted" || mode == "performance" || mode == "rollback", "unknown execution mode");
-    require(mode == "rollback" || (mode == "performance" ? !incregpusta_debug_checks_enabled : incregpusta_debug_checks_enabled),
+    const bool incremental = mode == "incremental" || mode == "incremental-performance" || mode == "incremental-rollback";
+    const bool performance = mode == "performance" || mode == "incremental-performance";
+    const bool rollback = mode == "rollback" || mode == "incremental-rollback";
+    require(incremental || mode == "targeted" || performance || rollback, "unknown execution mode");
+    const auto strategy = incremental ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull;
+    require(rollback || (performance ? !incregpusta_debug_checks_enabled : incregpusta_debug_checks_enabled),
             "performance requires checks OFF; diagnostics require checks ON");
     std::map<std::string, std::string> options;
     for (int i = 2; i < argc; i += 2)
@@ -91,13 +119,13 @@ int main(int argc, char** argv)
     auto decoded = buffer_trace::parseBufferTraceArtifactJson(std::string(std::istreambuf_iterator<char>(trace), {}));
     require(std::holds_alternative<buffer_trace::BufferTraceArtifact>(decoded), "invalid frozen trace");
     const auto& program = std::get<buffer_trace::BufferTraceArtifact>(decoded).replay;
-    Json output{{"schema_version", "ista-cuda-targeted-trace/1.0.0"},
+    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/1.0.0" : "ista-cuda-targeted-trace/1.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
                 {"requested_backend", "cuda"},
                 {"executed_backend", "cuda"},
-                {"requested_strategy", "targeted-full-levelization"},
-                {"executed_strategy", "targeted-full-levelization"},
+                {"requested_strategy", incremental ? "incremental" : "targeted-full-levelization"},
+                {"executed_strategy", incremental ? "incremental" : "targeted-full-levelization"},
                 {"fallback_count", 0},
                 {"correctness_comparison", "not_run"},
                 {"build", timing_dual_csr::test::incregpustaBuildInfo()}};
@@ -110,7 +138,7 @@ int main(int argc, char** argv)
           [&](const auto& view) {
             const auto physical_before
                 = incregpusta_debug_checks_enabled ? timing_dual_csr::test::captureTargetedSourcePhysical() : buffer_trace::SourcePhysicalFunctionalReceipt{};
-            if (mode == "rollback") {
+            if (rollback) {
               require(prefix >= 2, "rollback test requires two batches");
               auto rejected_program = program;
               std::visit(
@@ -121,7 +149,7 @@ int main(int argc, char** argv)
                   rejected_program.workload);
               bool rejected = false;
               try {
-                static_cast<void>(csr::CudaTargetedTraceReplayer::run(view.database, view.reference_input, view.authority, rejected_program, prefix));
+                static_cast<void>(csr::CudaTargetedTraceReplayer::run(view.database, view.reference_input, view.authority, rejected_program, prefix, strategy));
               } catch (const std::runtime_error& error) {
                 rejected = std::string(error.what()).find("CUDA_MISSING_SECOND_BATCH_CELL") != std::string::npos;
               } catch (const std::invalid_argument& error) {
@@ -138,7 +166,7 @@ int main(int argc, char** argv)
               }
               output["second_batch_failure_observed"] = true;
             }
-            result.emplace(csr::CudaTargetedTraceReplayer::run(view.database, view.reference_input, view.authority, program, prefix));
+            result.emplace(csr::CudaTargetedTraceReplayer::run(view.database, view.reference_input, view.authority, program, prefix, strategy));
             if constexpr (incregpusta_debug_checks_enabled)
               require(physical_before == timing_dual_csr::test::captureTargetedSourcePhysical(), "source physical state changed");
           },
@@ -156,8 +184,11 @@ int main(int argc, char** argv)
                                   {"kernel_launches", initialization.kernel_launches},
                                   {"end_to_end_ms", initialization.end_to_end_ms}};
       output["batch_timings"] = Json::array();
-      for (const auto& batch : result->batches)
+      for (const auto& batch : result->batches) {
         output["batch_timings"].push_back(telemetry(batch));
+        if (batch.execution.fallback_to_full)
+          output["fallback_count"] = output["fallback_count"].get<unsigned>() + 1;
+      }
       if constexpr (incregpusta_debug_checks_enabled) {
         output["batches"] = Json::array();
         output["device_checks"] = Json::array();

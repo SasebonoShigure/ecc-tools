@@ -5,43 +5,25 @@
 #include <vector>
 
 #include "CsrCudaBackend.hpp"
-#include "DualCsrDescriptors.hpp"
+#include "CudaDualCsrPatch.hpp"
+#include "MixedLevelizationTelemetry.hpp"
+#include "MixedLevelizationTypes.hpp"
 
 namespace ista::csr {
 
-struct CudaAppendedBaseInRow
+enum class CudaLevelizationMode
 {
-  NodeId sink;
-  std::vector<ArcId> arc_ids;
-};
-
-// Only changed data crosses this boundary; no full CPU graph or timing shadow.
-struct CudaDualCsrPatch
-{
-  timing_edit::TimingEditSessionToken session_token;
-  timing_edit::TransactionGeneration expected_generation, target_generation;
-  timing_edit::AppendOnlyHighWater before, after;
-  std::vector<timing_dual_csr::NodeAppendRecord> node_appends;
-  std::vector<timing_dual_csr::ArcAppendRecord> arc_appends;
-  std::vector<timing_dual_csr::BaseOutRemoveDescriptor> removes;
-  std::vector<timing_dual_csr::BaseOutChangeDescriptor> changes;
-  std::vector<timing_dual_csr::BaseInChangeDescriptor> reverse_changes;
-  std::vector<timing_dual_csr::ArcPayloadChangeDescriptor> payload_changes;
-  std::vector<timing_dual_csr::LogicalArcDeactivate> logical_deactivations;
-  std::vector<timing_dual_csr::AuxOutRowDescriptor> aux_rows;
-  std::vector<timing_dual_csr::AppendedBaseOutRowDescriptor> appended_base_out_rows;
-  std::vector<CudaAppendedBaseInRow> appended_base_in_rows;
-  // Production buffer insertion leaves these absent. Algorithm tests may append
-  // source/end nodes, using existing clock tags and explicit initial seeds.
-  std::optional<timing_dual_csr::ValueReplacement<std::vector<NodeId>>> roots, ends;
-  std::vector<StartSeedModel> appended_start_seeds;
-  std::vector<EndpointRequiredModel> appended_endpoints;
+  kFull,
+  kMixed
 };
 
 struct CudaDualCsrTelemetry
 {
   CsrCudaTelemetry cuda;
   double update_ms{0.0};
+  double mixed_prepare_ms{0.0};
+  timing_incremental_levelization::MixedLevelizationTelemetry mixed;
+  std::optional<timing_incremental_levelization::MixedStageFailureCode> mixed_failure;
   // Persistent buffers whose allocated element capacity grew from the origin.
   // Per-attempt descriptor scratch is counted in cuda.allocations only.
   std::uint64_t grown_buffers{0};
@@ -59,7 +41,7 @@ class CudaDualCsrSession final
   CudaDualCsrSession(const CudaDualCsrSession&) = delete;
   CudaDualCsrSession& operator=(const CudaDualCsrSession&) = delete;
 
-  [[nodiscard]] CudaDualCsrSession stage(const CudaDualCsrPatch& patch);
+  [[nodiscard]] CudaDualCsrSession stage(const CudaDualCsrPatch& patch, CudaLevelizationMode mode = CudaLevelizationMode::kFull);
   [[nodiscard]] bool publish(CudaDualCsrSession&& candidate) noexcept;
   [[nodiscard]] const CsrTimingValues& timingValues() const;
   [[nodiscard]] std::optional<CsrComputationCode> computationCode() const noexcept;

@@ -205,5 +205,16 @@ if(ISTA_ENABLE_CUDA)
     set_tests_properties(ista_cuda_targeted_trace_${trace} PROPERTIES
       LABELS "ista_cuda;ista_cuda_targeted;ista_integration" TIMEOUT 2400 SKIP_RETURN_CODE 77
       ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+    add_test(NAME ista_cuda_incremental_trace_${trace}
+      COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/cuda_targeted_trace_controller.py"
+      --strategy incremental
+      --probe "$<TARGET_FILE:ista_cuda_targeted_trace_probe>"
+      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/${trace}.json"
+      --run-root "${CMAKE_CURRENT_BINARY_DIR}/cuda-incremental-traces/${trace}"
+      ${cuda_targeted_mode})
+    set_tests_properties(ista_cuda_incremental_trace_${trace} PROPERTIES
+      LABELS "ista_cuda;ista_cuda_mixed;ista_integration" TIMEOUT 2400 SKIP_RETURN_CODE 77
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
   endforeach()
 endif()

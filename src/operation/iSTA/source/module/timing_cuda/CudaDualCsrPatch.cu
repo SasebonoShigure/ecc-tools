@@ -254,14 +254,25 @@ PackedPatch CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDualC
     record.expected = packArc(x.expected, packed.expected_children, packed.expected_tables);
     record.replacement = packArc(x.replacement, packed.children, packed.tables, prior.view.child_count, prior.table_count);
     packed.payloads.push_back(record);
+    bindings[record.id].levelization = record.replacement.levelization;
     layout.arcs[record.id] = {record.replacement.child_begin, record.replacement.child_count, true};
   }
   for (const auto& x : patch.arc_appends) {
     auto arc = packArc(x.payload, packed.children, packed.tables, prior.view.child_count, prior.table_count);
     packed.appends.push_back(arc);
-    bindings.push_back({arc.source, arc.sink, true});
+    bindings.push_back({arc.source, arc.sink, true, arc.levelization});
     layout.arcs.push_back({arc.child_begin, arc.child_count, true});
   }
+  // Incidence validation guarantees one final outgoing occurrence per active
+  // arc. Keep its real storage membership without mirroring physical slots.
+  for (const auto& x : patch.changes)
+    bindings[x.replacement_arc.value()].storage_kind = EdgeStorageKind::kBaseOut;
+  for (const auto& row : patch.appended_base_out_rows)
+    for (auto id : row.arc_ids)
+      bindings[id.value()].storage_kind = EdgeStorageKind::kBaseOut;
+  for (const auto& row : patch.aux_rows)
+    for (auto id : row.replacement_arc_ids)
+      bindings[id.value()].storage_kind = EdgeStorageKind::kAuxOut;
   for (const auto& child : packed.children)
     layout.child_indices.push_back(child.arc_index);
   for (const auto& x : patch.aux_rows) {

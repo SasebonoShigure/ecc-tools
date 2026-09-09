@@ -80,7 +80,7 @@ class IncrementalStaSession
 
   [[nodiscard]] StaStatus withCurrentState(StaStatus status) const;
   [[nodiscard]] StaStatus invalidState(std::string message) const;
-  [[nodiscard]] bool isIncrementalRequest() const noexcept;
+  [[nodiscard]] bool usesCpuSnapshot() const noexcept;
   [[nodiscard]] std::optional<std::string> observationOwnershipError(const csr::CsrSnapshotObservation& observation) const;
 
   StaExecutionRequest _request;

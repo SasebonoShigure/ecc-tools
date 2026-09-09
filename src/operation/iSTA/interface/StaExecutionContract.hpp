@@ -66,6 +66,7 @@ enum class StaFallbackReason
   kSequentialEditUnsupported,
   kBackendUnavailable,
   kContractViolation,
+  kOldLevelOrderConflict,
 };
 enum class StaCapabilityReason
 {

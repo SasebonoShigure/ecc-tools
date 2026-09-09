@@ -40,7 +40,7 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
   aux_mapping.resize(input.nodes.size(), absent);
   aux_offsets = {0};
   for (const auto& arc : host.arcs)
-    bindings.push_back({arc.source, arc.sink, true});
+    bindings.push_back({arc.source, arc.sink, true, arc.levelization});
   view.node_count = host.nodes.size();
   view.arc_count = host.arcs.size();
   view.child_count = host.children.size();
@@ -68,7 +68,7 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
   memory.record(1);
   execute();
 }
-CudaDualCsrSession::Impl::Impl(std::shared_ptr<const Impl> before, const CudaDualCsrPatch& patch)
+CudaDualCsrSession::Impl::Impl(std::shared_ptr<const Impl> before, const CudaDualCsrPatch& patch, CudaLevelizationMode mode)
     : token(before->token), generation(patch.target_generation), high_water(patch.after), origin(std::move(before))
 {
   const auto& prior = *origin;
@@ -78,18 +78,29 @@ CudaDualCsrSession::Impl::Impl(std::shared_ptr<const Impl> before, const CudaDua
   telemetry.cuda.encode_ms = elapsed(start);
   allocate();
   transferPatch(prior, patch, packed);
-  execute();
+  execute(mode);
 }
-void CudaDualCsrSession::Impl::execute()
+void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode)
 {
   memory.copy(seed_nodes, view.nodes, view.node_count);
   memory.copy(seed_paths, view.paths, checkedProduct(checkedProduct(view.node_count, 8), view.tag_count));
   memory.zero(view.arc_state, view.arc_count);
   memory.zero(view.child_state, view.child_count);
   memory.record(2);
-  launchLevelization(view, memory.stream());
-  ++telemetry.cuda.kernel_launches;
-  check(cudaGetLastError(), "CUDA targeted full levelization launch");
+  std::optional<CsrFifoLevelization> oracle;
+  if (mode == CudaLevelizationMode::kMixed) {
+    oracle = reconstructMixed();
+    if (code) {
+      memory.synchronize();
+      telemetry.cuda.h2d_ms = memory.milliseconds(0, 1);
+      telemetry.update_ms = memory.milliseconds(1, 2);
+      return;
+    }
+  } else {
+    launchLevelization(view, memory.stream());
+    ++telemetry.cuda.kernel_launches;
+    check(cudaGetLastError(), "CUDA targeted full levelization launch");
+  }
   memory.record(3);
   telemetry.cuda.kernel_launches += launchPropagation(view, memory.stream());
   check(cudaGetLastError(), "CUDA targeted full propagation launch");
@@ -120,6 +131,16 @@ void CudaDualCsrSession::Impl::execute()
     memory.record(5);
     memory.synchronize();
     values = unpackValues(std::move(data), layout);
+    if constexpr (incregpusta_debug_checks_enabled) {
+      if (oracle
+          && (values->level_offsets != oracle->level_offsets || values->level_nodes != oracle->level_nodes || values->node_to_level != oracle->node_to_level
+              || values->timing_order != oracle->level_nodes))
+        throw std::runtime_error("GPU mixed reconstruction differs from CPU reconstruction oracle");
+      if (oracle)
+        for (const auto& arc : bindings)
+          if (arc.active && arc.levelization && values->node_to_level[arc.source] >= values->node_to_level[arc.sink])
+            throw std::runtime_error("GPU mixed levels violate actual edge precedence");
+    }
   } else {
     memory.record(5);
     memory.synchronize();
@@ -139,7 +160,9 @@ void CudaDualCsrSession::Impl::execute()
   }
   telemetry.cuda.h2d_ms = memory.milliseconds(0, 1);
   telemetry.update_ms = memory.milliseconds(1, 2);
-  telemetry.cuda.levelization_ms = memory.milliseconds(2, 3);
+  telemetry.cuda.levelization_ms = memory.milliseconds(mode == CudaLevelizationMode::kMixed ? 7 : 2, 3);
+  if (mode == CudaLevelizationMode::kMixed)
+    telemetry.mixed.reconstruct_ms = telemetry.cuda.levelization_ms;
   telemetry.cuda.propagation_ms = memory.milliseconds(3, 4);
   telemetry.cuda.d2h_ms = memory.milliseconds(4, 5);
 }
@@ -159,13 +182,14 @@ CudaDualCsrSession::CudaDualCsrSession(std::shared_ptr<Impl> impl) noexcept : _i
 CudaDualCsrSession::~CudaDualCsrSession() = default;
 CudaDualCsrSession::CudaDualCsrSession(CudaDualCsrSession&&) noexcept = default;
 CudaDualCsrSession& CudaDualCsrSession::operator=(CudaDualCsrSession&&) noexcept = default;
-CudaDualCsrSession CudaDualCsrSession::stage(const CudaDualCsrPatch& patch)
+CudaDualCsrSession CudaDualCsrSession::stage(const CudaDualCsrPatch& patch, CudaLevelizationMode mode)
 {
   const auto start = Clock::now();
   demand(bool(_impl), "CUDA targeted owner was consumed");
+  demand(mode == CudaLevelizationMode::kFull || mode == CudaLevelizationMode::kMixed, "unknown CUDA levelization mode");
   Impl::validatePatch(*_impl, patch);
   try {
-    CudaDualCsrSession candidate(std::make_shared<Impl>(_impl, patch));
+    CudaDualCsrSession candidate(std::make_shared<Impl>(_impl, patch, mode));
     candidate._impl->telemetry.cuda.end_to_end_ms = elapsed(start);
     return candidate;
   } catch (const CudaError&) {

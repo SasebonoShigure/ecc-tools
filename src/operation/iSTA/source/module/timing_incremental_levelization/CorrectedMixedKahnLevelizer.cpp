@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <vector>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "MixedLevelizationInternal.hpp"
 #include "MixedLevelizationValidation.hpp"
+#include "MixedTopologyInternal.hpp"
 
 namespace ista::timing_incremental_levelization {
 namespace {
@@ -24,15 +26,11 @@ MixedKahnFailure failure(MixedKahnFailureCode code,
 
 }  // namespace
 
-MixedKahnAttempt runCorrectedMixedKahn(const MixedPrecedenceGraph& graph)
+MixedKahnAttempt detail::levelizeBuiltMixedGraph(const MixedPrecedenceGraph& graph)
 {
-  const MixedValidationResult graph_validation =
-      validateMixedPrecedenceGraph(graph);
-  if (!graph_validation.valid())
-    return failure(MixedKahnFailureCode::kInvariantFailure, 0,
-                   graph.domain.mixed_vertex_count, 0,
-                   graph_validation.detail);
-
+  if (graph.indegree.size() != graph.domain.mixed_vertex_count || graph.adjacency_offsets.size() != graph.indegree.size() + 1
+      || graph.adjacency_offsets.front() != 0 || graph.adjacency_offsets.back() != graph.successors.size())
+    return failure(MixedKahnFailureCode::kInvariantFailure, 0, graph.domain.mixed_vertex_count, 0, "mixed graph dimensions are invalid");
   const std::size_t vertex_count = graph.indegree.size();
   std::vector<std::uint64_t> indegree = graph.indegree;
   // 0 = unseen, 1 = queued, 2 = processed.
@@ -83,12 +81,15 @@ MixedKahnAttempt runCorrectedMixedKahn(const MixedPrecedenceGraph& graph)
 
       const std::uint64_t begin = graph.adjacency_offsets[source_index];
       const std::uint64_t end = graph.adjacency_offsets[source_index + 1];
+      if (begin > end || end > graph.successors.size())
+        return failure(MixedKahnFailureCode::kInvariantFailure, result.processed_count, graph.domain.mixed_vertex_count - result.processed_count,
+                       result.max_frontier, "mixed row is out of range");
       for (std::uint64_t index = begin; index < end; ++index) {
         const MixedVertexId sink =
             graph.successors[static_cast<std::size_t>(index)];
         const std::size_t sink_index =
             static_cast<std::size_t>(sink.value());
-        if (indegree[sink_index] == 0)
+        if (sink_index >= vertex_count || indegree[sink_index] == 0)
           return failure(MixedKahnFailureCode::kInvariantFailure,
                          result.processed_count,
                          graph.domain.mixed_vertex_count
@@ -96,7 +97,7 @@ MixedKahnAttempt runCorrectedMixedKahn(const MixedPrecedenceGraph& graph)
                          result.max_frontier,
                          "mixed indegree underflow");
         --indegree[sink_index];
-        if (indegree[sink_index] == 0) {
+        if (sink_index >= vertex_count || indegree[sink_index] == 0) {
           if (state[sink_index] != 0)
             return failure(MixedKahnFailureCode::kInvariantFailure,
                            result.processed_count,
@@ -121,13 +122,20 @@ MixedKahnAttempt runCorrectedMixedKahn(const MixedPrecedenceGraph& graph)
                        - result.processed_count,
                    result.max_frontier,
                    "mixed precedence graph contains a cycle");
-  const MixedValidationResult validation =
-      validateMixedKahnLevelization(graph, result);
-  if (!validation.valid())
-    return failure(MixedKahnFailureCode::kInvariantFailure,
-                   result.processed_count, 0, result.max_frontier,
-                   validation.detail);
+  if constexpr (incregpusta_debug_checks_enabled) {
+    const MixedValidationResult validation = detail::validateBuiltMixedResult(graph, result);
+    if (!validation.valid())
+      return failure(MixedKahnFailureCode::kInvariantFailure, result.processed_count, 0, result.max_frontier, validation.detail);
+  }
   return result;
+}
+
+MixedKahnAttempt runCorrectedMixedKahn(const MixedPrecedenceGraph& graph)
+{
+  const MixedValidationResult validation = validateMixedPrecedenceGraph(graph);
+  if (!validation.valid())
+    return failure(MixedKahnFailureCode::kInvariantFailure, 0, graph.domain.mixed_vertex_count, 0, validation.detail);
+  return detail::levelizeBuiltMixedGraph(graph);
 }
 
 }  // namespace ista::timing_incremental_levelization

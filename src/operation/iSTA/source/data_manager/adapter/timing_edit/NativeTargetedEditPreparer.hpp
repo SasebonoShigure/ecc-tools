@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "CudaDualCsrSession.hpp"
+#include "CudaDualCsrPatch.hpp"
 #include "NativeDatabaseCandidate.hpp"
 #include "TimingEditResolver.hpp"
 

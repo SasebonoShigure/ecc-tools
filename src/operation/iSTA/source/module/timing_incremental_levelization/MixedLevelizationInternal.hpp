@@ -9,9 +9,32 @@
 #include <string>
 #include <vector>
 
-#include "CsrFifoLevelization.hpp"
+#include "MixedLevelizationTypes.hpp"
 
 namespace ista::timing_incremental_levelization::detail {
+
+// Borrow the successful owner's arrays; constructing mixed topology must not
+// copy an entire previous permutation or inverse map.
+struct PreviousLevels
+{
+  const std::vector<std::uint64_t>& level_offsets;
+  const std::vector<csr::NodeId>& level_nodes;
+  const std::vector<std::uint64_t>& node_to_level;
+  bool complete;
+  std::optional<csr::CsrViewError> view_error;
+
+  PreviousLevels(const csr::CsrFifoLevelization& levels)
+      : PreviousLevels(levels.level_offsets, levels.level_nodes, levels.node_to_level, levels.complete, levels.view_error)
+  {
+  }
+  PreviousLevels(const std::vector<std::uint64_t>& offsets, const std::vector<csr::NodeId>& nodes, const std::vector<std::uint64_t>& inverse, bool done,
+                 std::optional<csr::CsrViewError> error = std::nullopt)
+      : level_offsets(offsets), level_nodes(nodes), node_to_level(inverse), complete(done), view_error(error)
+  {
+  }
+};
+
+[[nodiscard]] VirtualLevelMappingAttempt oldNodeLevel(csr::NodeId node, const PreviousLevels& previous, const MixedIdDomain& domain);
 
 [[nodiscard]] inline bool checkedAdd(std::uint64_t lhs, std::uint64_t rhs,
                                      std::uint64_t& result) noexcept
@@ -30,9 +53,7 @@ namespace ista::timing_incremental_levelization::detail {
   return true;
 }
 
-[[nodiscard]] inline bool validatePreviousLevelizationShape(
-    const csr::CsrFifoLevelization& previous, std::uint64_t n_last_nodes,
-    std::string& detail)
+[[nodiscard]] inline bool validatePreviousLevelizationDimensions(const PreviousLevels& previous, std::uint64_t n_last_nodes, std::string& detail)
 {
   if (previous.view_error.has_value()) {
     detail = "previous levelization carries a view error";
@@ -62,6 +83,14 @@ namespace ista::timing_incremental_levelization::detail {
     return false;
   }
 
+  return true;
+}
+
+[[nodiscard]] inline bool validatePreviousLevelizationShape(const PreviousLevels& previous, std::uint64_t n_last_nodes, std::string& detail)
+{
+  if (!validatePreviousLevelizationDimensions(previous, n_last_nodes, detail))
+    return false;
+  const std::size_t node_count = static_cast<std::size_t>(n_last_nodes);
   std::vector<std::uint8_t> seen(node_count, 0);
   for (std::size_t level = 0; level + 1 < previous.level_offsets.size();
        ++level) {

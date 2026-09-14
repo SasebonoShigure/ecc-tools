@@ -3,9 +3,11 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "CsrReferenceCanonicalEncoder.hpp"
@@ -50,6 +52,23 @@ int main()
 
   const CsrReferenceInput first = makeReferenceInputTestFixture(1);
   const CsrReferenceInput second = makeReferenceInputTestFixture(2);
+  // These are production reference payloads, not generic analysis-context bytes.
+  const std::array<std::pair<StaAnalysisContext, const char*>, 3> corners{{
+      {{"__direct__", "__unspecified_temperature__", "__no_rc_corner__"},
+       "762ed637a7b3f10653e1212cf54480f9d8b319108418663f301a9b45b5e97dcf"},
+      {{"slow", "25", "__no_rc_corner__"},
+       "3e1ae07c69c21623632f49b62cac0604e6b62d5acabdd2ba5c992a08ea2d9de0"},
+      {{"慢", "25", "__no_rc_corner__"},
+       "71ebe214003ff803fcf733046f836fa7e5b9cf37f2a94de04f1ca42d6cbd2c89"},
+  }};
+  for (const auto& [context, expected] : corners) {
+    CsrReferenceInput input = first;
+    input.analysis_context = context;
+    require(makeReferenceCornerFingerprint(input) == expected, "production corner known answer differs");
+    require(makeReferenceInputIdentity(input, 1, 0).corner_fingerprint == expected,
+            "production snapshot identity differs from its corner known answer");
+  }
+
   require(validateReferenceInputForSession(first, 1).empty(), "fixture must be strict-valid");
   requireCommittedIdentity(first.source_identity);
 

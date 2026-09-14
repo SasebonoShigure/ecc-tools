@@ -158,31 +158,37 @@ int main()
           "init failure closes handle");
   require(init_failure_session.close().ok() && init_failure_fake->close_calls == 0, "failed init has no second cleanup attempt");
 
-  auto cuda_operations = std::make_unique<FakeOperations>();
-  FakeOperations* cuda_fake = cuda_operations.get();
-  IncrementalStaSession cuda_session({StaBackend::kCuda, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kFullWithRecord}, std::move(cuda_operations));
-  StaStatus unsupported = cuda_session.initialize(testAnalysisContext(), {});
-  require(unsupported.code == StaSessionStatusCode::kUnsupported && cuda_fake->initialize_calls == 0, "unsupported before native init");
-  require(cuda_session.state() == StaSessionState::kClosed, "unsupported closes handle");
+  if constexpr (!incregpusta_cuda_enabled) {
+    auto cuda_operations = std::make_unique<FakeOperations>();
+    FakeOperations* cuda_fake = cuda_operations.get();
+    IncrementalStaSession cuda_session({StaBackend::kCuda, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kFullWithRecord}, std::move(cuda_operations));
+    StaStatus unsupported = cuda_session.initialize(testAnalysisContext(), {});
+    require(unsupported.code == StaSessionStatusCode::kUnsupported && cuda_fake->initialize_calls == 0, "unsupported before native init");
+    require(cuda_session.state() == StaSessionState::kClosed, "unsupported closes handle");
+  }
 
   if constexpr (incregpusta_cuda_enabled) {
-    for (bool fail : {false, true}) {
-      auto operations = std::make_unique<FakeOperations>();
-      auto* fake = operations.get();
-      fake->throw_run = fail;
-      IncrementalStaSession session({StaBackend::kCuda, StaUpdateStrategy::kFull, StaFallbackPolicy::kError}, std::move(operations));
-      require(session.initialize(testAnalysisContext(), {}).ok(), "CUDA full initializes on an available device");
-      const auto result = session.runFullBaseline();
-      require(fake->received_context, "CUDA full receives its owned session context");
-      if (fail) {
-        require(!result.ok() && session.state() == StaSessionState::kPoisoned, "CUDA run failure poisons the session");
-        require(session.runFullBaseline().status.code == StaSessionStatusCode::kInvalidState, "poisoned CUDA session cannot run again");
-      } else {
-        require(result.ok() && result.record->executed_backend == StaBackend::kCuda && result.record->execution_kind == StaExecutionKind::kFullUpdate
-                    && !result.record->fallback_to_full,
-                "CUDA full records the actual backend without fallback");
+    for (auto strategy : {StaUpdateStrategy::kFull, StaUpdateStrategy::kIncremental}) {
+      for (bool fail : {false, true}) {
+        auto operations = std::make_unique<FakeOperations>();
+        auto* fake = operations.get();
+        fake->throw_run = fail;
+        IncrementalStaSession session({StaBackend::kCuda, strategy, StaFallbackPolicy::kError}, std::move(operations));
+        require(session.initialize(testAnalysisContext(), {}).ok(), "CUDA full initializes on an available device");
+        const auto result = session.runFullBaseline();
+        require(fake->received_context, "CUDA full receives its owned session context");
+        if (fail) {
+          require(!result.ok() && session.state() == StaSessionState::kPoisoned, "CUDA run failure poisons the session");
+          require(session.runFullBaseline().status.code == StaSessionStatusCode::kInvalidState, "poisoned CUDA session cannot run again");
+        } else {
+          require(
+              result.ok() && result.record->executed_backend == StaBackend::kCuda
+                  && result.record->execution_kind == (strategy == StaUpdateStrategy::kFull ? StaExecutionKind::kFullUpdate : StaExecutionKind::kBaselineOnly)
+                  && !result.record->fallback_to_full,
+              "CUDA full records the actual backend without fallback");
+        }
+        require(session.close().ok() && fake->close_calls == 1, "CUDA closes after success or failure");
       }
-      require(session.close().ok() && fake->close_calls == 1, "CUDA full closes after success or failure");
     }
   }
 

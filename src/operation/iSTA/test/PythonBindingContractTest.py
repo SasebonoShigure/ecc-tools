@@ -15,6 +15,7 @@
 # See the Mulan PSL v2 for more details.
 # ***************************************************************************************
 
+import argparse
 import itertools
 
 import ecc_py
@@ -65,7 +66,7 @@ def check_record(record, request):
     assert record["requested_backend"] == request["backend"]
     assert record["requested_update_strategy"] == request["update_strategy"]
     assert record["fallback_policy"] == request["fallback_policy"]
-    assert record["executed_backend"] == "cpu"
+    assert record["executed_backend"] == request["backend"]
     assert record["executed_update_strategy"] == "full"
     assert record["propagation_scope"] == "full_graph"
     assert record["incremental_batch_executed"] is False
@@ -78,14 +79,14 @@ def check_record(record, request):
         assert record["fallback_reason"] == "not_applicable_no_mutation"
 
 
-def check_matrix():
+def check_matrix(cuda_available):
     for backend, strategy, policy in itertools.product(
         ("cpu", "cuda"),
         ("full", "incremental"),
         ("error", "full_with_record"),
     ):
         request = make_request(backend, strategy, policy)
-        if backend == "cpu":
+        if backend == "cpu" or cuda_available:
             check_record(ecc_py.resolve_sta_execution(request), request)
         else:
             require_sta_error(
@@ -100,7 +101,7 @@ def check_matrix():
         assert session.state == "closed"
 
 
-def check_initialize_error():
+def check_initialize_error(cuda_available):
     request = make_request("cuda", "full", "error")
     session = ecc_py.create_incremental_sta_session(request)
     assert session.state == "created"
@@ -123,15 +124,18 @@ def check_initialize_error():
     assert session.session_token is None
     assert session.csr_snapshot_observation is None
 
-    require_sta_error(
-        lambda: session.initialize(
-            analysis_context=VALID_CONTEXT,
-            config="",
-            config_dict={},
-        ),
-        request,
-        "closed",
-    )
+    if cuda_available:
+        session.close()
+    else:
+        require_sta_error(
+            lambda: session.initialize(
+                analysis_context=VALID_CONTEXT,
+                config="",
+                config_dict={},
+            ),
+            request,
+            "closed",
+        )
     assert session.state == "closed"
     assert session.session_token is None
     assert session.csr_snapshot_observation is None
@@ -160,7 +164,15 @@ def check_invalid_requests():
 
 
 if __name__ == "__main__":
-    check_matrix()
-    check_initialize_error()
+    parser = argparse.ArgumentParser(description="Real native mode and lifecycle contract")
+    parser.add_argument("--expect-cuda", type=int, choices=(0, 1), required=True)
+    parser.add_argument("--expect-debug-checks", type=int, choices=(0, 1), required=True)
+    parser.add_argument("--expect-unavailable", action="store_true")
+    args = parser.parse_args()
+    assert ecc_py.incregpusta_cuda_enabled is bool(args.expect_cuda)
+    assert ecc_py.incregpusta_debug_checks_enabled is bool(args.expect_debug_checks)
+    cuda_available = ecc_py.incregpusta_cuda_enabled and not args.expect_unavailable
+    check_matrix(cuda_available)
+    check_initialize_error(cuda_available)
     check_invalid_requests()
     print("iSTA Python binding contract passed")

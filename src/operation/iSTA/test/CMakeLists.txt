@@ -217,11 +217,21 @@ if(BUILD_TESTING)
         "PYTHONPATH=$<TARGET_FILE_DIR:ecc_py>"
         "${ISTA_TEST_PYTHON_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/PythonBindingContractTest.py"
+        --expect-cuda $<BOOL:${ISTA_ENABLE_CUDA}>
+        --expect-debug-checks $<BOOL:${ECC_INCREGPUSTA_DEBUG_CHECKS}>
     )
     set_tests_properties(
         ista_python_binding_contract
         PROPERTIES LABELS "ista_integration;ista_smoke"
     )
+    if(ISTA_ENABLE_CUDA)
+      add_test(NAME ista_python_binding_no_device
+          COMMAND "${CMAKE_COMMAND}" -E env
+          "PYTHONPATH=$<TARGET_FILE_DIR:ecc_py>" "CUDA_VISIBLE_DEVICES=-1"
+          "${ISTA_TEST_PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/PythonBindingContractTest.py"
+          --expect-cuda 1 --expect-debug-checks $<BOOL:${ECC_INCREGPUSTA_DEBUG_CHECKS}> --expect-unavailable)
+      set_tests_properties(ista_python_binding_no_device PROPERTIES LABELS "ista_cuda;ista_integration" TIMEOUT 180)
+    endif()
   endif()
 
   add_test(

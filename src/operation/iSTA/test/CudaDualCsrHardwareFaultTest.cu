@@ -26,7 +26,7 @@ __global__ void invalidDeviceAddress()
 {
   *static_cast<volatile int*>(nullptr) = 1;
 }
-void actualCudaFault(const std::string& operation)
+void actualCudaFault(const std::string& operation, CudaLevelizationMode levelization)
 {
   if constexpr (!incregpusta_debug_checks_enabled)
     throw std::invalid_argument("fault experiments require debug checks ON");
@@ -34,7 +34,7 @@ void actualCudaFault(const std::string& operation)
   const timing_edit::AppendOnlyHighWater water{2, 2, 1};
   CudaDualCsrSession owner(input, water);
   auto patch = patchFor(input, 0, water, water);
-  auto candidate = owner.stage(patch), sibling = owner.stage(patch);
+  auto candidate = owner.stage(patch, levelization), sibling = owner.stage(patch, levelization);
   invalidDeviceAddress<<<1, 1>>>();
   require(cudaGetLastError() == cudaSuccess, "fault kernel did not launch");
   require(cudaDeviceSynchronize() == cudaErrorIllegalAddress, "device fault did not reach synchronization");
@@ -43,7 +43,7 @@ void actualCudaFault(const std::string& operation)
     if (operation == "--debug-context-fault")
       static_cast<void>(candidate.debugState());
     else
-      static_cast<void>(owner.stage(patch));
+      static_cast<void>(owner.stage(patch, levelization));
   } catch (const cuda_detail::CudaError&) {
     failed = true;
   }
@@ -80,10 +80,11 @@ void actualAllocationFailure()
 int main(int argc, char** argv)
 {
   try {
-    require(argc == 2, "one hardware fault mode is required");
+    require(argc == 2 || (argc == 3 && std::string(argv[2]) == "--mixed"), "one hardware fault mode and optional --mixed are required");
+    const auto levelization = argc == 3 ? CudaLevelizationMode::kMixed : CudaLevelizationMode::kFull;
     const std::string mode = argv[1];
     if (mode == "--debug-context-fault" || mode == "--stage-context-fault")
-      actualCudaFault(mode);
+      actualCudaFault(mode, levelization);
     else if (mode == "--allocation-failure")
       actualAllocationFailure();
     else

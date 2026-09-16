@@ -36,7 +36,7 @@ __device__ bool payloadEqual(DeviceView view, DevicePatch patch, const Arc& actu
   if (!actual.active || actual.source != expected.source || actual.sink != expected.sink || actual.child_count != expected.child_count
       || actual.delay != expected.delay || actual.delay_min != expected.delay_min || actual.delay_max != expected.delay_max || actual.net != expected.net
       || actual.clock != expected.clock || actual.has_load != expected.has_load || actual.levelization != expected.levelization
-      || actual.data_arrival != expected.data_arrival || actual.data_slew != expected.data_slew)
+      || actual.data_arrival != expected.data_arrival || actual.data_slew != expected.data_slew || actual.clock_eligible != expected.clock_eligible)
     return false;
   for (unsigned i = 0; i < 4; ++i)
     if (actual.load[i] != expected.load[i])
@@ -48,8 +48,9 @@ __device__ bool payloadEqual(DeviceView view, DevicePatch patch, const Arc& actu
         || a.trigger != b.trigger)
       return false;
     for (unsigned t = 0; t < 2; ++t)
-      if (a.check_present[t] != b.check_present[t] || !tableEqual(a.delay[t], view.table_data, b.delay[t], patch.expected_tables)
-          || !tableEqual(a.slew[t], view.table_data, b.slew[t], patch.expected_tables))
+      if (!tableEqual(a.delay[t], view.table_data, b.delay[t], patch.expected_tables)
+          || !tableEqual(a.slew[t], view.table_data, b.slew[t], patch.expected_tables)
+          || !tableEqual(a.check[t], view.table_data, b.check[t], patch.expected_tables))
         return false;
   }
   return true;

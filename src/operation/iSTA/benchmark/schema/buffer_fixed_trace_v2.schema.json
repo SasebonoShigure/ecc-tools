@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openecos.org/schemas/buffer_fixed_trace_v1.schema.json",
-  "title": "iSTA fixed buffer semantic trace, version 1",
+  "$id": "https://openecos.org/schemas/buffer_fixed_trace_v2.schema.json",
+  "title": "iSTA fixed buffer semantic trace, version 2",
   "description": "Closed-world Stage 4 artifact whose replay and generation evidence are validated directly.",
   "type": "object",
   "additionalProperties": false,
@@ -42,7 +42,7 @@
         "comparability_status"
       ],
       "properties": {
-        "schema_version": {"const": 1},
+        "schema_version": {"const": 2},
         "selection_mode": {"const": "fixed_trace"},
         "semantic_workload_kind": {"enum": ["synthetic", "real_design"]},
         "profile_id": {
@@ -89,14 +89,62 @@
     "sourceArtifactRefs": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["tech_lef", "cell_lef", "liberty", "verilog", "sdc", "top"],
+      "required": [
+        "tech_lef",
+        "cell_lefs",
+        "liberties",
+        "verilog",
+        "sdc",
+        "top",
+        "analysis_context"
+      ],
       "properties": {
-        "tech_lef": {"$ref": "#/$defs/sourceRef"},
-        "cell_lef": {"$ref": "#/$defs/sourceRef"},
-        "liberty": {"$ref": "#/$defs/sourceRef"},
-        "verilog": {"$ref": "#/$defs/sourceRef"},
-        "sdc": {"$ref": "#/$defs/sourceRef"},
-        "top": {"$ref": "#/$defs/nonEmptyText"}
+        "tech_lef": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "verilog": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "sdc": {
+          "$ref": "#/$defs/sourceRef"
+        },
+        "top": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "cell_lefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sourceRef"
+          }
+        },
+        "liberties": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sourceRef"
+          }
+        },
+        "analysis_context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "liberty_corner",
+            "temperature",
+            "rc_corner"
+          ],
+          "properties": {
+            "liberty_corner": {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            "temperature": {
+              "$ref": "#/$defs/nonEmptyText"
+            },
+            "rc_corner": {
+              "$ref": "#/$defs/nonEmptyText"
+            }
+          }
+        }
       }
     },
     "designEditPlan": {

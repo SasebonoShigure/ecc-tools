@@ -44,6 +44,7 @@ CsrComputationResult execute(HostData& host, CsrCudaTelemetry& telemetry)
   view.arc_count = host.arcs.size();
   view.child_count = host.children.size();
   view.tag_count = host.tag_count;
+  view.clock_count = host.clock_count;
   view.root_count = host.roots.size();
   view.end_count = host.ends.size();
   view.endpoint_count = host.endpoints.size();

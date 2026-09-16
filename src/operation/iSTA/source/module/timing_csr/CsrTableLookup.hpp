@@ -25,4 +25,7 @@ namespace ista::csr {
 [[nodiscard]] std::optional<double> lookupCsrTimingTable(const TimingTableModel& table, double input_slew, double raw_output_load, double time_unit_scale,
                                                          double capacitance_unit_scale);
 
+[[nodiscard]] std::optional<double> lookupCsrTimingCheckTable(const TimingTableModel& table, double clock_slew, double data_slew,
+                                                              double time_unit_scale);
+
 }  // namespace ista::csr

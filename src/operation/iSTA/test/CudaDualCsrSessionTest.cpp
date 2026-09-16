@@ -10,6 +10,13 @@
 #include "CudaDualCsrDebugState.hpp"
 #include "CudaDualCsrSession.hpp"
 #include "CudaDualCsrTestReader.hpp"
+#include "CudaTargetedExecutionInternal.hpp"
+#include "NativeTargetedEditPreparer.hpp"
+#include "NativeCandidateExecutor.hpp"
+#include "PublicTimingJson.hpp"
+#include "TimingResultScatterInternal.hpp"
+#include "timing_edit/BufferTraceReplayInput.hpp"
+#include "timing_dual_csr/DualCsrTargetedArtifactSupport.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
 #include "timing_dual_csr/DualCsrTestSupport.hpp"
@@ -330,6 +337,100 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
   }
   require(rejected && !owner.poisoned(), "capacity rejection poisoned committed owner");
 }
+nlohmann::json captureCudaPublic(const timing_edit::oracle::ProductionFreshSessionView& loaded,
+                                 const Database& source, const timing_edit::NativeTargetedEditState& state,
+                                 const CsrTimingValues& values)
+{
+  auto installed = timing_edit::NativeCandidateExecutor::installPreparedGraph(
+      loaded.authority, timing_edit::NativeDatabaseCandidate::createPreservingGraph(source));
+  try {
+    auto& database = installed.database();
+    csr::detail::StableScatterTargets targets;
+    for (const auto& name : state.node_names)
+      targets.nodes.push_back({&database.get_timing_point_map().at(name), &name});
+    targets.arcs.resize(state.arc_native_ranks.size());
+    for (std::size_t id = 0; id < state.arc_native_ranks.size(); ++id)
+      if (state.arc_native_ranks[id]) {
+        const auto rank = *state.arc_native_ranks[id];
+        targets.arcs[id] = {&database.get_arc_list().at(rank), rank};
+      }
+    targets.timing_order = &database.get_timing_order_list();
+    const auto& input = loaded.reference_input;
+    auto prepared = csr::detail::prepareResolvedTimingResult(
+        targets, {input.analysis_order, input.path_source_order, input.transition_order, input.clock_tags}, values);
+    auto* scatter = std::get_if<csr::detail::PreparedTimingResult>(&prepared);
+    require(scatter != nullptr, "acceptance CUDA result could not scatter");
+    csr::detail::publishPreparedTimingResult(*scatter);
+    auto output = ista::test::analyzeAndCapturePublicTiming();
+    require(installed.rollback(), "acceptance CUDA report rollback failed");
+    return output;
+  } catch (...) {
+    if (installed.active())
+      require(installed.rollback(), "acceptance CUDA report failure rollback failed");
+    throw;
+  }
+}
+
+void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mode, nlohmann::json& snapshots)
+{
+  const auto program = buffer_trace::test::readReplayInput(path, true);
+  const auto& plans = std::visit([](const auto& workload) -> const auto& { return workload.batches; }, program.workload);
+  require(plans.size() >= 2, "cross-build recovery needs a committed batch and continuation");
+  std::vector<StaExecutionRecord> persisted;
+  nlohmann::json original;
+  std::uint64_t original_session = 0;
+  for (bool recovering : {false, true}) {
+    DualCsrTargetedArtifactSupport artifacts(program);
+    timing_edit::oracle::ProductionFreshSessionLoader::run(
+        artifacts.artifacts(),
+        [&](const timing_edit::oracle::ProductionFreshSessionView& loaded) {
+          require(!recovering || loaded.session_token != original_session, "recovery did not create a new session");
+          if (!recovering)
+            original_session = loaded.session_token;
+          auto state = timing_edit::NativeTargetedEditPreparer::bindBaseline(loaded.database, loaded.reference_input, plans.front().baseline);
+          CudaDualCsrSession owner(loaded.reference_input, state.resolver.highWater());
+          require(!owner.computationCode(), "cross-build CUDA baseline failed");
+          nlohmann::json observations = nlohmann::json::array();
+          observations.push_back({{"execution", "baseline-full"}, {"state", CudaDualCsrTestReader::capture(owner)}});
+          std::optional<timing_edit::NativeDatabaseCandidate> native;
+          const auto requested = mode == CudaLevelizationMode::kMixed ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull;
+          for (std::size_t index = 0; index < plans.size(); ++index) {
+            const auto strategy = recovering && index == 0 ? persisted.front().executed_update_strategy : requested;
+            auto prepared = timing_edit::NativeTargetedEditPreparer::prepare(
+                native ? native->database() : loaded.database, plans[index], state);
+            CudaTargetedTraceBatch batch;
+            auto candidate = csr::detail::stageCudaTargetedBatch(owner, prepared.patch, strategy, StaFallbackPolicy::kError, batch);
+            require(!candidate.computationCode() && !candidate.poisoned()
+                        && batch.execution.executed_update_strategy == strategy && !batch.execution.fallback_to_full,
+                    "cross-build replay did not execute the requested CUDA mode");
+            require(owner.publish(std::move(candidate)), "cross-build CUDA publication failed");
+            state = std::move(prepared.staged);
+            native.emplace(std::move(prepared.candidate));
+            require(owner.generation() == state.generation, "cross-build native/device generation differs");
+            observations.push_back({
+                {"requested_update_strategy", toString(batch.execution.requested_update_strategy)},
+                {"executed_update_strategy", toString(batch.execution.executed_update_strategy)},
+                {"incremental_batch_executed", batch.execution.incremental_batch_executed},
+                {"fallback_to_full", batch.execution.fallback_to_full},
+                {"state", CudaDualCsrTestReader::capture(owner)},
+                {"public", captureCudaPublic(loaded, native->database(), state, owner.timingValues())}});
+            if (!recovering)
+              persisted.push_back(batch.execution);
+            else
+              require(observations.back() == original.at(index + 1), "CUDA restored/continued state differs from saved execution");
+          }
+          if (!recovering) {
+            original = observations;
+            snapshots.push_back({{"replay", std::move(observations)}});
+          } else {
+            snapshots.push_back({{"restored_prefix_batches", 1}, {"continued_batches", plans.size() - 1},
+                                 {"recovery_then_continuation", std::move(observations)}});
+          }
+        },
+        StaBackend::kCuda);
+  }
+}
+
 void emptyGraph(CudaLevelizationMode mode)
 {
   CsrReferenceInput input;
@@ -473,18 +574,27 @@ int main(int argc, char** argv)
       mode = CudaLevelizationMode::kMixed;
     std::optional<nlohmann::json> snapshots;
     std::filesystem::path output;
-    if (argc == 3 && (std::string(argv[1]) == "--cross-build-output" || std::string(argv[1]) == "--mixed-cross-build-output")) {
+    if ((argc == 3 || (argc == 5 && std::string(argv[3]) == "--replay"))
+        && (std::string(argv[1]) == "--cross-build-output" || std::string(argv[1]) == "--mixed-cross-build-output")) {
       output = argv[2];
-      std::filesystem::remove(output);
+      if (argc == 5)
+        require(std::filesystem::symlink_status(output).type() == std::filesystem::file_type::not_found,
+                "replay cross-build output must be a new file");
+      else
+        std::filesystem::remove(output);
       snapshots = nlohmann::json::array();
     } else
       require(argc == 1 || (argc == 2 && mode == CudaLevelizationMode::kMixed), "unknown arguments; hardware fault modes require the ON-only target");
     if (mode == CudaLevelizationMode::kMixed)
       multiBlockReconstruction();
+    runCudaClockContracts();
+    runCudaSequentialContracts();
     emptyGraph(mode);
     auxSequence(snapshots ? &*snapshots : nullptr, mode);
     removeChangeAndCycle(mode);
     payloadFailures(mode);
+    if (argc == 5)
+      replayCrossBuild(argv[4], mode, *snapshots);
     if (snapshots) {
       std::ofstream stream(output);
       stream << snapshots->dump(2) << '\n';

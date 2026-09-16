@@ -86,6 +86,67 @@ void baselineFactoryContracts()
           "factory accepted a full-reference semantic violation");
 }
 
+
+void loadAccumulationOrderContract()
+{
+  auto input = baselineInput();
+  const auto sink_template = input.nodes.back();
+  // Canonical keys put short names first. Native load lists sort full names:
+  // ((1 + 2^-53) + 2^-53) != ((2^-53 + 2^-53) + 1).
+  input.nodes.front().key = nodeKey("a");
+  input.nodes.resize(1);
+  for (const char* name : {"b", "c", "a_long"}) {
+    auto sink = sink_template;
+    sink.id = csr::NodeId{input.nodes.size()};
+    sink.key = nodeKey(name);
+    input.nodes.push_back(std::move(sink));
+  }
+  input.node_ids_by_key.clear();
+  for (const auto& value : input.nodes)
+    input.node_ids_by_key.push_back({value.key, value.id});
+  input.arcs.clear();
+  input.arc_ids_by_key.clear();
+  for (std::size_t i = 1; i < input.nodes.size(); ++i) {
+    auto arc = arcRecord(i - 1, input.nodes.front(), input.nodes[i], 0);
+    arc.native_traversal_rank = i % 3;
+    arc.output_load = csr::test::outputLoad(1.0);
+    input.arc_ids_by_key.push_back({arc.key, arc.id});
+    input.arcs.push_back(std::move(arc));
+  }
+  input.out_row_offsets = {0, 3, 3, 3, 3};
+  input.out_arc_ids = {csr::ArcId{2}, csr::ArcId{0}, csr::ArcId{1}};
+  input.in_row_offsets = {0, 0, 1, 2, 3};
+  input.in_arc_ids = {csr::ArcId{0}, csr::ArcId{1}, csr::ArcId{2}};
+  input.ordered_end_ids = {csr::NodeId{3}, csr::NodeId{1}, csr::NodeId{2}};
+  input.clock_owner_by_node.resize(4);
+  input.port_constraints.front().map_key = "a";
+  input.port_constraints.front().embedded_port_name = "a";
+  const auto constraint_template = input.port_constraints.back();
+  input.port_constraints.resize(1);
+  const auto endpoint_template = input.endpoint_required.front();
+  input.endpoint_required.clear();
+  for (const auto id : input.ordered_end_ids) {
+    auto constraint = constraint_template;
+    constraint.map_key = input.nodes[id.value()].key.full_name;
+    constraint.embedded_port_name = constraint.map_key;
+    constraint.resolved_node = id;
+    constraint.output_load = id.value() == 3 ? 1.0 : 0x1p-53;
+    input.port_constraints.push_back(std::move(constraint));
+    auto endpoint = endpoint_template;
+    endpoint.node = id;
+    input.endpoint_required.push_back(std::move(endpoint));
+  }
+  csr::test::refreshIdentity(input, kSessionValue);
+  csr::test::requireValid(csr::validateReferenceInput(input), "native full-name load order");
+  auto attempt = DualCsrBaselineFactory::create(
+      input, timing_edit::TimingEditSessionToken{kSessionValue},
+      timing_edit::AppendOnlyHighWater{input.nodes.size(), 0, input.arcs.size()});
+  require(attempt.success(), "Dual diagnostic projection reordered native load accumulation");
+  (*attempt.state->arc_slots.front().payload.output_load)[0][0] = 2.0;
+  require(!validateDualCsrState(*attempt.state).empty(),
+          "load-order fix accepted a forged output load");
+}
+
 void directViewContracts()
 {
   const DualCsrState state = baselineState();
@@ -427,6 +488,7 @@ int main()
 {
   try {
     ista::timing_dual_csr::test::baselineFactoryContracts();
+    ista::timing_dual_csr::test::loadAccumulationOrderContract();
     ista::timing_dual_csr::test::directViewContracts();
     ista::timing_dual_csr::test::physicalFifoContracts();
     ista::timing_dual_csr::test::directViewControlAndMalformedContracts();

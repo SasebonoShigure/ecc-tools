@@ -93,47 +93,12 @@ CsrReferenceInput parasiticUnsupportedInput()
   return input;
 }
 
-CsrReferenceInput registerUnsupportedInput()
-{
-  CsrReferenceInput input = cellInput();
-  input.instances.front().is_sequential = true;
-  input.instances.front().has_timing_checks = true;
-  for (auto& node : input.nodes)
-    node.is_sequential = true;
-  input.nodes[0].is_clock_pin = true;
-  input.nodes[1].is_data_pin = true;
-  auto& cell = input.referenced_library_cells.front();
-  cell.is_sequential = true;
-  cell.clock_pin_name = "A";
-  cell.data_pin_name = "Y";
-  cell.timing_checks = {LibraryTimingCheckArcModel{"A", "Y", TimingCheckKind::kSetup, 0.0, Transition::kRise, {}}};
-  input.timing_check_endpoints = {TimingCheckEndpointModel{"u1", 0, TimingCheckKind::kSetup, "A", "Y", "u1:A", "u1:Y", NodeId{0}, NodeId{1}}};
-  input.clocks = {ClockConstraintModel{"clk", "clk", {RawNodeReference{"u1:A", NodeId{0}}}, 10.0, {0.0, 5.0}, false}};
-  input.clock_owner_by_node = {std::optional<std::string>{"clk"}, std::nullopt};
-  auto& seed = input.start_seeds.front();
-  seed.availability = StartSeedAvailability::kUnsupportedSequential;
-  seed.path_start_node = NodeId{1};
-  seed.path_source = PathSource::kRegister;
-  seed.crpr_node = NodeId{0};
-  seed.crpr_transition = Transition::kRise;
-  for (auto& analysis : seed.arrival)
-    for (auto& value : analysis)
-      value.reset();
-  for (auto& analysis : seed.slew)
-    for (auto& value : analysis)
-      value.reset();
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance, CsrReferenceUnsupportedReason::kSequentialLaunch,
-                               CsrReferenceUnsupportedReason::kTimingCheck, CsrReferenceUnsupportedReason::kCrpr};
-  input.clock_tags = {"clk"};
-  refreshIdentity(input);
-  return input;
-}
 
 CsrReferenceInput propagatedUnsupportedInput()
 {
   CsrReferenceInput input = clockInput();
   input.clocks.front().propagated = true;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockTreeFanout};
+  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
   refreshIdentity(input);
   return input;
 }
@@ -147,17 +112,6 @@ CsrReferenceInput gatingUnsupportedInput(CsrReferenceInput input = cellInput())
   return input;
 }
 
-CsrReferenceInput conditionalUnsupportedInput()
-{
-  CsrReferenceInput input = cellInput();
-  input.arcs.front().transfer.children.front().signature.sdf_condition = "A";
-  input.arcs.front().key.base.library_arcs.front().sdf_condition = "A";
-  input.arc_ids_by_key.front().key = input.arcs.front().key;
-  input.referenced_library_cells.front().cell_arcs.front().transfer = input.arcs.front().transfer;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kConditionalTimingArc};
-  refreshIdentity(input);
-  return input;
-}
 
 CsrReferenceInput caseUnsupportedInput()
 {
@@ -170,8 +124,7 @@ CsrReferenceInput caseUnsupportedInput()
 
 std::vector<CsrReferenceInput> unsupportedReasonFixtures()
 {
-  return {parasiticUnsupportedInput(), registerUnsupportedInput(),    propagatedUnsupportedInput(),
-          gatingUnsupportedInput(),    conditionalUnsupportedInput(), caseUnsupportedInput()};
+  return {parasiticUnsupportedInput(), propagatedUnsupportedInput(), gatingUnsupportedInput(), caseUnsupportedInput()};
 }
 
 CsrReferenceInput presentEmptySlewOverflowInput(bool unsafe_cap)
@@ -289,7 +242,7 @@ void testRuntimePrecedence()
   expectCode(computeCsrCpuReferenceWithReplay(malformed, &countingReplay), CsrComputationCode::kInvariantViolation, "malformed-before-FIFO");
   requireCpuReference(replay_calls == 0, "malformed input called the FIFO seam");
 
-  const CsrReferenceInput unsupported = clockInput();
+  const CsrReferenceInput unsupported = propagatedUnsupportedInput();
   replay_calls = 0;
   expectSupport(computeCsrCpuReferenceWithReplay(unsupported, &countingReplay), unsupported, "support-before-FIFO");
   requireCpuReference(replay_calls == 0, "unsupported input called the FIFO seam");
@@ -322,13 +275,10 @@ void testRuntimePrecedence()
 
 void testUnsupportedReasonRuntimeTable()
 {
-  std::vector<std::uint8_t> seen(10, 0);
   std::size_t fixture_index = 0;
   for (const CsrReferenceInput& input : unsupportedReasonFixtures()) {
     const std::string name = "unsupported reason fixture " + std::to_string(fixture_index++);
     requireStrictOutcome(input, name);
-    for (CsrReferenceUnsupportedReason reason : input.unsupported_reasons)
-      seen[static_cast<std::size_t>(reason)] = 1;
     replay_case = ReplayCase::kCycle;
     replay_calls = 0;
     const CsrComputationResult result = computeCsrCpuReferenceWithReplay(input, &countingReplay);
@@ -336,7 +286,6 @@ void testUnsupportedReasonRuntimeTable()
     requireCpuReference(replay_calls == 0, name + " called FIFO");
     requireCpuReference(validateComputationResult(input, result).empty(), name + " produced an invalid support projection");
   }
-  requireCpuReference(std::ranges::all_of(seen, [](std::uint8_t value) { return value == 1; }), "runtime table did not cover all ten unsupported reasons");
 }
 
 void testRuntimeOverlapCrossProduct()
@@ -427,7 +376,7 @@ void testOutcomeProjection()
   result.outcome = CsrReferenceSupportResult{{CsrReferenceUnsupportedReason::kParasiticNet}};
   requireCpuReference(!validateComputationResult(supported, result).empty(), "supported complete support alternative was accepted");
 
-  const CsrReferenceInput unsupported = clockInput();
+  const CsrReferenceInput unsupported = propagatedUnsupportedInput();
   result.outcome = CsrReferenceSupportResult{unsupported.unsupported_reasons};
   requireCpuReference(validateComputationResult(unsupported, result).empty(), "exact unsupported projection was rejected");
   result.outcome = CsrComputationCode::kInvariantViolation;

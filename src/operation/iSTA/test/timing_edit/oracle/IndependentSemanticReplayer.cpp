@@ -144,6 +144,14 @@ const TimingCell& requireBufferCell(const Database& database, const LibraryCellR
     fail("selected buffer ports have incompatible directions");
   }
 
+  // The expression getter is mutable; inspect a value copy without changing the library.
+  TimingCellPort output_port = output->second;
+  auto& terms = output_port.get_function_expression().get_term_list();
+  if (value.get_port_map().size() != 2 || terms.size() != 1
+      || terms.front().get_operation_type() != LogicOperationType::kPort
+      || terms.front().get_port_name() != reference.input_port)
+    fail("selected cell is not a two-port identity buffer");
+
   std::size_t native_signatures = 0;
   for (const TimingCellArc& cell_arc : value.get_cell_arc_list()) {
     if (cell_arc.get_source_port() != reference.input_port || cell_arc.get_sink_port() != reference.output_port) {

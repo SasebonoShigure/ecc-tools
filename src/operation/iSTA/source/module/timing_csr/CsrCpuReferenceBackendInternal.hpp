@@ -63,6 +63,8 @@ struct CsrCpuReferencePathState
   Transition predecessor_transition{Transition::kNone};
   std::optional<NodeId> crpr_node;
   std::optional<Transition> crpr_transition;
+
+  friend bool operator==(const CsrCpuReferencePathState&, const CsrCpuReferencePathState&) = default;
 };
 
 struct CsrCpuReferenceWorkState
@@ -135,6 +137,21 @@ struct CsrDynamicArcValue
          + csrTransitionIndex(output_transition);
 }
 
+[[nodiscard]] inline bool csrChildSelected(const ChildTimingArcModel& child, Transition input_transition, Transition output_transition)
+{
+  const bool flipped = input_transition != output_transition;
+  switch (child.signature.sense) {
+    case TimingSense::kNegativeUnate:
+      return flipped;
+    case TimingSense::kNonUnate:
+      return true;
+    case TimingSense::kNoneUsesPositiveFallback:
+    case TimingSense::kPositiveUnate:
+      return !flipped;
+  }
+  return false;
+}
+
 // Shared input/ideal-clock seed initialization; performs no graph traversal
 // or arc/timing propagation. CUDA packs these constraints before device work.
 [[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceSeeds(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work);
@@ -147,7 +164,12 @@ struct CsrDynamicArcValue
 [[nodiscard]] CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges, ArcId arc_id, AnalysisMode analysis, Transition input_transition,
                                                                Transition output_transition, double source_slew, CsrCpuReferenceWorkState& work,
                                                                CsrDynamicArcValue& value);
+[[nodiscard]] CsrCpuReferenceStageStatus propagateCsrCpuReferenceClocks(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+                                                                        CsrCpuReferenceWorkState& work);
+[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuSequentialSeeds(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+                                                                         CsrCpuReferenceWorkState& work);
 [[nodiscard]] CsrCpuReferenceStageStatus propagateCsrCpuReferenceForward(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work);
+[[nodiscard]] CsrCpuReferenceStageStatus seedCsrCpuSequentialRequired(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work);
 [[nodiscard]] CsrCpuReferenceStageStatus propagateCsrCpuReferenceRequired(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
                                                                           CsrCpuReferenceWorkState& work);
 

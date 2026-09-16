@@ -112,7 +112,8 @@ def validate(value: object, artifacts: list[pathlib.Path]) -> None:
         item = observed[index]
         if item["role"] != role:
             raise FirstEmptyError(f"artifact {index} role differs")
-        if item["logical_name"] != canonical.name or canonical_paths[index].name != canonical.name:
+        logical_name = f"0-{canonical.name}" if role in ("cell_lef", "liberty") else canonical.name
+        if item["logical_name"] != logical_name or canonical_paths[index].name != canonical.name:
             raise FirstEmptyError(f"artifact {role} logical name differs")
         if item["size"] != len(exact_bytes):
             raise FirstEmptyError(f"artifact {role} byte size differs")

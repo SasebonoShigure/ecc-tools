@@ -106,8 +106,8 @@ SourceArtifactRefs materializeSynthetic(
   writeArtifact(liberty, recipe.liberty.source_text);
   writeArtifact(verilog, recipe.verilog.source_text);
   writeArtifact(sdc, recipe.sdc.source_text);
-  return {{tech.string()}, {cell.string()}, {liberty.string()},
-          {verilog.string()}, {sdc.string()}, recipe.top};
+  return {{tech.string()}, {{cell.string()}}, {{liberty.string()}},
+          {verilog.string()}, {sdc.string()}, recipe.top, {"slow", "25", "__no_rc_corner__"}};
 }
 
 SourceArtifactRefs sourceRefs(
@@ -124,13 +124,17 @@ SourceArtifactRefs sourceRefs(
       .artifacts;
 }
 
-std::array<fs::path, 5> canonicalArtifactPaths(
+std::vector<fs::path> canonicalArtifactPaths(
     const SourceArtifactRefs& refs)
 {
-  const std::array<fs::path, 5> supplied{
-      refs.tech_lef.path, refs.cell_lef.path, refs.liberty.path,
-      refs.verilog.path, refs.sdc.path};
-  std::array<fs::path, 5> canonical;
+  std::vector<fs::path> supplied{refs.tech_lef.path};
+  for (const auto& source : refs.cell_lefs)
+    supplied.emplace_back(source.path);
+  for (const auto& source : refs.liberties)
+    supplied.emplace_back(source.path);
+  supplied.emplace_back(refs.verilog.path);
+  supplied.emplace_back(refs.sdc.path);
+  std::vector<fs::path> canonical(supplied.size());
   std::set<fs::path> unique;
   for (std::size_t index = 0; index < supplied.size(); ++index) {
     std::error_code error;
@@ -140,7 +144,7 @@ std::array<fs::path, 5> canonicalArtifactPaths(
     canonical[index] = fs::canonical(supplied[index], error);
     if (error || !canonical[index].is_absolute()
         || !unique.insert(canonical[index]).second)
-      artifactFail("five source roles require distinct canonical paths");
+      artifactFail("source artifacts require distinct canonical paths");
   }
   return canonical;
 }
@@ -155,23 +159,25 @@ FreshBaselineArtifacts productionArtifacts(
   std::error_code error;
   if (!fs::create_directory(run_directory, error) || error)
     artifactFail("cannot create the isolated production run directory");
-  return {paths[0], paths[1], paths[2], paths[3], paths[4],
-          run_directory, refs.top};
+  FreshBaselineArtifacts result{paths.front(), {}, {}, paths[paths.size() - 2], paths.back(),
+                                run_directory, refs.top, refs.analysis_context};
+  std::size_t index = 1;
+  for (std::size_t count = 0; count < refs.cell_lefs.size(); ++count)
+    result.cell_lefs.push_back(paths[index++]);
+  for (std::size_t count = 0; count < refs.liberties.size(); ++count)
+    result.liberties.push_back(paths[index++]);
+  return result;
 }
 
 std::vector<SourceArtifactFunctionalRecord> captureArtifacts(
     const FreshBaselineArtifacts& artifacts)
 {
-  constexpr std::array<std::string_view, 5> roles{
-      "tech_lef", "cell_lef", "liberty", "verilog", "sdc"};
-  const std::array<fs::path, 5> paths{
-      artifacts.tech_lef, artifacts.cell_lef, artifacts.liberty,
-      artifacts.verilog, artifacts.sdc};
+  const auto files = timing_edit::oracle::freshArtifactFiles(artifacts);
   std::vector<SourceArtifactFunctionalRecord> result;
-  result.reserve(paths.size());
-  for (std::size_t index = 0; index < paths.size(); ++index) {
+  result.reserve(files.size());
+  for (std::size_t index = 0; index < files.size(); ++index) {
     std::error_code error;
-    const fs::path canonical = fs::canonical(paths[index], error);
+    const fs::path canonical = fs::canonical(files[index].path, error);
     std::ifstream input(canonical, std::ios::binary);
     if (error || !input)
       artifactFail("source artifact disappeared during guarded work");
@@ -186,7 +192,7 @@ std::vector<SourceArtifactFunctionalRecord> captureArtifacts(
         || input.peek() != std::char_traits<char>::eof())
       artifactFail("source artifact bytes cannot be captured exactly");
     result.push_back(
-        {std::string(roles[index]), canonical.filename().string(),
+        {files[index].role, files[index].logical_name,
          canonical.string(), static_cast<std::uint64_t>(bytes.size()),
          std::move(bytes)});
   }

@@ -20,7 +20,7 @@
 #include <utility>
 #include <variant>
 
-#include "BufferTraceJson.hpp"
+#include "BufferTraceReplayInput.hpp"
 #include "DualCsrExactReceiptJson.hpp"
 #include "DualCsrFunctionalReceiptJson.hpp"
 #include "DualCsrResourceObservationJson.hpp"
@@ -39,15 +39,6 @@ using namespace ista;
 [[noreturn]] void fail(std::string message)
 {
   throw std::runtime_error(std::move(message));
-}
-
-std::string readText(const fs::path& path)
-{
-  std::ifstream input(path, std::ios::binary);
-  if (!input)
-    fail("cannot read " + path.string());
-  return {std::istreambuf_iterator<char>(input),
-          std::istreambuf_iterator<char>()};
 }
 
 void writeText(const fs::path& path, std::string_view text)
@@ -105,17 +96,11 @@ std::uint64_t parseU64(std::string_view value, std::string_view label)
   return result;
 }
 
-buffer_trace::BufferTraceArtifact parseTrace(const fs::path& path)
+buffer_trace::ReplayProgram parseReplay(const Options& options)
 {
-  auto parsed = buffer_trace::parseBufferTraceArtifactJson(readText(path));
-  if (auto* violations
-      = std::get_if<buffer_trace::BufferTraceContractViolations>(&parsed)) {
-    if (violations->empty())
-      fail("trace parse failed without a typed violation");
-    fail("trace rejected at " + violations->front().field + ": "
-         + violations->front().message);
-  }
-  return std::get<buffer_trace::BufferTraceArtifact>(std::move(parsed));
+  const std::string input_flag = options.contains("--replay") ? "--replay" : "--trace";
+  requireOptions(options, {input_flag, "--prefix", "--output"});
+  return buffer_trace::test::readReplayInput(options.at(input_flag), input_flag == "--replay");
 }
 
 Json phaseTimings(
@@ -144,11 +129,10 @@ Json phaseTimings(
 
 void fresh(const Options& options)
 {
-  requireOptions(options, {"--trace", "--prefix", "--output"});
-  const auto artifact = parseTrace(options.at("--trace"));
+  const auto program = parseReplay(options);
   const std::uint64_t prefix = parseU64(options.at("--prefix"), "prefix");
   auto receipt = timing_dual_csr::test::runProductionFreshSemanticPrefix(
-      artifact.replay, static_cast<std::size_t>(prefix));
+      program, static_cast<std::size_t>(prefix));
   Json envelope{{"schema_version", "ista-stage6-trace-process/2.0.0"},
                 {"role", "fresh-oracle"},
                 {"prefix_batches", prefix},
@@ -164,11 +148,10 @@ void fresh(const Options& options)
 
 void targeted(const Options& options)
 {
-  requireOptions(options, {"--trace", "--prefix", "--output"});
-  const auto artifact = parseTrace(options.at("--trace"));
+  const auto program = parseReplay(options);
   const std::uint64_t prefix = parseU64(options.at("--prefix"), "prefix");
   auto result = timing_dual_csr::test::runProductionStage6TargetedPrefix(
-      artifact.replay, static_cast<std::size_t>(prefix));
+      program, static_cast<std::size_t>(prefix));
   if (timing_dual_csr::test::stage6TargetedOneShotState()
       != buffer_trace::OneShotProcessState::kFinished) {
     fail("targeted adapter did not finish its one-shot state");
@@ -215,7 +198,7 @@ int main(int argc, char* argv[])
 {
   try {
     if (argc < 2) {
-      fail("usage: probe fresh|targeted --trace FILE --prefix N --output FILE");
+      fail("usage: probe fresh|targeted --trace FILE|--replay FILE --prefix N --output FILE");
     }
     const std::string mode = argv[1];
     if (mode == "build-info" && argc == 2) {

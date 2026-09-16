@@ -4,7 +4,7 @@
 #include <map>
 #include <stdexcept>
 
-#include "BufferTraceJson.hpp"
+#include "BufferTraceReplayInput.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "CudaTargetedDeviceComparison.hpp"
 #include "CudaTargetedTimingProjection.hpp"
@@ -30,10 +30,20 @@ Json functional(const csr::CsrReferenceInput& input, const csr::CsrTimingResult&
 {
   auto baseline = timing_dual_csr::DualCsrBaselineFactory::create(input, timing_edit::TimingEditSessionToken{input.source_identity.session_token},
                                                                   timing_edit::AppendOnlyHighWater{input.nodes.size(), input.nodes.size(), input.arcs.size()});
-  require(baseline.success(), "diagnostic canonical projection failed");
+  if (!baseline.success()) {
+    std::string message = "diagnostic canonical projection failed";
+    for (const auto& error : baseline.violations)
+      message += "\n" + error.field + ": " + error.message;
+    throw std::runtime_error(message);
+  }
   timing_dual_csr::DualCsrTimingResult values{timing, std::vector<std::uint8_t>(input.arcs.size(), 1U)};
   auto projected = timing_dual_csr::projectDualCsrFunctionalSemanticReceipt(*baseline.state, values);
-  require(projected.success(), "diagnostic timing projection failed");
+  if (!projected.success()) {
+    std::string message = "diagnostic timing projection failed";
+    for (const auto& error : projected.violations)
+      message += "\n" + error.field + ": " + error.message;
+    throw std::runtime_error(message);
+  }
   return timing_dual_csr::test::functionalSemanticReceiptToJson(*projected.receipt);
 }
 Json deviceTelemetry(const csr::CudaDualCsrTelemetry& device)
@@ -97,7 +107,7 @@ int main(int argc, char** argv)
       return 0;
     }
     require(argc == 8,
-            "usage: probe targeted|performance|rollback|incremental|incremental-performance|incremental-rollback --trace FILE --prefix N --output FILE");
+            "usage: probe targeted|performance|rollback|incremental|incremental-performance|incremental-rollback (--trace FILE | --replay FILE) --prefix N --output FILE");
     const std::string mode = argv[1];
     const bool incremental = mode == "incremental" || mode == "incremental-performance" || mode == "incremental-rollback";
     const bool performance = mode == "performance" || mode == "incremental-performance";
@@ -109,16 +119,14 @@ int main(int argc, char** argv)
     std::map<std::string, std::string> options;
     for (int i = 2; i < argc; i += 2)
       require(options.emplace(argv[i], argv[i + 1]).second, "duplicate option");
-    require(options.contains("--trace") && options.contains("--prefix") && options.contains("--output"), "unknown or missing option");
+    require((options.contains("--trace") != options.contains("--replay")) && options.contains("--prefix") && options.contains("--output"),
+            "expected exactly one --trace/--replay plus --prefix and --output");
     std::size_t prefix = 0;
     const auto& text = options.at("--prefix");
     const auto parsed = std::from_chars(text.data(), text.data() + text.size(), prefix);
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
-    std::ifstream trace(options.at("--trace"));
-    require(bool(trace), "cannot open trace");
-    auto decoded = buffer_trace::parseBufferTraceArtifactJson(std::string(std::istreambuf_iterator<char>(trace), {}));
-    require(std::holds_alternative<buffer_trace::BufferTraceArtifact>(decoded), "invalid frozen trace");
-    const auto& program = std::get<buffer_trace::BufferTraceArtifact>(decoded).replay;
+    const bool replay_only = options.contains("--replay");
+    const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
     Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/1.0.0" : "ista-cuda-targeted-trace/1.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},

@@ -1,5 +1,7 @@
 #include "CsrCudaArcTransfer.cuh"
 #include "CsrCudaKernels.cuh"
+#include "CsrCudaClockPropagation.cuh"
+#include "CsrCudaSequentialPropagation.cuh"
 #include "CsrCudaAdjacency.cuh"
 
 namespace ista::csr::cuda_detail {
@@ -159,11 +161,6 @@ __device__ void scalar(DeviceView view, Index index)
   }
 }
 
-__device__ Index pathRow(Index node, unsigned analysis, unsigned source, unsigned transition)
-{
-  return ((node * 2 + analysis) * 2 + source) * 2 + transition;
-}
-
 __device__ void pathLane(DeviceView view, Index index, unsigned analysis, unsigned source_kind, unsigned input, unsigned output)
 {
   const Arc& arc = view.arcs[index];
@@ -248,6 +245,16 @@ __device__ void requiredPass(DeviceView view)
     view.nodes[view.ends[index]].required = default_required;
   for (Index index = 0; index < view.endpoint_count; ++index) {
     const Endpoint& endpoint = view.endpoints[index];
+    if (endpoint.node >= view.node_count) {
+      *view.status = Status::invariant;
+      return;
+    }
+    if (endpoint.sequential_check) {
+      sequentialRequired(view, endpoint);
+      if (*view.status != Status::success)
+        return;
+      continue;
+    }
     if (!endpoint.output_delay.present)
       continue;
     const double required = finiteValue(view, endpoint.period - endpoint.output_delay.value);
@@ -310,6 +317,12 @@ __global__ void propagate(DeviceView view)
     if (*view.status != Status::success)
       return;
   }
+  clockPass(view);
+  if (*view.status != Status::success)
+    return;
+  sequentialPass(view);
+  if (*view.status != Status::success)
+    return;
   dynamicPass(view);
   if (*view.status != Status::success)
     return;

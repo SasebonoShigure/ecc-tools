@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Any
+
 from buffer_trace_functional_check import (
     FunctionalEvidenceError,
     self_test_derived_freshness,
@@ -116,12 +117,17 @@ def validate_source_isolation(value: object, label: str) -> dict[str, Any]:
             raise ControllerError(
                 f"{label} changed between {before_name}/{after_name}: {difference}"
             )
-    expected_roles = ["tech_lef", "cell_lef", "liberty", "verilog", "sdc"]
     for field in ("artifacts_before", "artifacts_after"):
         artifacts = value[field]
-        if not isinstance(artifacts, list) or len(artifacts) != len(expected_roles):
-            raise ControllerError(f"{label}.{field} must contain exactly five artifacts")
-        if [item.get("role") for item in artifacts] != expected_roles:
+        if not isinstance(artifacts, list) or not all(isinstance(item, dict) for item in artifacts):
+            raise ControllerError(f"{label}.{field} must be an artifact array")
+        roles = [item.get("role") for item in artifacts]
+        cell_count, liberty_count = roles.count("cell_lef"), roles.count("liberty")
+        expected_roles = [
+            "tech_lef", *(["cell_lef"] * cell_count),
+            *(["liberty"] * liberty_count), "verilog", "sdc",
+        ]
+        if cell_count == 0 or liberty_count == 0 or roles != expected_roles:
             raise ControllerError(f"{label}.{field} artifact roles differ")
         paths = [item.get("canonical_path") for item in artifacts]
         if any(not isinstance(path, str) or not path for path in paths):
@@ -202,12 +208,13 @@ def validate_source_contents(
             source = recipe[role]
             source_text = source["source_text"]
             logical_name = source["logical_name"]
+            evidence_name = f"0-{logical_name}" if role in ("cell_lef", "liberty") else logical_name
             if not isinstance(source_text, str) or not isinstance(logical_name, str):
                 raise ControllerError(f"{label} {role} recipe is malformed")
             exact = source_text.encode("utf-8")
             item = observed[index]
             if (item["role"] != role
-                    or item["logical_name"] != logical_name
+                    or item["logical_name"] != evidence_name
                     or paths[index].name != logical_name
                     or item["size"] != len(exact)
                     or item["bytes_hex"] != exact.hex()):
@@ -218,15 +225,24 @@ def validate_source_contents(
         raise ControllerError(f"{label} has unknown workload kind {kind}")
     artifacts = workload["artifacts"]
     source_root = trace_path.parent.parent
-    for index, role in enumerate(SOURCE_ROLES):
-        raw_path = artifacts[role]["path"]
+    sources = [("tech_lef", artifacts["tech_lef"], "")]
+    sources.extend(("cell_lef", source, f"{index}-")
+                   for index, source in enumerate(artifacts["cell_lefs"]))
+    sources.extend(("liberty", source, f"{index}-")
+                   for index, source in enumerate(artifacts["liberties"]))
+    sources.extend((role, artifacts[role], "") for role in ("verilog", "sdc"))
+    if len(observed) != len(sources):
+        raise ControllerError(f"{label} source artifact count differs")
+    for index, (role, source, prefix) in enumerate(sources):
+        raw_path = source["path"]
         if not isinstance(raw_path, str) or not raw_path:
             raise ControllerError(f"{label} {role} artifact path is malformed")
         canonical = (source_root / raw_path).resolve(strict=True)
         exact = canonical.read_bytes()
+        logical_name = prefix + canonical.name
         item = observed[index]
         if (item["role"] != role
-                or item["logical_name"] != canonical.name
+                or item["logical_name"] != logical_name
                 or pathlib.Path(item["canonical_path"]) != canonical
                 or item["size"] != len(exact)
                 or item["bytes_hex"] != exact.hex()):
@@ -535,7 +551,7 @@ def self_test() -> None:
     artifacts = [
         {
             "role": role,
-            "logical_name": suffix,
+            "logical_name": f"0-{suffix}" if role in ("cell_lef", "liberty") else suffix,
             "canonical_path": f"/tmp/ista-buffer-trace-run-a/{suffix}",
             "size": 1,
             "bytes_hex": source_texts[index].encode("utf-8").hex(),
@@ -583,7 +599,8 @@ def self_test() -> None:
                 "/ista-buffer-trace-run-a/",
                 "/ista-buffer-trace-run-b/",
             )
-    validate_source_contents(synthetic_trace, pathlib.Path("/tmp/unused/trace.json"), other_root, "self-test other root")
+    validate_source_contents(synthetic_trace, pathlib.Path("/tmp/unused/trace.json"),
+                             other_root, "self-test other root")
     if first_difference(source, other_root) is None:
         raise ControllerError("run-local path difference was not represented")
     if first_difference(

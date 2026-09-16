@@ -86,9 +86,9 @@ void requireCudaDeviceMatchesCanonical(const CudaTargetedTraceObservation& obser
     require(actual.source == stable_nodes.at(source.key.base.source.full_name) && actual.sink == stable_nodes.at(source.key.base.sink.full_name),
             "device Arc endpoints differ");
     require(std::tie(actual.child_count, actual.delay, actual.delay_min, actual.delay_max, actual.net, actual.clock, actual.has_load, actual.levelization,
-                     actual.data_arrival, actual.data_slew)
+                     actual.data_arrival, actual.data_slew, actual.clock_eligible)
                     == std::tie(wanted.child_count, wanted.delay, wanted.delay_min, wanted.delay_max, wanted.net, wanted.clock, wanted.has_load,
-                                wanted.levelization, wanted.data_arrival, wanted.data_slew)
+                                wanted.levelization, wanted.data_arrival, wanted.data_slew, wanted.clock_eligible)
                 && std::equal(std::begin(actual.load), std::end(actual.load), std::begin(wanted.load)),
             "device Arc timing payload differs from canonical input");
     require(actual.child_begin <= device.children.size() && actual.child_count <= device.children.size() - actual.child_begin,
@@ -100,7 +100,7 @@ void requireCudaDeviceMatchesCanonical(const CudaTargetedTraceObservation& obser
                   == std::tie(wanted_child.time_scale, wanted_child.capacitance_scale, wanted_child.arc_index, wanted_child.sense, wanted_child.trigger),
               "device child identity/units differ");
       for (std::size_t transition = 0; transition < 2; ++transition) {
-        require(child.check_present[transition] == wanted_child.check_present[transition], "device child check presence differs");
+        sameTable(child.check[transition], wanted_child.check[transition], device.table_data, expected.table_data);
         sameTable(child.delay[transition], wanted_child.delay[transition], device.table_data, expected.table_data);
         sameTable(child.slew[transition], wanted_child.slew[transition], device.table_data, expected.table_data);
       }

@@ -33,11 +33,35 @@ namespace {
 
 namespace fs = std::filesystem;
 using Json = nlohmann::json;
-using Options = std::map<std::string, std::string>;
+using Options = std::multimap<std::string, std::string>;
 
 [[noreturn]] void fail(std::string message)
 {
   throw std::runtime_error("buffer trace production probe: " + std::move(message));
+}
+
+const std::string& option(const Options& options, const std::string& key)
+{
+  if (options.count(key) != 1 || options.find(key)->second.empty())
+    fail("option requires exactly one nonempty value: " + key);
+  return options.find(key)->second;
+}
+
+SourceArtifactRefs realArtifacts(const Options& options)
+{
+  SourceArtifactRefs refs{{option(options, "--tech-lef")}, {}, {},
+                          {option(options, "--verilog")}, {option(options, "--sdc")}, option(options, "--top"),
+                          {"slow", "25", "__no_rc_corner__"}};
+  const auto append = [&](const std::string& key, auto& paths) {
+    const auto [first, last] = options.equal_range(key);
+    for (auto it = first; it != last; ++it)
+      paths.push_back({it->second});
+  };
+  append("--cell-lef", refs.cell_lefs);
+  append("--liberty", refs.liberties);
+  if (options.contains("--liberty-corner") || options.contains("--temperature") || options.contains("--rc-corner"))
+    refs.analysis_context = {option(options, "--liberty-corner"), option(options, "--temperature"), option(options, "--rc-corner")};
+  return refs;
 }
 
 std::string readText(const fs::path& path)
@@ -103,15 +127,16 @@ Options parseOptions(int argc, char* argv[], std::string& mode)
     if (!key.starts_with("--") || key.size() == 2) {
       fail("unknown positional argument " + key);
     }
-    if (!result.emplace(key, argv[index + 1]).second) {
+    if (result.contains(key) && key != "--cell-lef" && key != "--liberty")
       fail("duplicate option " + key);
-    }
+    result.emplace(key, argv[index + 1]);
   }
   return result;
 }
 
 void requireOptions(const Options& options,
-                    std::initializer_list<std::string_view> expected)
+                    std::initializer_list<std::string_view> expected,
+                    std::initializer_list<std::string_view> optional = {})
 {
   std::set<std::string> allowed;
   for (std::string_view key : expected) {
@@ -120,6 +145,8 @@ void requireOptions(const Options& options,
       fail("required option is absent: " + std::string(key));
     }
   }
+  for (std::string_view key : optional)
+    allowed.emplace(key);
   for (const auto& [key, value] : options) {
     static_cast<void>(value);
     if (!allowed.contains(key)) {
@@ -373,15 +400,15 @@ void replayMode(const Options& options)
                  {"--trace", "--prefix", "--repetition", "--output"});
   const BufferTraceArtifact parsed
       = requireParsed<BufferTraceArtifactJsonParseResult, BufferTraceArtifact>(
-          parseBufferTraceArtifactJson(readText(options.at("--trace"))),
+          parseBufferTraceArtifactJson(readText(option(options, "--trace"))),
           "trace artifact");
-  const std::uint64_t prefix = parseU64(options.at("--prefix"), "prefix");
+  const std::uint64_t prefix = parseU64(option(options, "--prefix"), "prefix");
   const std::uint64_t repetition
-      = parseU64(options.at("--repetition"), "repetition");
+      = parseU64(option(options, "--repetition"), "repetition");
   BufferTraceProductionFreshAdapter adapter;
   ReplayReceipt receipt
       = runReplay(adapter, parsed.replay, static_cast<std::size_t>(prefix));
-  writeText(options.at("--output"),
+  writeText(option(options, "--output"),
             replayEnvelope(adapter, receipt, repetition).dump(2));
 }
 
@@ -389,7 +416,8 @@ void templateMode(const Options& options, bool synthetic)
 {
   requireOptions(options,
                  {"--tech-lef", "--cell-lef", "--liberty", "--verilog",
-                  "--sdc", "--top", "--output"});
+                  "--sdc", "--top", "--output"},
+                 {"--liberty-corner", "--temperature", "--rc-corner"});
   const ReplayHeader header{
       .workload_kind = synthetic ? SemanticWorkloadKind::kSynthetic
                                  : SemanticWorkloadKind::kRealDesign,
@@ -399,8 +427,10 @@ void templateMode(const Options& options, bool synthetic)
       = ComparabilityReason::kEngineeringRcNoPhysical};
   ReplayPayload payload;
   if (synthetic) {
-    const auto recipe = [&](std::string_view option) {
-      const fs::path path = options.at(std::string(option));
+    if (options.contains("--liberty-corner") || options.contains("--temperature") || options.contains("--rc-corner"))
+      fail("synthetic recipes use their fixed analysis context");
+    const auto recipe = [&](std::string_view flag) {
+      const fs::path path = option(options, std::string(flag));
       return std::pair{path.filename().string(), readText(path)};
     };
     auto [tech_name, tech_text] = recipe("--tech-lef");
@@ -415,18 +445,16 @@ void templateMode(const Options& options, bool synthetic)
            {std::move(lib_name), std::move(lib_text)},
            {std::move(verilog_name), std::move(verilog_text)},
            {std::move(sdc_name), std::move(sdc_text)},
-           options.at("--top")},
+           option(options, "--top")},
         .batches = {}};
   } else {
     payload = RealReplayPayload{
         .artifacts
-        = {{options.at("--tech-lef")}, {options.at("--cell-lef")},
-           {options.at("--liberty")}, {options.at("--verilog")},
-           {options.at("--sdc")}, options.at("--top")},
+        = realArtifacts(options),
         .baseline = {},
         .batches = {}};
   }
-  writeText(options.at("--output"),
+  writeText(option(options, "--output"),
             replayTemplateToJson({header, std::move(payload)}));
 }
 
@@ -436,21 +464,21 @@ void generateMode(const Options& options)
                            "--trace-output", "--output"});
   ReplayProgram replay_template
       = requireParsed<ReplayProgramJsonParseResult, ReplayProgram>(
-          parseReplayTemplateJson(readText(options.at("--template"))),
+          parseReplayTemplateJson(readText(option(options, "--template"))),
           "replay template");
-  const std::uint64_t seed = parseU64(options.at("--seed"), "seed");
+  const std::uint64_t seed = parseU64(option(options, "--seed"), "seed");
   const ProfileId profile_id = replay_template.header.profile_id;
   BufferTraceProductionFreshAdapter adapter;
   BufferTraceGenerationResult generated = BufferFixedTraceGenerator::generate(
       adapter,
       {.replay_template = std::move(replay_template),
        .profile = frozenSelectionProfile(profile_id),
-       .case_id = options.at("--case-id"),
+       .case_id = option(options, "--case-id"),
        .seed = seed});
   test_support::requireProductionGenerationGain(generated);
-  writeText(options.at("--trace-output"),
+  writeText(option(options, "--trace-output"),
             bufferTraceArtifactToJson(generated.artifact));
-  writeText(options.at("--output"),
+  writeText(option(options, "--output"),
             replayEnvelope(adapter, generated.functional_receipt, 0).dump(2));
 }
 
@@ -459,8 +487,8 @@ void firstEmptyMode(const Options& options)
   requireOptions(options,
                  {"--tech-lef", "--cell-lef", "--liberty", "--verilog",
                   "--sdc", "--top", "--output"});
-  const auto recipe = [&](std::string_view option) {
-    const fs::path path = options.at(std::string(option));
+  const auto recipe = [&](std::string_view flag) {
+    const fs::path path = option(options, std::string(flag));
     return std::pair{path.filename().string(), readText(path)};
   };
   auto [tech_name, tech_text] = recipe("--tech-lef");
@@ -482,7 +510,7 @@ void firstEmptyMode(const Options& options)
              {std::move(cell_name), std::move(cell_text)},
              {std::move(lib_name), std::move(lib_text)},
              {std::move(verilog_name), std::move(verilog_text)},
-             {std::move(sdc_name), std::move(sdc_text)}, options.at("--top")},
+             {std::move(sdc_name), std::move(sdc_text)}, option(options, "--top")},
           .batches = {}}};
   BufferTraceProductionFreshAdapter adapter(true);
   std::string error_what;
@@ -514,7 +542,7 @@ void firstEmptyMode(const Options& options)
     fail("first empty failure touched generation, loader, or guarded state");
   }
   writeText(
-      options.at("--output"),
+      option(options, "--output"),
       Json{{"schema_version", "buffer-first-empty-receipt/1.0.0"},
            {"error_code", "invalid_generated_artifact"},
            {"error_what", error_what},
@@ -545,9 +573,7 @@ void preloaderRejectionMode(const Options& options)
       .workload
       = RealReplayPayload{
           .artifacts
-          = {{options.at("--tech-lef")}, {options.at("--cell-lef")},
-             {options.at("--liberty")}, {options.at("--verilog")},
-             {options.at("--sdc")}, options.at("--top")},
+          = realArtifacts(options),
           .baseline = {},
           .batches = {}}};
   BufferTraceProductionFreshAdapter adapter;
@@ -575,7 +601,7 @@ void preloaderRejectionMode(const Options& options)
     fail("artifact rejection occurred after loader or guarded work entry");
   }
   writeText(
-      options.at("--output"),
+      option(options, "--output"),
       Json{{"schema_version", "buffer-preloader-rejection/1.0.0"},
            {"error_code", "artifact_materialization_rejected"},
            {"work_entered", work_entered},
@@ -591,7 +617,7 @@ void doubleInvocationMode(const Options& options)
   requireOptions(options, {"--trace", "--output"});
   const BufferTraceArtifact parsed
       = requireParsed<BufferTraceArtifactJsonParseResult, BufferTraceArtifact>(
-          parseBufferTraceArtifactJson(readText(options.at("--trace"))),
+          parseBufferTraceArtifactJson(readText(option(options, "--trace"))),
           "trace artifact");
   BufferTraceProductionFreshAdapter adapter;
   ReplayReceipt first = runReplay(
@@ -620,7 +646,7 @@ void doubleInvocationMode(const Options& options)
       || adapter.oneShotState() != OneShotProcessState::kFinished) {
     fail("typed reuse rejection occurred after entering loader/work");
   }
-  writeText(options.at("--output"),
+  writeText(option(options, "--output"),
             Json{{"schema_version", "buffer-one-shot-self-test/1.0.0"},
                  {"first_functional", replayReceiptToJson(first)},
                  {"source_isolation", sourceIsolation(adapter.sourceIsolationReceipt())},

@@ -1,0 +1,146 @@
+VERSION 5.8 ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+
+SITE CoreSite
+  CLASS CORE ;
+  SIZE 1.0 BY 1.0 ;
+END CoreSite
+
+MACRO BUF_X1
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 1.0 BY 1.0 ;
+  SYMMETRY X Y ;
+  SITE CoreSite ;
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.05 0.40 0.15 0.60 ;
+    END
+  END A
+  PIN Y
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.85 0.40 0.95 0.60 ;
+    END
+  END Y
+END BUF_X1
+
+MACRO OR2_X1
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 1.2 BY 1.0 ;
+  SYMMETRY X Y ;
+  SITE CoreSite ;
+  PIN A
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.05 0.20 0.15 0.35 ;
+    END
+  END A
+  PIN B
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.05 0.65 0.15 0.80 ;
+    END
+  END B
+  PIN Y
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 1.05 0.40 1.15 0.60 ;
+    END
+  END Y
+END OR2_X1
+
+MACRO DFF_R
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 2.0 BY 1.0 ;
+  SYMMETRY X Y ;
+  SITE CoreSite ;
+  PIN CK
+    DIRECTION INPUT ;
+    USE CLOCK ;
+    PORT
+      LAYER M1 ;
+      RECT 0.10 0.40 0.20 0.60 ;
+    END
+  END CK
+  PIN D
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.50 0.40 0.60 0.60 ;
+    END
+  END D
+  PIN RN
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.90 0.40 1.00 0.60 ;
+    END
+  END RN
+  PIN Q
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 1.30 0.40 1.40 0.60 ;
+    END
+  END Q
+END DFF_R
+
+MACRO DFF_F
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 2.0 BY 1.0 ;
+  SYMMETRY X Y ;
+  SITE CoreSite ;
+  PIN CK
+    DIRECTION INPUT ;
+    USE CLOCK ;
+    PORT
+      LAYER M1 ;
+      RECT 0.10 0.40 0.20 0.60 ;
+    END
+  END CK
+  PIN D
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.50 0.40 0.60 0.60 ;
+    END
+  END D
+  PIN RN
+    DIRECTION INPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 0.90 0.40 1.00 0.60 ;
+    END
+  END RN
+  PIN Q
+    DIRECTION OUTPUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER M1 ;
+      RECT 1.30 0.40 1.40 0.60 ;
+    END
+  END Q
+END DFF_F
+
+END LIBRARY

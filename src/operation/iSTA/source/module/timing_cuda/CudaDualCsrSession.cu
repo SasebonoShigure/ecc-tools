@@ -45,6 +45,7 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
   view.arc_count = host.arcs.size();
   view.child_count = host.children.size();
   view.tag_count = host.tag_count;
+  view.clock_count = host.clock_count;
   view.root_count = roots.size();
   view.end_count = ends.size();
   view.endpoint_count = host.endpoints.size();

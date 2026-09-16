@@ -20,51 +20,10 @@
 namespace ista::timing_dual_csr::detail {
 namespace {
 
-constexpr double kPathRoundScale = 1E15;
-
-void rejectSemantic(DualCsrViolations& violations, std::string field,
-                    std::string message)
-{
-  violations.push_back({DualCsrViolationCode::kTimingResult,
-                        std::move(field), std::move(message)});
-}
-
-template <typename T>
-bool hasShape(const csr::OptionalSoa<T>& values, std::size_t expected) noexcept
-{
-  return values.presence.size() == expected && values.values.size() == expected;
-}
-
-template <typename T, typename Predicate>
-bool validatePresentDomain(const csr::OptionalSoa<T>& values,
-                           std::size_t expected, const std::string& field,
-                           Predicate predicate, const std::string& message,
-                           DualCsrViolations& violations)
-{
-  if (!hasShape(values, expected))
-    return false;
-  bool valid = true;
-  for (std::size_t lane = 0; lane < expected; ++lane)
-    if (values.presence[lane] == 1 && !predicate(values.values[lane])) {
-      rejectSemantic(violations, field, message);
-      valid = false;
-    }
-  return valid;
-}
-
 bool containsNode(const std::vector<csr::NodeId>& nodes,
                   csr::NodeId target)
 {
   return std::ranges::find(nodes, target) != nodes.end();
-}
-
-bool hasResolvedClockSource(const csr::ClockConstraintModel& clock,
-                            csr::NodeId node)
-{
-  return std::ranges::any_of(
-      clock.ordered_sources, [&](const csr::RawNodeReference& source) {
-        return source.resolved_node && *source.resolved_node == node;
-      });
 }
 
 const csr::ArcSemanticPayload* activeArc(
@@ -78,17 +37,6 @@ const csr::ArcSemanticPayload* activeArc(
     return nullptr;
   }
   return &state.arc_slots[id.value()].payload;
-}
-
-bool checkedRoundedPathArrival(double lhs, double rhs, double& result)
-{
-  if (!csr::detail::isFinite(lhs) || !csr::detail::isFinite(rhs))
-    return false;
-  const double scaled = (lhs + rhs) * kPathRoundScale;
-  if (!csr::detail::isFinite(scaled))
-    return false;
-  result = std::round(scaled) / kPathRoundScale;
-  return csr::detail::isFinite(result);
 }
 
 struct PathCoordinates
@@ -177,15 +125,11 @@ void validateNodeDomainsAndCausality(const DualCsrState& state,
 
   if (clock_points_ok) {
     for (std::size_t node = 0; node < count; ++node) {
-      const bool expected = std::ranges::any_of(
-          state.reference_payload.clocks,
-          [&](const csr::ClockConstraintModel& clock) {
-            return hasResolvedClockSource(clock, csr::NodeId{node});
-          });
+      const bool expected = state.reference_payload.clock_owner_by_node[node].has_value();
       if (nodes.is_clock_point.values[node]
           != static_cast<std::uint8_t>(expected))
         rejectSemantic(violations, "result.nodes.is_clock_point",
-                       "clock points must equal resolved clock sources");
+                       "clock points must equal replayed clock ownership");
     }
   }
   if (nodes.predecessor_nodes.presence
@@ -279,6 +223,17 @@ void validateNodeDomainsAndCausality(const DualCsrState& state,
     if (endpoint.node.value() < count && endpoint.output_delay[0])
       expected_required[endpoint.node.value()]
           = endpoint.clock_period - *endpoint.output_delay[0];
+  std::vector<bool> check_seeded(count, false);
+  for (const auto& endpoint : state.reference_payload.timing_check_endpoints) {
+    if (!endpoint.resolved_data_node
+        || (endpoint.check_kind != csr::TimingCheckKind::kSetup && endpoint.check_kind != csr::TimingCheckKind::kRecovery))
+      continue;
+    const auto node = endpoint.resolved_data_node->value();
+    if (node < count && !state.nodes[node].is_port && state.nodes[node].is_sequential && state.nodes[node].is_endpoint) {
+      check_seeded[node] = true;
+      expected_required[node] = std::numeric_limits<double>::infinity();
+    }
+  }
   for (std::size_t id = 0; id < state.arc_slots.size(); ++id) {
     const auto& slot = state.arc_slots[id];
     if (!slot.active || !slot.payload.eligibility.data_arrival
@@ -299,84 +254,12 @@ void validateNodeDomainsAndCausality(const DualCsrState& state,
         = std::min(expected_required[source], candidate);
   }
   for (std::size_t node = 0; node < count; ++node)
-    if (nodes.requireds.values[node] != expected_required[node])
+    // A raw setup/recovery table has no computed seed in the input. Fresh
+    // native proves that value; every other node retains the local min equality.
+    if (check_seeded[node] ? nodes.requireds.values[node] > expected_required[node]
+                          : nodes.requireds.values[node] != expected_required[node])
       rejectSemantic(violations, "result.nodes.requireds",
-                     "required must equal endpoint seed/backward minimum");
-}
-
-void validateClockAndSlewDomains(const DualCsrState& state,
-                                 const csr::CsrTimingResult& result,
-                                 DualCsrViolations& violations)
-{
-  const std::size_t lanes
-      = state.nodes.size() * csr::kAnalysisCount * csr::kTransitionCount;
-  const auto validate_clock = [&](const csr::ClockResultSoa& clock,
-                                  const std::string& field) {
-    const bool arrivals_ok = validatePresentDomain(
-        clock.arrivals, lanes, field + ".arrivals", csr::detail::isFinite,
-        "present clock arrival must be finite", violations);
-    const bool slews_ok = validatePresentDomain(
-        clock.slews, lanes, field + ".slews",
-        [](double value) {
-          return csr::detail::isFinite(value) && value >= 0.0;
-        }, "present clock slew must be finite and nonnegative", violations);
-    const bool nodes_ok = validatePresentDomain(
-        clock.predecessor_nodes, lanes, field + ".predecessor_nodes",
-        [&](csr::NodeId value) {
-          return value.value() < state.nodes.size();
-        }, "clock predecessor NodeId is out of range", violations);
-    const bool delays_ok = validatePresentDomain(
-        clock.predecessor_arc_delays, lanes,
-        field + ".predecessor_arc_delays", csr::detail::isFinite,
-        "clock predecessor delay must be finite", violations);
-    const bool transitions_ok = validatePresentDomain(
-        clock.predecessor_transitions, lanes,
-        field + ".predecessor_transitions",
-        [](csr::Transition value) {
-          return value == csr::Transition::kRise
-                 || value == csr::Transition::kFall;
-        }, "clock predecessor transition must be rise or fall", violations);
-    if (!(arrivals_ok && slews_ok && nodes_ok && delays_ok
-          && transitions_ok))
-      return;
-    if (clock.arrivals.presence != clock.slews.presence)
-      rejectSemantic(violations, field,
-                     "clock arrival and slew presence must match");
-    if (clock.predecessor_nodes.presence
-            != clock.predecessor_arc_delays.presence
-        || clock.predecessor_nodes.presence
-               != clock.predecessor_transitions.presence)
-      rejectSemantic(violations, field + ".predecessor",
-                     "clock predecessor presence arrays must match");
-    for (std::size_t lane = 0; lane < lanes; ++lane) {
-      const csr::NodeId node{
-          lane / (csr::kAnalysisCount * csr::kTransitionCount)};
-      const bool source = std::ranges::any_of(
-          state.reference_payload.clocks,
-          [&](const csr::ClockConstraintModel& clock_model) {
-            return hasResolvedClockSource(clock_model, node);
-          });
-      const std::uint8_t expected = source ? 1 : 0;
-      if (clock.arrivals.presence[lane] != expected
-          || clock.slews.presence[lane] != expected
-          || (source && (clock.arrivals.values[lane] != 0.0
-                         || clock.slews.values[lane] != 0.0)))
-        rejectSemantic(violations, field,
-                       "isolated ideal-clock lanes must be zero at sources only");
-      if (clock.predecessor_nodes.presence[lane] != 0
-          || clock.predecessor_arc_delays.presence[lane] != 0
-          || clock.predecessor_transitions.presence[lane] != 0)
-        rejectSemantic(violations, field + ".predecessor",
-                       "isolated ideal clocks must not have predecessors");
-    }
-  };
-  validate_clock(result.effective_clock, "result.effective_clock");
-  validate_clock(result.physical_clock, "result.physical_clock");
-  validatePresentDomain(
-      result.data_slews, lanes, "result.data_slews",
-      [](double value) {
-        return csr::detail::isFinite(value) && value >= 0.0;
-      }, "present data slew must be finite and nonnegative", violations);
+                     "required must satisfy its endpoint seed/backward minimum");
 }
 
 void validatePathDomainsAndCausality(const DualCsrState& state,
@@ -504,6 +387,13 @@ void validatePathDomainsAndCausality(const DualCsrState& state,
       if (matches != 1) {
         rejectSemantic(violations, "result.paths.predecessor",
                        "root path must resolve to exactly one start seed");
+      } else if (match->availability == csr::StartSeedAvailability::kDeferredSequential) {
+        if (source != csr::PathSource::kRegister || paths.launches.values[entry] != 0.0)
+          rejectSemantic(violations, "result.paths.launches", "deferred register root requires zero ideal-clock launch");
+        if (!match->crpr_node || !match->crpr_transition || paths.crpr_nodes.presence[entry] != 1
+            || paths.crpr_transitions.presence[entry] != 1 || paths.crpr_nodes.values[entry] != *match->crpr_node
+            || paths.crpr_transitions.values[entry] != *match->crpr_transition)
+          rejectSemantic(violations, "result.paths.crpr", "deferred register root must retain its exact seed CRPR binding");
       } else if (!match->arrival[lane.analysis][lane.transition]
                  || !match->slew[lane.analysis][lane.transition]
                  || paths.arrivals.values[entry]

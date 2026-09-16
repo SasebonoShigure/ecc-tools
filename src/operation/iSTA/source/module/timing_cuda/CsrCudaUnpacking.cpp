@@ -45,6 +45,13 @@ void unpackNodes(DownloadData& data, const ResultLayout& layout, CsrTimingValues
     for (std::size_t lane = 0; lane < 4; ++lane) {
       result.data_slews.presence[i * 4 + lane] = node.slew[lane].present ? 1 : 0;
       result.data_slews.values[i * 4 + lane] = node.slew[lane].present ? node.slew[lane].value : 0.0;
+      const auto& clock = node.physical_clock[lane];
+      append(result.physical_clock.arrivals, clock.arrival.value, clock.arrival.present);
+      append(result.physical_clock.slews, clock.slew.value, clock.slew.present);
+      const bool predecessor = clock.predecessor != absent;
+      append(result.physical_clock.predecessor_nodes, NodeId{predecessor ? clock.predecessor : 0}, predecessor);
+      append(result.physical_clock.predecessor_arc_delays, clock.predecessor_delay, predecessor);
+      appendTransition(result.physical_clock.predecessor_transitions, clock.predecessor_transition, predecessor);
     }
   }
 }
@@ -71,8 +78,8 @@ void unpackPaths(DownloadData& data, const ResultLayout& layout, CsrTimingValues
       append(paths.predecessor_arcs, ArcId{predecessor ? path.predecessor_arc : 0}, predecessor);
       append(paths.predecessor_arc_delays, path.predecessor_delay, predecessor);
       appendTransition(paths.predecessor_transitions, path.predecessor_transition, predecessor);
-      append(paths.crpr_nodes, NodeId{}, false);
-      appendTransition(paths.crpr_transitions, 2, false);
+      append(paths.crpr_nodes, NodeId{path.crpr_node == absent ? 0 : path.crpr_node}, path.crpr_node != absent);
+      appendTransition(paths.crpr_transitions, path.crpr_transition, path.crpr_node != absent);
     }
   }
   paths.row_offsets.push_back(paths.arrivals.values.size());
@@ -130,7 +137,6 @@ CsrTimingValues unpackValues(DownloadData&& data, const ResultLayout& layout)
   result.data_slews.values.resize(count * 4);
   result.data_slews.presence.resize(count * 4);
   result.effective_clock = layout.effective_clock;
-  result.physical_clock = layout.physical_clock;
   unpackNodes(data, layout, result);
   unpackPaths(data, layout, result);
   unpackArcs(data, layout, result);

@@ -178,34 +178,13 @@ bool validateDividerFlags(const ReferenceBuildState& state)
   return any_divider;
 }
 
-bool hasConditionalTimingArc(const CsrReferenceInput& input)
-{
-  for (const auto& cell : input.referenced_library_cells) {
-    for (const auto& arc : cell.cell_arcs)
-      for (const auto& child : arc.transfer.children)
-        if (!child.signature.sdf_condition.empty())
-          return true;
-    for (const auto& check : cell.timing_checks)
-      for (const auto& child : check.children)
-        if (!child.signature.sdf_condition.empty())
-          return true;
-  }
-  return false;
-}
-
 void exportUnsupportedReasons(ReferenceBuildState& state)
 {
   const bool has_divider = validateDividerFlags(state);
-  const bool has_sequential_instance = std::ranges::any_of(state.input.instances, [](const InstanceRecord& instance) { return instance.is_sequential; });
-  const bool has_sequential_launch
-      = std::ranges::any_of(state.input.start_seeds, [](const StartSeedModel& seed) { return seed.path_source && *seed.path_source == PathSource::kRegister; });
-  const bool has_crpr = std::ranges::any_of(state.input.start_seeds, [](const StartSeedModel& seed) {
+  for (const auto& seed : state.input.start_seeds)
     if (seed.crpr_node.has_value() != seed.crpr_transition.has_value())
       malformedReferenceInput();
-    return seed.crpr_node.has_value();
-  });
   const bool has_propagated_clock = std::ranges::any_of(state.input.clocks, [](const ClockConstraintModel& clock) { return clock.propagated; });
-  const bool has_clock_fanout = std::ranges::any_of(state.replayed_clock_arcs, [](std::uint8_t replayed) { return replayed != 0; });
   const bool has_clock_gating = std::ranges::any_of(state.input.instances, [](const InstanceRecord& instance) { return instance.is_clock_gating; });
 
   state.input.unsupported_reasons.clear();
@@ -214,14 +193,8 @@ void exportUnsupportedReasons(ReferenceBuildState& state)
       state.input.unsupported_reasons.push_back(reason);
   };
   add(!state.input.parasitics.nets.empty(), CsrReferenceUnsupportedReason::kParasiticNet);
-  add(has_sequential_instance, CsrReferenceUnsupportedReason::kSequentialInstance);
-  add(has_sequential_launch, CsrReferenceUnsupportedReason::kSequentialLaunch);
-  add(!state.input.timing_check_endpoints.empty(), CsrReferenceUnsupportedReason::kTimingCheck);
-  add(has_crpr, CsrReferenceUnsupportedReason::kCrpr);
   add(has_propagated_clock, CsrReferenceUnsupportedReason::kPropagatedClock);
-  add(has_clock_fanout, CsrReferenceUnsupportedReason::kClockTreeFanout);
   add(has_clock_gating || has_divider, CsrReferenceUnsupportedReason::kClockGatingOrDivider);
-  add(hasConditionalTimingArc(state.input), CsrReferenceUnsupportedReason::kConditionalTimingArc);
   add(!state.input.case_analysis_constraints.empty(), CsrReferenceUnsupportedReason::kCaseAnalysis);
 }
 

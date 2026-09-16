@@ -53,17 +53,13 @@ struct FinishOneShot
 void requireArtifactEvidence(const ProductionFreshSessionView& view,
                              const FreshBaselineArtifacts& artifacts)
 {
-  constexpr std::array<std::string_view, 5> roles{
-      "tech_lef", "cell_lef", "liberty", "verilog", "sdc"};
-  const std::array<std::filesystem::path, 5> paths{
-      artifacts.tech_lef, artifacts.cell_lef, artifacts.liberty,
-      artifacts.verilog, artifacts.sdc};
-  if (view.artifact_evidence.size() != roles.size())
+  const auto files = timing_edit::oracle::freshArtifactFiles(artifacts);
+  if (view.artifact_evidence.size() != files.size())
     targetedFail("loader artifact evidence cardinality differs");
-  for (std::size_t index = 0; index < roles.size(); ++index) {
+  for (std::size_t index = 0; index < files.size(); ++index) {
     const auto& evidence = view.artifact_evidence[index];
-    if (evidence.role != roles[index]
-        || evidence.logical_name != paths[index].filename().string()
+    if (evidence.role != files[index].role
+        || evidence.logical_name != files[index].logical_name
         || evidence.content_sha256.empty()) {
       targetedFail("loader artifact evidence differs by role/name");
     }

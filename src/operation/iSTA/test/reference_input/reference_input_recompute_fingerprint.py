@@ -15,7 +15,7 @@ _TOKENS: dict[type[IntEnum], tuple[str, ...]] = {
     model.AnalysisMode: ("max", "min"),
     model.Transition: ("rise", "fall", "none"),
     model.PathSource: ("input", "register"),
-    model.StartSeedAvailability: ("materialized", "unsupported_sequential"),
+    model.StartSeedAvailability: ("materialized", "deferred_sequential"),
     model.TimingSense: (
         "none_positive_fallback",
         "positive_unate",

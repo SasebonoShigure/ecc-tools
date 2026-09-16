@@ -40,7 +40,7 @@ class PathSource(IntEnum):
 
 class StartSeedAvailability(IntEnum):
     MATERIALIZED = 0
-    UNSUPPORTED_SEQUENTIAL = 1
+    DEFERRED_SEQUENTIAL = 1
 
 
 class UnsupportedReason(IntEnum):

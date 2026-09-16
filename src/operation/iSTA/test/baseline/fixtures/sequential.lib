@@ -1,0 +1,235 @@
+library (sequential_lib) {
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  pulling_resistance_unit : "1kohm";
+  capacitive_load_unit (1, pf);
+  leakage_power_unit : "1nW";
+  nom_process : 1.0;
+  nom_temperature : 25.0;
+  nom_voltage : 1.0;
+  slew_lower_threshold_pct_rise : 30.0;
+  slew_upper_threshold_pct_rise : 70.0;
+  slew_lower_threshold_pct_fall : 30.0;
+  slew_upper_threshold_pct_fall : 70.0;
+  input_threshold_pct_rise : 50.0;
+  output_threshold_pct_rise : 50.0;
+  input_threshold_pct_fall : 50.0;
+  output_threshold_pct_fall : 50.0;
+  slew_derate_from_library : 1.0;
+
+  operating_conditions (typical) {
+    process : 1.0;
+    temperature : 25.0;
+    voltage : 1.0;
+  }
+  default_operating_conditions : typical;
+
+  lu_table_template (delay_template) {
+    variable_1 : input_net_transition;
+    variable_2 : total_output_net_capacitance;
+    index_1 ("0.01, 0.10");
+    index_2 ("0.001, 0.020");
+  }
+
+  lu_table_template (check_template) {
+    variable_1 : related_pin_transition;
+    variable_2 : constrained_pin_transition;
+    index_1 ("0.01, 0.10");
+    index_2 ("0.01, 0.10");
+  }
+  cell (BUF_X1) {
+    area : 1.0;
+    cell_leakage_power : 0.001;
+    pin (A) {
+      direction : input;
+      capacitance : 0.002;
+      rise_capacitance : 0.002;
+      fall_capacitance : 0.002;
+    }
+    pin (Y) {
+      direction : output;
+      function : "A";
+      max_capacitance : 0.050;
+      timing () {
+        related_pin : "A";
+        timing_sense : positive_unate;
+        timing_type : combinational;
+        cell_rise (delay_template) {
+          values ("0.020, 0.030", "0.040, 0.050");
+        }
+        cell_fall (delay_template) {
+          values ("0.018, 0.028", "0.038, 0.048");
+        }
+        rise_transition (delay_template) {
+          values ("0.015, 0.025", "0.030, 0.040");
+        }
+        fall_transition (delay_template) {
+          values ("0.014, 0.024", "0.029, 0.039");
+        }
+      }
+    }
+  }
+
+  cell (OR2_X1) {
+    area : 1.2;
+    cell_leakage_power : 0.002;
+    pin (A) {
+      direction : input;
+      capacitance : 0.003;
+      rise_capacitance : 0.003;
+      fall_capacitance : 0.003;
+    }
+    pin (B) {
+      direction : input;
+      capacitance : 0.003;
+      rise_capacitance : 0.003;
+      fall_capacitance : 0.003;
+    }
+    pin (Y) {
+      direction : output;
+      function : "A | B";
+      max_capacitance : 0.050;
+      timing () {
+        related_pin : "A";
+        timing_sense : positive_unate;
+        timing_type : combinational;
+        cell_rise (delay_template) { values ("0.030, 0.040", "0.050, 0.060"); }
+        cell_fall (delay_template) { values ("0.028, 0.038", "0.048, 0.058"); }
+        rise_transition (delay_template) { values ("0.020, 0.030", "0.035, 0.045"); }
+        fall_transition (delay_template) { values ("0.019, 0.029", "0.034, 0.044"); }
+      }
+      timing () {
+        related_pin : "B";
+        timing_sense : positive_unate;
+        timing_type : combinational;
+        cell_rise (delay_template) { values ("0.030, 0.040", "0.050, 0.060"); }
+        cell_fall (delay_template) { values ("0.028, 0.038", "0.048, 0.058"); }
+        rise_transition (delay_template) { values ("0.020, 0.030", "0.035, 0.045"); }
+        fall_transition (delay_template) { values ("0.019, 0.029", "0.034, 0.044"); }
+      }
+    }
+  }
+  cell (DFF_R) {
+    area : 2.0;
+    cell_leakage_power : 0.003;
+    ff (IQ, IQN) { clocked_on : "CK"; next_state : "D"; clear : "!RN"; }
+    pin (CK) { direction : input; clock : true; capacitance : 0.003; }
+    pin (D) {
+      direction : input; capacitance : 0.002;
+      timing () {
+        related_pin : "CK";
+        timing_type : setup_rising;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+      timing () {
+        related_pin : "CK";
+        timing_type : hold_rising;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+    }
+    pin (RN) {
+      direction : input; capacitance : 0.002;
+      timing () {
+        related_pin : "CK";
+        timing_type : recovery_rising;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+      timing () {
+        related_pin : "CK";
+        timing_type : removal_rising;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+    }
+    pin (Q) {
+      direction : output; function : "IQ"; max_capacitance : 0.05;
+      timing () {
+        related_pin : "CK";
+        timing_type : rising_edge;
+        timing_sense : non_unate;
+        when : "RN";
+        sdf_cond : "RN";
+        cell_rise (delay_template) { values ("0.02, 0.04", "0.06, 0.08"); }
+        cell_fall (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+        rise_transition (delay_template) { values ("0.01, 0.02", "0.03, 0.04"); }
+        fall_transition (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+      }
+      timing () {
+        related_pin : "CK";
+        timing_type : rising_edge;
+        timing_sense : non_unate;
+        when : "!RN";
+        sdf_cond : "!RN";
+        cell_rise (delay_template) { values ("0.03, 0.05", "0.07, 0.09"); }
+        cell_fall (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+        rise_transition (delay_template) { values ("0.01, 0.02", "0.03, 0.04"); }
+        fall_transition (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+      }
+    }
+  }
+  cell (DFF_F) {
+    area : 2.0;
+    cell_leakage_power : 0.003;
+    ff (IQ, IQN) { clocked_on : "!CK"; next_state : "D"; clear : "!RN"; }
+    pin (CK) { direction : input; clock : true; capacitance : 0.003; }
+    pin (D) {
+      direction : input; capacitance : 0.002;
+      timing () {
+        related_pin : "CK";
+        timing_type : setup_falling;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+      timing () {
+        related_pin : "CK";
+        timing_type : hold_falling;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+    }
+    pin (RN) {
+      direction : input; capacitance : 0.002;
+      timing () {
+        related_pin : "CK";
+        timing_type : recovery_falling;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+      timing () {
+        related_pin : "CK";
+        timing_type : removal_falling;
+        rise_constraint (check_template) { values ("0.03, 0.05", "0.04, 0.06"); }
+        fall_constraint (check_template) { values ("0.02, 0.04", "0.03, 0.05"); }
+      }
+    }
+    pin (Q) {
+      direction : output; function : "IQ"; max_capacitance : 0.05;
+      timing () {
+        related_pin : "CK";
+        timing_type : falling_edge;
+        timing_sense : non_unate;
+        when : "RN";
+        sdf_cond : "RN";
+        cell_rise (delay_template) { values ("0.02, 0.04", "0.06, 0.08"); }
+        cell_fall (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+        rise_transition (delay_template) { values ("0.01, 0.02", "0.03, 0.04"); }
+        fall_transition (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+      }
+      timing () {
+        related_pin : "CK";
+        timing_type : falling_edge;
+        timing_sense : non_unate;
+        when : "!RN";
+        sdf_cond : "!RN";
+        cell_rise (delay_template) { values ("0.03, 0.05", "0.07, 0.09"); }
+        cell_fall (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+        rise_transition (delay_template) { values ("0.01, 0.02", "0.03, 0.04"); }
+        fall_transition (delay_template) { values ("0.02, 0.03", "0.04, 0.05"); }
+      }
+    }
+  }
+}

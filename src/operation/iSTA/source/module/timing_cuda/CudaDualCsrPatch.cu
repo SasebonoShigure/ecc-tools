@@ -214,7 +214,6 @@ PackedPatch CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDualC
     clock.predecessor_transitions.presence.resize(size, 0);
   };
   resizeClock(layout.effective_clock);
-  resizeClock(layout.physical_clock);
   roots = prior.roots;
   ends = prior.ends;
   if (patch.roots) {
@@ -295,6 +294,7 @@ PackedPatch CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDualC
   view.arc_count = patch.after.arc_slots;
   view.child_count = checkedAdd(prior.view.child_count, packed.children.size());
   view.tag_count = prior.view.tag_count;
+  view.clock_count = prior.view.clock_count;
   view.root_count = roots.size();
   view.end_count = ends.size();
   view.endpoint_count = checkedAdd(prior.view.endpoint_count, patch.appended_endpoints.size());

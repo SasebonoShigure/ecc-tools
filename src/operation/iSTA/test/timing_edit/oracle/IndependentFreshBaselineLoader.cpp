@@ -21,6 +21,7 @@
 #include <fstream>
 #include <map>
 #include <span>
+#include <set>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -101,16 +102,10 @@ std::vector<std::uint8_t> readBytes(const fs::path& path)
   return bytes;
 }
 
-FreshArtifactEvidence evidence(std::string role, const fs::path& path)
+FreshArtifactEvidence evidence(const FreshArtifactFile& file)
 {
-  const std::vector<std::uint8_t> bytes = readBytes(path);
-  return {std::move(role), path.filename().string(), csr::sha256Hex(std::span<const std::uint8_t>(bytes))};
-}
-
-const csr::StaAnalysisContext& analysisContext()
-{
-  static const csr::StaAnalysisContext context{"slow", "25", "__no_rc_corner__"};
-  return context;
+  const std::vector<std::uint8_t> bytes = readBytes(file.path);
+  return {file.role, file.logical_name, csr::sha256Hex(std::span<const std::uint8_t>(bytes))};
 }
 
 std::map<std::string, std::any> makeConfig(const fs::path& run_directory)
@@ -139,12 +134,12 @@ void requireCpuFullRecord(const StaExecutionRecord& record)
 void loadArtifacts(const FreshBaselineArtifacts& artifacts)
 {
   if (!dmInst->readLef(std::vector<std::string>{artifacts.tech_lef.string()}, true)
-      || !dmInst->readLef(std::vector<std::string>{artifacts.cell_lef.string()})) {
+      || !dmInst->readLef(freshArtifactPathStrings(artifacts.cell_lefs))) {
     fail("LEF load failed");
   }
   dmInst->get_config().set_sdc_path(artifacts.sdc.string());
   if (!dmInst->readVerilog(artifacts.verilog.string(), artifacts.top)
-      || !dmInst->readLib(std::vector<std::string>{artifacts.liberty.string()})) {
+      || !dmInst->readLib(freshArtifactPathStrings(artifacts.liberties))) {
     fail("Verilog or Liberty load failed");
   }
 }
@@ -162,10 +157,21 @@ void IndependentFreshBaselineLoader::run(const FreshBaselineArtifacts& supplied,
 
   FreshBaselineArtifacts artifacts = supplied;
   artifacts.tech_lef = requireRegularFile(supplied.tech_lef, "tech_lef");
-  artifacts.cell_lef = requireRegularFile(supplied.cell_lef, "cell_lef");
-  artifacts.liberty = requireRegularFile(supplied.liberty, "liberty");
+  if (artifacts.cell_lefs.empty() || artifacts.liberties.empty())
+    fail("cell LEF and Liberty lists must be nonempty");
+  for (auto& path : artifacts.cell_lefs)
+    path = requireRegularFile(path, "cell_lef");
+  for (auto& path : artifacts.liberties)
+    path = requireRegularFile(path, "liberty");
   artifacts.verilog = requireRegularFile(supplied.verilog, "verilog");
   artifacts.sdc = requireRegularFile(supplied.sdc, "sdc");
+  std::set<fs::path> unique_paths;
+  for (const auto& file : freshArtifactFiles(artifacts))
+    if (!unique_paths.insert(file.path).second)
+      fail("source artifacts must have distinct canonical paths");
+  if (artifacts.analysis_context.liberty_corner.empty() || artifacts.analysis_context.temperature.empty()
+      || artifacts.analysis_context.rc_corner.empty())
+    fail("analysis context fields must be nonempty");
   std::error_code directory_error;
   fs::create_directories(artifacts.run_directory, directory_error);
   if (directory_error || !fs::is_directory(artifacts.run_directory)) {
@@ -176,13 +182,13 @@ void IndependentFreshBaselineLoader::run(const FreshBaselineArtifacts& supplied,
     fail("run directory cannot be canonicalized");
   }
 
-  const std::vector<FreshArtifactEvidence> artifact_evidence{
-      evidence("tech_lef", artifacts.tech_lef), evidence("cell_lef", artifacts.cell_lef), evidence("liberty", artifacts.liberty),
-      evidence("verilog", artifacts.verilog), evidence("sdc", artifacts.sdc)};
+  std::vector<FreshArtifactEvidence> artifact_evidence;
+    for (const auto& file : freshArtifactFiles(artifacts))
+      artifact_evidence.push_back(evidence(file));
 
   loadArtifacts(artifacts);
   IncrementalStaSession session({StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
-  throwOnStaFailure(session.initialize(analysisContext(), makeConfig(artifacts.run_directory)), session.request());
+  throwOnStaFailure(session.initialize(artifacts.analysis_context, makeConfig(artifacts.run_directory)), session.request());
   const auto token = session.sessionToken();
   if (!token || *token == 0 || session.state() != StaSessionState::kInitialized) {
     fail("initialized session token/state differs");
@@ -196,7 +202,7 @@ void IndependentFreshBaselineLoader::run(const FreshBaselineArtifacts& supplied,
   try {
     StaCsrSessionProbeAccess::use(*token, [&](Database& database) {
       csr::CsrReferenceInputExportResult exported
-          = csr::exportCsrReferenceInputCandidate(database, analysisContext(), *token);
+          = csr::exportCsrReferenceInputCandidate(database, artifacts.analysis_context, *token);
       const auto* reference = std::get_if<csr::CsrReferenceInput>(&exported);
       if (reference == nullptr || reference->source_identity.session_token != *token
           || reference->source_identity.graph_generation != 0 || !reference->unsupported_reasons.empty()) {

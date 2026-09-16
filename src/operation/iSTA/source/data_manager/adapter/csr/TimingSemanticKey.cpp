@@ -116,8 +116,8 @@ std::string_view token(StartSeedAvailability value)
   switch (value) {
     case StartSeedAvailability::kMaterialized:
       return "materialized";
-    case StartSeedAvailability::kUnsupportedSequential:
-      return "unsupported_sequential";
+    case StartSeedAvailability::kDeferredSequential:
+      return "deferred_sequential";
   }
   throw std::invalid_argument("unknown StartSeedAvailability");
 }

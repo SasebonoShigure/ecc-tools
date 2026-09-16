@@ -17,7 +17,7 @@ import reference_input_controller_negative_cases as negative_cases
 import reference_input_recompute_transfer as transfer_oracle
 import reference_input_wire_fixture as fixture
 
-_DEEP_CANDIDATE_BYTE_COUNT = 3410
+_DEEP_CANDIDATE_BYTE_COUNT = 3409
 _DEEP_RAW_BYTE_COUNT = 1114
 
 

@@ -13,6 +13,7 @@ add_library(ista_timing_dual_csr
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTimingPayloadViewImpl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTimingResultValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTimingResultSemantics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTimingClockSemantics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrFunctionalProjection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTimingSemanticProjection.cpp
 )

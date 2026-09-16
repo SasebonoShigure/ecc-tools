@@ -252,7 +252,7 @@ CsrReferenceInput clockInput()
   input.clock_owner_by_node = {std::optional<std::string>{"clk"}, std::optional<std::string>{"clk"}};
   input.arcs[0].eligibility.clock = true;
   input.endpoint_required[0].clock_period = 10.0;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kClockTreeFanout};
+  input.unsupported_reasons = {};
   auto& seed = input.start_seeds[0];
   seed.arrival[0][0] = 0.0;
   seed.arrival[0][1] = 5.0;
@@ -267,20 +267,6 @@ bool hasReason(const CsrReferenceInput& input, CsrReferenceUnsupportedReason rea
   return std::ranges::find(input.unsupported_reasons, reason) != input.unsupported_reasons.end();
 }
 
-void makeUnsupportedSequentialNull(StartSeedModel& seed)
-{
-  seed.availability = StartSeedAvailability::kUnsupportedSequential;
-  seed.path_start_node = seed.seed_node;
-  seed.path_source.reset();
-  seed.crpr_node.reset();
-  seed.crpr_transition.reset();
-  for (auto& row : seed.arrival)
-    for (auto& value : row)
-      value.reset();
-  for (auto& row : seed.slew)
-    for (auto& value : row)
-      value.reset();
-}
 
 CsrReferenceInput parasiticInput()
 {
@@ -294,53 +280,8 @@ CsrReferenceInput parasiticInput()
   return input;
 }
 
-CsrReferenceInput sequentialInput()
-{
-  CsrReferenceInput input = cellInput();
-  input.instances[0].is_sequential = true;
-  input.referenced_library_cells[0].is_sequential = true;
-  for (auto& node : input.nodes)
-    node.is_sequential = true;
-  makeUnsupportedSequentialNull(input.start_seeds[0]);
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance};
-  refreshIdentity(input);
-  return input;
-}
 
-CsrReferenceInput registerInput()
-{
-  CsrReferenceInput input = sequentialInput();
-  input.nodes[0].is_clock_pin = true;
-  input.nodes[1].is_data_pin = true;
-  input.instances[0].has_timing_checks = true;
-  auto& cell = input.referenced_library_cells[0];
-  cell.clock_pin_name = "A";
-  cell.data_pin_name = "Y";
-  cell.timing_checks = {{"A", "Y", TimingCheckKind::kSetup, 0.0, Transition::kRise, {}}};
-  input.timing_check_endpoints = {{"u1", 0, TimingCheckKind::kSetup, "A", "Y", "u1:A", "u1:Y", NodeId{0}, NodeId{1}}};
-  input.clocks = {ClockConstraintModel{"clk", "clk", {RawNodeReference{"u1:A", NodeId{0}}}, 10.0, {0.0, 5.0}, false}};
-  input.clock_owner_by_node = {std::optional<std::string>{"clk"}, std::nullopt};
-  auto& seed = input.start_seeds[0];
-  seed.path_start_node = NodeId{1};
-  seed.path_source = PathSource::kRegister;
-  seed.crpr_node = NodeId{0};
-  seed.crpr_transition = Transition::kRise;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance, CsrReferenceUnsupportedReason::kSequentialLaunch,
-                               CsrReferenceUnsupportedReason::kTimingCheck, CsrReferenceUnsupportedReason::kCrpr};
-  refreshIdentity(input);
-  return input;
-}
 
-CsrReferenceInput timingCheckInput()
-{
-  CsrReferenceInput input = registerInput();
-  input.clocks.clear();
-  input.clock_owner_by_node.assign(input.nodes.size(), std::nullopt);
-  makeUnsupportedSequentialNull(input.start_seeds[0]);
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance, CsrReferenceUnsupportedReason::kTimingCheck};
-  refreshIdentity(input);
-  return input;
-}
 
 CsrReferenceInput gatingInput()
 {
@@ -352,18 +293,6 @@ CsrReferenceInput gatingInput()
   return input;
 }
 
-CsrReferenceInput conditionalInput()
-{
-  CsrReferenceInput input = cellInput();
-  auto& signature = input.arcs[0].key.base.library_arcs[0];
-  signature.sdf_condition = "A";
-  input.arcs[0].transfer.children[0].signature = signature;
-  input.referenced_library_cells[0].cell_arcs[0].transfer = input.arcs[0].transfer;
-  input.arc_ids_by_key[0].key = input.arcs[0].key;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kConditionalTimingArc};
-  refreshIdentity(input);
-  return input;
-}
 
 CsrReferenceInput caseInput()
 {
@@ -378,7 +307,7 @@ CsrReferenceInput propagatedInput()
 {
   CsrReferenceInput input = clockInput();
   input.clocks[0].propagated = true;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockTreeFanout};
+  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
   refreshIdentity(input);
   return input;
 }
@@ -567,14 +496,8 @@ CsrReferenceInput exportFixture(CsrReferenceInputNativeFixture& fixture, std::ui
 void testExactReasonMatrix()
 {
   verifyReason(CsrReferenceUnsupportedReason::kParasiticNet, referenceInput, parasiticInput, "parasitic");
-  verifyReason(CsrReferenceUnsupportedReason::kSequentialInstance, cellInput, sequentialInput, "sequential instance");
-  verifyReason(CsrReferenceUnsupportedReason::kSequentialLaunch, sequentialInput, registerInput, "sequential launch");
-  verifyReason(CsrReferenceUnsupportedReason::kTimingCheck, sequentialInput, timingCheckInput, "timing check");
-  verifyReason(CsrReferenceUnsupportedReason::kCrpr, sequentialInput, registerInput, "CRPR");
   verifyReason(CsrReferenceUnsupportedReason::kPropagatedClock, clockInput, propagatedInput, "propagated clock");
-  verifyReason(CsrReferenceUnsupportedReason::kClockTreeFanout, referenceInput, clockInput, "clock-tree fanout");
   verifyReason(CsrReferenceUnsupportedReason::kClockGatingOrDivider, cellInput, gatingInput, "clock gating");
-  verifyReason(CsrReferenceUnsupportedReason::kConditionalTimingArc, cellInput, conditionalInput, "conditional timing arc");
   verifyReason(CsrReferenceUnsupportedReason::kCaseAnalysis, referenceInput, caseInput, "case analysis");
 }
 
@@ -645,11 +568,11 @@ void testDividerAndGatingOrthogonality()
 
   auto fanout_fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kDiamond);
   const CsrReferenceInput fanout = exportFixture(fanout_fixture, 109, "ordinary clock fanout");
-  must(fanout.unsupported_reasons == std::vector{CsrReferenceUnsupportedReason::kClockTreeFanout},
+  must(fanout.unsupported_reasons.empty(),
        "ordinary replayed clock fanout fabricated gating/divider support");
 }
 
-void testTenReasonOverlap()
+void testRemainingReasonOverlap()
 {
   auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
   ParasiticNet net;
@@ -660,20 +583,11 @@ void testTenReasonOverlap()
   StaAnalysisContext context = referenceInputTestContext();
   context.rc_corner = "rc";
   auto result = exportCsrReferenceInputCandidate(fixture.database(), context, 110);
-  must(std::holds_alternative<CsrReferenceInput>(result), "ten-reason overlap export failed");
+  must(std::holds_alternative<CsrReferenceInput>(result), "remaining-reason overlap export failed");
   const CsrReferenceInput& input = std::get<CsrReferenceInput>(result);
-  const std::vector<CsrReferenceUnsupportedReason> all{CsrReferenceUnsupportedReason::kParasiticNet,
-                                                       CsrReferenceUnsupportedReason::kSequentialInstance,
-                                                       CsrReferenceUnsupportedReason::kSequentialLaunch,
-                                                       CsrReferenceUnsupportedReason::kTimingCheck,
-                                                       CsrReferenceUnsupportedReason::kCrpr,
-                                                       CsrReferenceUnsupportedReason::kPropagatedClock,
-                                                       CsrReferenceUnsupportedReason::kClockTreeFanout,
-                                                       CsrReferenceUnsupportedReason::kClockGatingOrDivider,
-                                                       CsrReferenceUnsupportedReason::kConditionalTimingArc,
-                                                       CsrReferenceUnsupportedReason::kCaseAnalysis};
-  must(input.unsupported_reasons == all, "ten-reason overlap is not exact stable enum order");
-  must(validateReferenceInputForSession(input, 110).empty(), "ten-reason overlap is not strict-valid");
+  const std::vector<CsrReferenceUnsupportedReason> all{CsrReferenceUnsupportedReason::kParasiticNet, CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kCaseAnalysis};
+  must(input.unsupported_reasons == all, "remaining-reason overlap is not exact stable enum order");
+  must(validateReferenceInputForSession(input, 110).empty(), "remaining-reason overlap is not strict-valid");
 }
 
 }  // namespace
@@ -683,6 +597,6 @@ int main()
   testExactReasonMatrix();
   testSupportFirstAndOverlap();
   testDividerAndGatingOrthogonality();
-  testTenReasonOverlap();
+  testRemainingReasonOverlap();
   return 0;
 }

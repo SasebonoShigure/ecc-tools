@@ -164,6 +164,8 @@ void refreshNetCaches(std::map<std::string, RawNetObservation>& nets,
         net.load_pins.push_back(pin_name);
       }
     }
+    std::ranges::sort(net.driver_pins);
+    std::ranges::sort(net.load_pins);
   }
 }
 

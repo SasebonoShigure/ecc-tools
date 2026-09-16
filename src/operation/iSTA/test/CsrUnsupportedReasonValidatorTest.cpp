@@ -28,7 +28,7 @@ using namespace ista::csr::test;
 
 void makeUnsupportedSequentialNull(StartSeedModel& seed)
 {
-  seed.availability = StartSeedAvailability::kUnsupportedSequential;
+  seed.availability = StartSeedAvailability::kDeferredSequential;
   seed.path_start_node = seed.seed_node;
   seed.path_source.reset();
   seed.crpr_node.reset();
@@ -53,54 +53,8 @@ CsrReferenceInput parasiticInput()
   return input;
 }
 
-CsrReferenceInput sequentialInput()
-{
-  CsrReferenceInput input = cellInput();
-  input.instances[0].is_sequential = true;
-  for (auto& node : input.nodes)
-    node.is_sequential = true;
-  input.referenced_library_cells[0].is_sequential = true;
-  makeUnsupportedSequentialNull(input.start_seeds[0]);
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance};
-  refreshIdentity(input);
-  return input;
-}
 
-CsrReferenceInput registerInput()
-{
-  CsrReferenceInput input = sequentialInput();
-  input.nodes[0].is_clock_pin = true;
-  input.nodes[1].is_data_pin = true;
-  input.instances[0].has_timing_checks = true;
-  auto& cell = input.referenced_library_cells[0];
-  cell.clock_pin_name = "A";
-  cell.data_pin_name = "Y";
-  cell.timing_checks = {LibraryTimingCheckArcModel{"A", "Y", TimingCheckKind::kSetup, 0.0, Transition::kRise, {}}};
-  input.timing_check_endpoints = {TimingCheckEndpointModel{"u1", 0, TimingCheckKind::kSetup, "A", "Y", "u1:A", "u1:Y", NodeId{0}, NodeId{1}}};
-  input.clocks = {ClockConstraintModel{"clk", "clk", {RawNodeReference{"u1:A", NodeId{0}}}, 10.0, {0.0, 5.0}, false}};
-  input.clock_owner_by_node = {std::optional<std::string>{"clk"}, std::nullopt};
-  auto& seed = input.start_seeds[0];
-  seed.availability = StartSeedAvailability::kUnsupportedSequential;
-  seed.path_start_node = NodeId{1};
-  seed.path_source = PathSource::kRegister;
-  seed.crpr_node = NodeId{0};
-  seed.crpr_transition = Transition::kRise;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance, CsrReferenceUnsupportedReason::kSequentialLaunch,
-                               CsrReferenceUnsupportedReason::kTimingCheck, CsrReferenceUnsupportedReason::kCrpr};
-  refreshIdentity(input);
-  return input;
-}
 
-CsrReferenceInput timingCheckInput()
-{
-  CsrReferenceInput input = registerInput();
-  input.clocks.clear();
-  input.clock_owner_by_node = {std::nullopt, std::nullopt};
-  makeUnsupportedSequentialNull(input.start_seeds[0]);
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance, CsrReferenceUnsupportedReason::kTimingCheck};
-  refreshIdentity(input);
-  return input;
-}
 
 CsrReferenceInput gatingInput()
 {
@@ -225,7 +179,7 @@ CsrReferenceInput dividerInput()
     StartSeedModel seed;
     seed.seed_node = seed_node;
     seed.path_start_node = path_start_node;
-    seed.availability = StartSeedAvailability::kUnsupportedSequential;
+    seed.availability = StartSeedAvailability::kDeferredSequential;
     seed.path_source = PathSource::kRegister;
     seed.clock_tag = "clk";
     seed.crpr_node = clock_node;
@@ -247,23 +201,11 @@ CsrReferenceInput dividerInput()
   for (const NodeId node : {u1_ck, u1_q, u2_ck, u2_q})
     input.cell_pin_capacitances.push_back({node, 0.1, {}});
   input.unsupported_reasons
-      = {CsrReferenceUnsupportedReason::kSequentialInstance, CsrReferenceUnsupportedReason::kSequentialLaunch, CsrReferenceUnsupportedReason::kTimingCheck,
-         CsrReferenceUnsupportedReason::kCrpr, CsrReferenceUnsupportedReason::kClockGatingOrDivider};
+      = {CsrReferenceUnsupportedReason::kClockGatingOrDivider};
   refreshIdentity(input);
   return input;
 }
 
-CsrReferenceInput conditionalInput()
-{
-  CsrReferenceInput input = cellInput();
-  input.arcs[0].key.base.library_arcs[0].sdf_condition = "A";
-  input.arcs[0].transfer.children[0].signature.sdf_condition = "A";
-  input.referenced_library_cells[0].cell_arcs[0].transfer = input.arcs[0].transfer;
-  input.arc_ids_by_key[0].key = input.arcs[0].key;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kConditionalTimingArc};
-  refreshIdentity(input);
-  return input;
-}
 
 CsrReferenceInput caseInput()
 {
@@ -278,7 +220,7 @@ CsrReferenceInput propagatedInput()
 {
   CsrReferenceInput input = clockInput();
   input.clocks[0].propagated = true;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockTreeFanout};
+  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
   refreshIdentity(input);
   return input;
 }
@@ -304,16 +246,9 @@ void verifyExactReason(const CsrReferenceInput& input, CsrReferenceUnsupportedRe
 void testAllDetectors()
 {
   verifyExactReason(parasiticInput(), CsrReferenceUnsupportedReason::kParasiticNet, "parasitics.nets", "parasitic");
-  verifyExactReason(sequentialInput(), CsrReferenceUnsupportedReason::kSequentialInstance, "instances.is_sequential", "sequential instance");
-  const CsrReferenceInput register_input = registerInput();
-  verifyExactReason(register_input, CsrReferenceUnsupportedReason::kSequentialLaunch, "start_seeds.path_source", "sequential launch");
-  verifyExactReason(register_input, CsrReferenceUnsupportedReason::kCrpr, "start_seeds.crpr", "CRPR");
-  verifyExactReason(timingCheckInput(), CsrReferenceUnsupportedReason::kTimingCheck, "timing_check_endpoints", "timing check");
   verifyExactReason(gatingInput(), CsrReferenceUnsupportedReason::kClockGatingOrDivider, "instances.is_clock_gating", "clock gating");
   verifyExactReason(dividerInput(), CsrReferenceUnsupportedReason::kClockGatingOrDivider, "instances.is_clock_gating", "clock divider");
-  verifyExactReason(conditionalInput(), CsrReferenceUnsupportedReason::kConditionalTimingArc, "arcs.key.sdf_condition", "conditional timing arc");
   verifyExactReason(caseInput(), CsrReferenceUnsupportedReason::kCaseAnalysis, "case_analysis_constraints", "case analysis");
-  verifyExactReason(clockInput(), CsrReferenceUnsupportedReason::kClockTreeFanout, "arcs.eligibility.clock", "clock-tree fanout");
   verifyExactReason(propagatedInput(), CsrReferenceUnsupportedReason::kPropagatedClock, "clocks.propagated", "propagated clock");
 }
 

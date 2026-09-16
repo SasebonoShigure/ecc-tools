@@ -131,4 +131,14 @@ __device__ inline double lookupTable(DeviceView view, const Table& table, const 
   return finiteValue(view, evaluateTable(view, table, slew, load) / child.time_scale);
 }
 
+__device__ inline double lookupCheckTable(DeviceView view, const Table& table, const Child& child, double clock_slew, double data_slew)
+{
+  if (!table.present || !isfinite(clock_slew) || clock_slew < 0.0 || !isfinite(data_slew) || data_slew < 0.0
+      || !isfinite(child.time_scale) || child.time_scale <= 0.0)
+    return numeric(view);
+  const double clock = finiteValue(view, clock_slew * child.time_scale);
+  const double data = finiteValue(view, data_slew * child.time_scale);
+  return finiteValue(view, evaluateTable(view, table, clock, data) / child.time_scale);
+}
+
 }  // namespace ista::csr::cuda_detail

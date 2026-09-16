@@ -46,7 +46,7 @@ __device__ inline bool relationExists(DeviceView view, const Arc& arc, unsigned 
       return false;
   }
   for (Index index = 0; index < arc.child_count; ++index)
-    if (children[index].delay[output].present || children[index].slew[output].present || children[index].check_present[output])
+    if (children[index].delay[output].present || children[index].slew[output].present || children[index].check[output].present)
       return true;
   return false;
 }

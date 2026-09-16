@@ -18,6 +18,7 @@
 #include <limits>
 #include <string>
 
+#include "CsrCpuReferenceBackend.hpp"
 #include "CsrTimingResultValidatorInternal.hpp"
 #include "CsrValidatorTestFixture.hpp"
 
@@ -353,6 +354,9 @@ void testClockSourceNamePriority()
   const CsrTimingResult isolated_result = singletonClockResult(isolated);
   requireValid(validateReferenceInput(isolated), "isolated clock-source input");
   requireValid(validateTimingResult(isolated, isolated_result), "isolated clock-source map key");
+  rejectMutation(isolated, isolated_result, "missing physical source state", [](auto& value) {
+    value.physical_clock = emptyClock(kAnalysisCount * kTransitionCount);
+  });
   rejectMutation(isolated, isolated_result, "isolated source embedded name", [](auto& value) { value.nodes.clock_names.values[0] = "embedded_clock"; });
 
   const CsrReferenceInput start = singletonClockInput(true);
@@ -367,6 +371,21 @@ void testClockSourceNamePriority()
   requireValid(validateTimingResult(predecessor, predecessor_result), "clock source predecessor-chain name");
   rejectMutation(predecessor, predecessor_result, "clock source owning map key with predecessor",
                  [](auto& value) { value.nodes.clock_names.values[1] = "map_b"; });
+}
+
+void testComputedPhysicalClockMutations()
+{
+  const CsrReferenceInput input = clockInput();
+  const auto computation = CsrCpuReferenceBackend{}.compute(input);
+  const auto* result = std::get_if<CsrTimingResult>(&computation.outcome);
+  require(result != nullptr, "clock fanout must compute actual timing values");
+  requireValid(validateTimingResult(input, *result), "computed clock fanout result");
+  rejectMutation(input, *result, "computed physical source omitted", [](auto& value) {
+    value.physical_clock = emptyClock(2 * kAnalysisCount * kTransitionCount);
+  });
+  rejectMutation(input, *result, "physical net predecessor transition changed", [](auto& value) {
+    value.physical_clock.predecessor_transitions.values[4] = Transition::kFall;
+  });
 }
 
 void testTypedClassificationAndLegacyProjection()
@@ -428,7 +447,10 @@ void testTypedClassificationAndLegacyProjection()
               && malformed_errors.front().message == "cannot validate a result against malformed reference input",
           "malformed input legacy behavior must remain exact");
 
-  const CsrReferenceInput unsupported = clockInput();
+  CsrReferenceInput unsupported = clockInput();
+  unsupported.clocks[0].propagated = true;
+  unsupported.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
+  refreshIdentity(unsupported);
   CsrTimingResult unsupported_result = result;
   unsupported_result.schema_version = "2.0.0";
   const auto unsupported_errors = validateTimingResult(unsupported, unsupported_result);
@@ -446,6 +468,7 @@ int main()
   testClockDataAndPathState();
   testArcMapsAndTimingRows();
   testClockSourceNamePriority();
+  testComputedPhysicalClockMutations();
   testTypedClassificationAndLegacyProjection();
   return 0;
 }

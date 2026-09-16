@@ -5,6 +5,9 @@
 #include "CsrCpuReferenceTestFixture.hpp"
 
 namespace ista::csr::test {
+void runCpuReferenceClockContracts();
+void runCpuReferenceSequentialContracts();
+void runCpuReferenceCheckContracts();
 CsrComputationResult computeContractTiming(const CsrReferenceInput& input)
 {
   return CsrCpuReferenceBackend{}.compute(input);
@@ -19,6 +22,9 @@ int main()
     ista::csr::test::runWholeResultLiteralContract();
     ista::csr::test::runCpuReferenceArcContracts();
     ista::csr::test::runCpuReferencePropagationContracts();
+    ista::csr::test::runCpuReferenceClockContracts();
+    ista::csr::test::runCpuReferenceSequentialContracts();
+    ista::csr::test::runCpuReferenceCheckContracts();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

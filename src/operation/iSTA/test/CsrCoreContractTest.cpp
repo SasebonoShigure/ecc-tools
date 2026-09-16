@@ -218,7 +218,7 @@ void testAllEnumTokens()
   requireTokens<Transition>({{Transition::kRise, "rise"}, {Transition::kFall, "fall"}, {Transition::kNone, "none"}}, "Transition");
   requireTokens<PathSource>({{PathSource::kInput, "input"}, {PathSource::kRegister, "register"}}, "PathSource");
   requireTokens<StartSeedAvailability>(
-      {{StartSeedAvailability::kMaterialized, "materialized"}, {StartSeedAvailability::kUnsupportedSequential, "unsupported_sequential"}},
+      {{StartSeedAvailability::kMaterialized, "materialized"}, {StartSeedAvailability::kDeferredSequential, "deferred_sequential"}},
       "StartSeedAvailability");
   requireTokens<TimingCheckKind>({{TimingCheckKind::kNone, "none"},
                                   {TimingCheckKind::kSetup, "setup"},

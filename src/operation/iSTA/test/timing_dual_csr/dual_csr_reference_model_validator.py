@@ -12,7 +12,7 @@ DIRECTIONS = {"none", "input", "output", "inout"}
 ANALYSES = {"max", "min"}
 TRANSITIONS = {"rise", "fall", "none"}
 PATH_SOURCES = {"input", "register"}
-AVAILABILITY = {"materialized", "unsupported_sequential"}
+AVAILABILITY = {"materialized", "deferred_sequential"}
 SENSES = {"none_positive_fallback", "positive_unate",
            "negative_unate", "non_unate"}
 TABLE_VARIABLES = {"none", "input_transition", "output_capacitance",

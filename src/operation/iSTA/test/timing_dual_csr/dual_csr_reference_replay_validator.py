@@ -55,31 +55,31 @@ def _records_with_node_ids(values: list[dict[str, Any]], fields: tuple[str, ...]
     return result
 
 
-def _ordered_start_seed_records(values: list[dict[str, Any]],
-                                ordered_starts: list[dict[str, Any]],
+def _ordered_node_records(values: list[dict[str, Any]],
+                                ordered_nodes: list[dict[str, Any]], node_field: str,
                                 label: str, require: Require
                                 ) -> list[dict[str, Any]]:
-    expected = [_canonical(key) for key in ordered_starts]
+    expected = [_canonical(key) for key in ordered_nodes]
     require(len(set(expected)) == len(expected),
-            f"{label}.ordered_starts repeats a NodeKey")
-    by_seed: dict[str, dict[str, Any]] = {}
+            f"{label}.ordered_nodes repeats a NodeKey")
+    by_node: dict[str, dict[str, Any]] = {}
     for index, record in enumerate(values):
-        require(isinstance(record, dict) and "seed_node" in record,
-                f"{label}.start_seeds[{index}] has no seed NodeKey")
-        if not isinstance(record, dict) or "seed_node" not in record:
+        require(isinstance(record, dict) and node_field in record,
+                f"{label}.records[{index}] has no record NodeKey")
+        if not isinstance(record, dict) or node_field not in record:
             continue
-        encoded = _canonical(record["seed_node"])
-        require(encoded not in by_seed,
-                f"{label}.start_seeds[{index}] repeats a seed NodeKey")
-        if encoded not in by_seed:
-            by_seed[encoded] = record
-    exact_cover = (len(by_seed) == len(values)
-                   and set(by_seed) == set(expected))
+        encoded = _canonical(record[node_field])
+        require(encoded not in by_node,
+                f"{label}.records[{index}] repeats a record NodeKey")
+        if encoded not in by_node:
+            by_node[encoded] = record
+    exact_cover = (len(by_node) == len(values)
+                   and set(by_node) == set(expected))
     require(exact_cover,
-            f"{label}.start_seeds does not exactly cover ordered_starts")
+            f"{label}.records does not exactly cover ordered_nodes")
     if not exact_cover or len(set(expected)) != len(expected):
         return []
-    return [by_seed[key] for key in expected]
+    return [by_node[key] for key in expected]
 
 
 def _raw_reference(functional: dict[str, Any], identity: dict[str, Any],
@@ -158,15 +158,22 @@ def _raw_reference(functional: dict[str, Any], identity: dict[str, Any],
         reference["timing_check_endpoints"],
         ("resolved_clock_node", "resolved_data_node"), by_key,
         f"{label}.timing_check_endpoints", require)
-    ordered_seed_records = _ordered_start_seed_records(
-        reference["start_seeds"], reference["ordered_starts"], label, require)
+    ordered_seed_records = _ordered_node_records(
+        reference["start_seeds"], reference["ordered_starts"], "seed_node",
+        f"{label}.start_seeds", require)
     raw["start_seeds"] = _records_with_node_ids(
         ordered_seed_records,
         ("seed_node", "path_start_node", "crpr_node"), by_key,
         f"{label}.start_seeds", require)
-    raw["endpoint_required"] = _records_with_node_ids(
-        reference["endpoint_required"], ("node",), by_key,
+    output_ports = {_canonical(record["key"]) for record in functional["graph"]["nodes"]
+                    if record["is_port"] and record["direction"] in {"output", "inout"}}
+    ordered_endpoints = [node for node in reference["ordered_ends"]
+                         if _canonical(node) in output_ports]
+    ordered_required = _ordered_node_records(
+        reference["endpoint_required"], ordered_endpoints, "node",
         f"{label}.endpoint_required", require)
+    raw["endpoint_required"] = _records_with_node_ids(
+        ordered_required, ("node",), by_key, f"{label}.endpoint_required", require)
     raw["cell_pin_capacitances"] = _records_with_node_ids(
         reference["cell_pin_capacitances"], ("node",), by_key,
         f"{label}.cell_pin_capacitances", require)
@@ -351,8 +358,8 @@ def run_reference_replay_self_test(require: Require) -> None:
     second = node("second")
     unknown = node("unknown")
     errors = []
-    reordered = _ordered_start_seed_records(
-        [seed(second), seed(first)], [first, second], "seed-order-canary",
+    reordered = _ordered_node_records(
+        [seed(second), seed(first)], [first, second], "seed_node", "seed-order-canary",
         lambda ok, message: errors.append(message) if not ok else None)
     require(not errors
             and [item["seed_node"] for item in reordered] == [first, second],
@@ -364,7 +371,23 @@ def run_reference_replay_self_test(require: Require) -> None:
         ("unknown", [seed(first), seed(unknown)]),
     ):
         errors = []
-        _ordered_start_seed_records(
-            candidate, [first, second], f"seed-{label}-canary",
+        _ordered_node_records(
+            candidate, [first, second], "seed_node", f"seed-{label}-canary",
             lambda ok, message: errors.append(message) if not ok else None)
         require(errors, f"{label} projected start-seed tamper was accepted")
+
+
+    required_first = {"node": first, "clock_period": 10.0}
+    required_second = {"node": second, "clock_period": 20.0}
+    errors = []
+    ordered_required = _ordered_node_records(
+        [required_second, required_first], [first, second], "node", "required-order-canary",
+        lambda ok, message: errors.append(message) if not ok else None)
+    require(not errors and ordered_required == [required_first, required_second],
+            "endpoint ordering changed payload values or failed to recover ordered ends")
+    for candidate in ([required_first], [required_first, required_first]):
+        errors = []
+        _ordered_node_records(
+            candidate, [first, second], "node", "required-cover-canary",
+            lambda ok, message, errors=errors: errors.append(message) if not ok else None)
+        require(bool(errors), "endpoint order reconstruction accepted missing/duplicate records")

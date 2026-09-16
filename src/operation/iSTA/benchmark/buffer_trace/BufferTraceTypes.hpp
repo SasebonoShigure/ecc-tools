@@ -24,11 +24,12 @@
 #include <vector>
 
 #include "TimingEditTypes.hpp"
+#include "CsrReferencePrimitives.hpp"
 
 namespace ista::buffer_trace {
 
-inline constexpr std::uint32_t kBufferFixedTraceSchemaVersion = 1;
-inline constexpr auto kBufferFixedTraceSchema = "buffer-fixed-trace/1.0.0";
+inline constexpr std::uint32_t kBufferFixedTraceSchemaVersion = 2;
+inline constexpr auto kBufferFixedTraceSchema = "buffer-fixed-trace/2.0.0";
 
 enum class SelectionMode : std::uint8_t
 {
@@ -190,11 +191,12 @@ struct SdcSourceRef
 struct SourceArtifactRefs
 {
   TechLefSourceRef tech_lef;
-  CellLefSourceRef cell_lef;
-  LibertySourceRef liberty;
+  std::vector<CellLefSourceRef> cell_lefs;
+  std::vector<LibertySourceRef> liberties;
   VerilogSourceRef verilog;
   SdcSourceRef sdc;
   std::string top;
+  csr::StaAnalysisContext analysis_context;
 
   friend bool operator==(const SourceArtifactRefs&, const SourceArtifactRefs&) = default;
 };

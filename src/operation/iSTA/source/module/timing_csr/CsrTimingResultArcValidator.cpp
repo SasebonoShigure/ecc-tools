@@ -22,7 +22,8 @@ namespace ista::csr::detail {
 
 using ResultClass = CsrTimingResultViolationClass;
 
-void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& result, const OptionalSoa<double>& data_slews, TimingResultViolations& errors)
+void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& result, const OptionalSoa<double>& data_slews,
+                          const OptionalSoa<double>& physical_slews, TimingResultViolations& errors)
 {
   const std::size_t arc_count = input.arcs.size();
   const auto finite_arc = [&](double value, std::size_t) {
@@ -62,7 +63,8 @@ void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& re
       });
   std::size_t data_lanes = 0;
   const bool data_shape = checkedProduct(input.nodes.size(), kAnalysisCount * kTransitionCount, data_lanes, errors, ResultClass::kShape, "result.data_slews")
-                          && data_slews.presence.size() == data_lanes && data_slews.values.size() == data_lanes;
+                          && data_slews.presence.size() == data_lanes && data_slews.values.size() == data_lanes
+                          && physical_slews.presence.size() == data_lanes && physical_slews.values.size() == data_lanes;
   if (input.parasitics.nets.empty() && data_shape && delays_ok && min_delays_ok && max_delays_ok && transition_ok && io_ok && graph_ok && types_ok) {
     for (std::size_t arc = 0; arc < arc_count; ++arc) {
       if (input.arcs[arc].kind != ArcKind::kNet)
@@ -85,7 +87,9 @@ void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& re
             const std::size_t lane = transition_lane * kTransitionCount + output_transition;
             const std::uint8_t same_transition = input_transition == output_transition ? 1 : 0;
             const std::size_t source_lane = (input.arcs[arc].source.value() * kAnalysisCount + analysis) * kTransitionCount + input_transition;
-            const std::uint8_t graph_presence = input.arcs[arc].eligibility.data_slew && data_slews.presence[source_lane] == 1 ? same_transition : 0;
+            const bool visited = (input.arcs[arc].eligibility.data_slew && data_slews.presence[source_lane] == 1)
+                               || (input.arcs[arc].eligibility.clock && physical_slews.presence[source_lane] == 1);
+            const std::uint8_t graph_presence = visited ? same_transition : 0;
             if (result.input_output_delays.presence[lane] != same_transition || result.graph_delays.presence[lane] != graph_presence) {
               reject(errors, ResultClass::kShape, "result.arcs.graph_delays", "no-SPEF net maps must contain only eligible present-zero identity lanes");
             } else if ((same_transition != 0 && result.input_output_delays.values[lane] != 0)

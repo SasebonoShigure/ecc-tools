@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+#include "CsrReferencePrimitives.hpp"
+
 namespace ista {
 class Database;
 }
@@ -35,13 +37,45 @@ namespace ista::timing_edit::oracle {
 struct FreshBaselineArtifacts
 {
   std::filesystem::path tech_lef;
-  std::filesystem::path cell_lef;
-  std::filesystem::path liberty;
+  std::vector<std::filesystem::path> cell_lefs;
+  std::vector<std::filesystem::path> liberties;
   std::filesystem::path verilog;
   std::filesystem::path sdc;
   std::filesystem::path run_directory;
   std::string top;
+  csr::StaAnalysisContext analysis_context;
 };
+
+// Mechanical source ordering only; targeted and oracle execution stay separate.
+struct FreshArtifactFile
+{
+  std::string role;
+  std::filesystem::path path;
+  std::string logical_name;
+};
+
+inline std::vector<FreshArtifactFile> freshArtifactFiles(const FreshBaselineArtifacts& artifacts)
+{
+  std::vector<FreshArtifactFile> files{{"tech_lef", artifacts.tech_lef, artifacts.tech_lef.filename().string()}};
+  const auto append = [&](const auto& paths, const std::string& role) {
+    for (std::size_t index = 0; index < paths.size(); ++index)
+      files.push_back({role, paths[index], std::to_string(index) + "-" + paths[index].filename().string()});
+  };
+  append(artifacts.cell_lefs, "cell_lef");
+  append(artifacts.liberties, "liberty");
+  files.push_back({"verilog", artifacts.verilog, artifacts.verilog.filename().string()});
+  files.push_back({"sdc", artifacts.sdc, artifacts.sdc.filename().string()});
+  return files;
+}
+
+inline std::vector<std::string> freshArtifactPathStrings(const std::vector<std::filesystem::path>& paths)
+{
+  std::vector<std::string> result;
+  result.reserve(paths.size());
+  for (const auto& path : paths)
+    result.push_back(path.string());
+  return result;
+}
 
 struct FreshArtifactEvidence
 {

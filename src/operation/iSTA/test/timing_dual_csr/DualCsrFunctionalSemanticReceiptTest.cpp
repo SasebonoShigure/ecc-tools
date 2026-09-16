@@ -127,6 +127,42 @@ void rankAndStorageHistoryAreNotFunctional()
           "canonical NodeKey/ArcKey ordering was not preserved");
 }
 
+void requiredMinimumCannotBeWeakened()
+{
+  const auto state = baselineState();
+  auto result = timingFor(state);
+  result.values.nodes.requireds.values[0] -= 0.125;
+  result.values.nodes.slacks.values[0] -= 0.125;
+  const auto errors = validateDualCsrTimingResult(state, result);
+  require(std::ranges::any_of(errors, [](const auto& error) {
+    return error.field == "result.nodes.requireds";
+  }), "validator accepted lower non-endpoint required with matching slack");
+}
+
+void clockOwnershipAndPhysicalCausality()
+{
+  auto input = baselineInput();
+  input.clocks = {{"clk", "clk", {{"in", csr::NodeId{0}}}, 10.0, {0.0, 5.0}, false}};
+  input.clock_owner_by_node.assign(2, std::string{"clk"});
+  input.arcs.front().eligibility.clock = true;
+  input.endpoint_required.front().clock_period = 10.0;
+  for (std::size_t analysis = 0; analysis < csr::kAnalysisCount; ++analysis)
+    for (std::size_t transition = 0; transition < csr::kTransitionCount; ++transition)
+      input.start_seeds.front().arrival[analysis][transition] = analysis == 0 && transition == 1 ? 5.0 : 0.0;
+  csr::test::refreshIdentity(input, kSessionValue);
+  auto baseline = DualCsrBaselineFactory::create(input, timing_edit::TimingEditSessionToken{kSessionValue},
+                                                timing_edit::AppendOnlyHighWater{2, 0, 1});
+  require(baseline.success(), "clock fanout baseline rejected");
+  const auto& state = *baseline.state;
+  auto result = timingFor(state);
+  require(result.values.nodes.is_clock_point.values == std::vector<std::uint8_t>{1, 1}
+          && result.values.physical_clock.predecessor_nodes.presence[4] == 1,
+          "clock propagation did not produce an owned sink/predecessor");
+  result.values.physical_clock.predecessor_arc_delays.values[4] += 0.25;
+  require(!validateDualCsrTimingResult(state, result).empty(),
+          "physical clock validator accepted a forged predecessor delay");
+}
+
 void semanticDifferenceIsVisible()
 {
   const FunctionalSemanticReceipt baseline = receiptFor(baselineState());
@@ -145,6 +181,8 @@ int main()
 {
   try {
     ista::timing_dual_csr::test::rankAndStorageHistoryAreNotFunctional();
+    ista::timing_dual_csr::test::requiredMinimumCannotBeWeakened();
+    ista::timing_dual_csr::test::clockOwnershipAndPhysicalCausality();
     ista::timing_dual_csr::test::semanticDifferenceIsVisible();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

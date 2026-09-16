@@ -88,7 +88,11 @@ CsrComputationWithTelemetry detail::propagateCsrCpuReferenceWithLevels(const Act
     output.telemetry = work.telemetry;
     return output;
   }
-  status = propagateCsrCpuReferenceForward(edges, work);
+  status = propagateCsrCpuReferenceClocks(edges, payloads, work);
+  if (status == CsrCpuReferenceStageStatus::kSuccess)
+    status = initializeCsrCpuSequentialSeeds(edges, payloads, work);
+  if (status == CsrCpuReferenceStageStatus::kSuccess)
+    status = propagateCsrCpuReferenceForward(edges, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     output.computation = stageFailure(status);
 

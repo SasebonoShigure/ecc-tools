@@ -91,7 +91,7 @@ enum class PathSource : std::uint8_t
 enum class StartSeedAvailability : std::uint8_t
 {
   kMaterialized,
-  kUnsupportedSequential
+  kDeferredSequential
 };
 
 enum class TimingSense : std::uint8_t

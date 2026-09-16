@@ -64,11 +64,7 @@ class CsrFullMismatch final : public std::runtime_error
   throw std::runtime_error("production fresh oracle probe: " + std::move(message));
 }
 
-const csr::StaAnalysisContext& analysisContext()
-{
-  static const csr::StaAnalysisContext context{"slow", "25", "__no_rc_corner__"};
-  return context;
-}
+
 
 ComponentFingerprints fingerprints(const csr::CsrSnapshotIdentity& identity)
 {
@@ -116,10 +112,10 @@ void requireOk(TransactionStatus status, std::string_view operation)
 }
 
 std::unique_ptr<csr::CsrCommittedSessionSnapshot> buildHostSnapshot(
-    const Database& database, TimingEditSessionToken token)
+    const Database& database, TimingEditSessionToken token, const csr::StaAnalysisContext& context)
 {
   csr::CsrSessionSnapshotBuildResult result
-      = csr::buildCsrSessionSnapshot(database, analysisContext(), token.value());
+      = csr::buildCsrSessionSnapshot(database, context, token.value());
   auto* snapshot
       = std::get_if<std::unique_ptr<csr::CsrCommittedSessionSnapshot>>(&result);
   if (snapshot == nullptr || *snapshot == nullptr) {
@@ -291,7 +287,7 @@ void requireExactGenerationZeroAfterTamper(
 {
   const CommittedEditIdentity active_identity
       = NativeTimingEditPreparer::captureCurrentIdentity(
-          STADM.getDatabase(), TransactionGeneration{0}, analysisContext(), token);
+          STADM.getDatabase(), TransactionGeneration{0}, view.reference_input.analysis_context, token);
   const std::vector<std::string> raw_mismatches
       = compareRawDesign(raw_baseline, captureRawDesign(STADM.getDatabase()));
   if (installed.active() || prepared.sealed()
@@ -327,7 +323,7 @@ void applyPrefix(const ProductionFreshSessionView& view, const TimingEditTrace& 
   }
   const CommittedEditIdentity initial_identity
       = NativeTimingEditPreparer::captureCurrentIdentity(
-          view.database, TransactionGeneration{0}, analysisContext(), token);
+          view.database, TransactionGeneration{0}, view.reference_input.analysis_context, token);
   if (initial_identity
       != CommittedEditIdentity{TransactionGeneration{0}, trace.baseline.fingerprints,
                                trace.baseline.canonical_pre_state}) {
@@ -337,7 +333,7 @@ void applyPrefix(const ProductionFreshSessionView& view, const TimingEditTrace& 
   TimingEditResolverState resolver = TimingEditResolverState::bindBaseline(view.database);
   const TimingEditResolverState initial_resolver = resolver;
   std::unique_ptr<csr::CsrCommittedSessionSnapshot> initial_host
-      = buildHostSnapshot(view.database, token);
+      = buildHostSnapshot(view.database, token, view.reference_input.analysis_context);
   const csr::CsrCommittedSessionSnapshot* const initial_host_address
       = initial_host.get();
   const StaCsrCaptureAttempt baseline_capture
@@ -364,7 +360,7 @@ void applyPrefix(const ProductionFreshSessionView& view, const TimingEditTrace& 
     DesignEditPlan plan
         = planFor(trace, index, coordinator.committedIdentity(), options.subject);
     const TimingEditPrepareContext prepare_context{
-        token, trace.baseline, coordinator.committedIdentity(), analysisContext()};
+        token, trace.baseline, coordinator.committedIdentity(), view.reference_input.analysis_context};
     PreparedBatch prepared = NativeTimingEditPreparer::prepare(
         STADM.getDatabase(), plan, prepare_context, coordinator.resolverState());
     requireOk(coordinator.beginPrepare(prepared), "beginPrepare");
@@ -386,7 +382,7 @@ void applyPrefix(const ProductionFreshSessionView& view, const TimingEditTrace& 
     std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot;
     CommittedEditIdentity post_identity;
     try {
-      host_snapshot = buildHostSnapshot(installed.database(), token);
+      host_snapshot = buildHostSnapshot(installed.database(), token, view.reference_input.analysis_context);
       if (options.subject == OracleSubject::kDerivedTamper) {
         installDerivedTimingTamper(installed.database());
         bool exact_mismatch_detected = false;
@@ -405,7 +401,7 @@ void applyPrefix(const ProductionFreshSessionView& view, const TimingEditTrace& 
             requireCsrFullExact(*host_snapshot, installed.database(), index + 1,
                                 view.authority, prepared.targetGeneration()));
         post_identity = NativeTimingEditPreparer::captureCurrentIdentity(
-            installed.database(), prepared.targetGeneration(), analysisContext(), token);
+            installed.database(), prepared.targetGeneration(), view.reference_input.analysis_context, token);
       }
     } catch (...) {
       const std::exception_ptr failure = std::current_exception();

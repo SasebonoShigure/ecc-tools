@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 from itertools import pairwise
-from typing import Any
+from typing import Any, Literal
 
 from dual_csr_arc_group_validator import validate_arc_group_index
 from dual_csr_timing_evidence import (
@@ -340,9 +340,10 @@ def validate_targeted(value: dict[str, Any], prefix: int,
 
 def run_child(probe: pathlib.Path, role: str, trace: pathlib.Path, prefix: int,
               output: pathlib.Path,
-              timeout: int) -> tuple[dict[str, Any], float]:
+              timeout: int, *, input_flag: Literal["--trace", "--replay"] = "--trace",
+              ) -> tuple[dict[str, Any], float]:
     output.parent.mkdir(parents=True, exist_ok=True)
-    command = [str(probe), role, "--trace", str(trace), "--prefix", str(prefix),
+    command = [str(probe), role, input_flag, str(trace), "--prefix", str(prefix),
                "--output", str(output)]
     started = time.perf_counter()
     completed = subprocess.run(

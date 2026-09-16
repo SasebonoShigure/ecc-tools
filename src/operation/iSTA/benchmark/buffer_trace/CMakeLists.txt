@@ -2,6 +2,7 @@ set(ISTA_BUFFER_TRACE_CONTRACT_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/BufferTraceCanonicalEncoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/BufferTraceValidationRules.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/BufferTraceJson.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/BufferTraceArtifactJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/GreedyBufferCandidateSelector.cpp
 )
 

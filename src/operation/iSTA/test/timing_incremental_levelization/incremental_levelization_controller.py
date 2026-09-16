@@ -2,7 +2,6 @@
 """Isolated Stage 6 mixed-levelization production/fresh controller."""
 
 import argparse
-import concurrent.futures
 import copy
 import json
 import os
@@ -386,9 +385,11 @@ def level_assignments_differ(targeted: dict[str, Any],
 
 def replay(args: argparse.Namespace) -> None:
     probe = args.probe.resolve(strict=True)
-    trace = args.trace.resolve(strict=True)
+    trace = (args.replay or args.trace).resolve(strict=True)
+    input_flag = "--replay" if args.replay else "--trace"
     trace_value = read_json(trace)
-    batches = trace_value["replay"]["workload"]["batches"]
+    program = trace_value if args.replay else trace_value["replay"]
+    batches = program["workload"]["batches"]
     require(isinstance(batches, list) and batches,
             "Stage 6 correctness trace must contain a nonempty batch")
     root = pathlib.Path(tempfile.mkdtemp(
@@ -399,15 +400,14 @@ def replay(args: argparse.Namespace) -> None:
     for prefix in range(1, len(batches) + 1):
         target_path = root / f"prefix-{prefix}" / "targeted.json"
         fresh_path = root / f"prefix-{prefix}" / "fresh.json"
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            target_future = executor.submit(
-                run_child, probe, "targeted", trace, prefix, target_path,
-                args.timeout_seconds)
-            fresh_future = executor.submit(
-                run_child, probe, "fresh", trace, prefix, fresh_path,
-                args.timeout_seconds)
-            targeted, targeted_wall_ms = target_future.result()
-            fresh, fresh_wall_ms = fresh_future.result()
+        # Each role retains its own fresh process; avoid overlapping the full
+        # snapshots, which exceeded the real-design WSL memory budget.
+        targeted, targeted_wall_ms = run_child(
+            probe, "targeted", trace, prefix, target_path,
+            args.timeout_seconds, input_flag=input_flag)
+        fresh, fresh_wall_ms = run_child(
+            probe, "fresh", trace, prefix, fresh_path,
+            args.timeout_seconds, input_flag=input_flag)
         targeted_functional, timings, resources, targeted_levels \
             = validate_stage6_targeted(
                 targeted, prefix, batches[:prefix],
@@ -567,7 +567,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--probe", type=pathlib.Path)
-    parser.add_argument("--trace", type=pathlib.Path)
+    inputs = parser.add_mutually_exclusive_group()
+    inputs.add_argument("--trace", type=pathlib.Path)
+    inputs.add_argument("--replay", type=pathlib.Path)
     parser.add_argument("--run-root", type=pathlib.Path)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     return parser.parse_args()
@@ -579,9 +581,9 @@ def main() -> int:
         if args.self_test:
             self_test()
         else:
-            require(args.probe is not None and args.trace is not None
+            require(args.probe is not None and (args.trace is not None or args.replay is not None)
                     and args.run_root is not None,
-                    "--probe, --trace, and --run-root are required")
+                    "--probe, --trace or --replay, and --run-root are required")
             args.run_root.mkdir(parents=True, exist_ok=True)
             replay(args)
         return 0

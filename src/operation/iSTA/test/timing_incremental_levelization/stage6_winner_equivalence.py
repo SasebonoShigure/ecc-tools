@@ -4,7 +4,8 @@
 import copy
 import json
 import math
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 SCALAR_WINNER_EPSILON = 1.0e-9
 PATH_WINNER_EPSILON = 1.0e-6
@@ -14,7 +15,6 @@ PATH_ROUND_SCALE = 1.0e15
 SEMANTIC_FIELDS = {
     "nodes": ("predecessor_nodes", "predecessor_arcs"),
     "effective_clock": ("predecessor_nodes",),
-    "physical_clock": ("predecessor_nodes",),
     "paths": ("start_nodes", "predecessor_nodes",
               "predecessor_arcs", "crpr_nodes"),
 }
@@ -261,16 +261,26 @@ def _root_seed_matches(graph: dict[str, Any], nodes: list[object],
                 or seed.get("clock_tag") != tag \
                 or canonical(seed.get("path_start_node")) != start:
             continue
-        raw_arrival = seed.get("arrival")
-        raw_slew = seed.get("slew")
-        try:
-            seed_arrival = _finite(raw_arrival[analysis][transition])
-            seed_slew = _finite(raw_slew[analysis][transition])
-        except (IndexError, TypeError):
-            continue
-        if seed_arrival is None or seed_slew is None \
-                or not _close(seed_arrival, arrival) \
-                or not _close(seed_slew, slew):
+        if seed.get("availability") == "deferred_sequential":
+            if sources[source] != "register" or _number(
+                    paths["launches"], entry, require,
+                    f"{label}.paths.launches") != 0.0 \
+                    or seed.get("crpr_node") is None \
+                    or seed.get("crpr_transition") not in ("rise", "fall"):
+                continue
+        elif seed.get("availability") == "materialized":
+            raw_arrival = seed.get("arrival")
+            raw_slew = seed.get("slew")
+            try:
+                seed_arrival = _finite(raw_arrival[analysis][transition])
+                seed_slew = _finite(raw_slew[analysis][transition])
+            except (IndexError, TypeError):
+                continue
+            if seed_arrival is None or seed_slew is None \
+                    or not _close(seed_arrival, arrival) \
+                    or not _close(seed_slew, slew):
+                continue
+        else:
             continue
         crpr = seed.get("crpr_node")
         present = paths["crpr_nodes"]["presence"][entry]
@@ -298,7 +308,7 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
             and offsets[0] == 0
             and all(type(item) is int and item >= 0 for item in offsets)
             and all(left <= right for left, right
-                    in zip(offsets, offsets[1:])),
+                    in zip(offsets, offsets[1:], strict=False)),
             f"{label}.paths.row_offsets is malformed")
     entries = offsets[-1]
     for field in ("clock_tags", "arrivals", "slews", "launches",
@@ -416,19 +426,17 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
 
 def _validate_ideal_clock_winners(timing: dict[str, Any], node_count: int,
                                   require: Callable, label: str) -> None:
-    for name in ("effective_clock", "physical_clock"):
-        section = timing[name]
-        nodes = _soa(section, "predecessor_nodes", node_count * 4,
-                     require, f"{label}.{name}")
-        delays = _soa(section, "predecessor_arc_delays", node_count * 4,
-                      require, f"{label}.{name}")
-        transitions = _soa(
-            section, "predecessor_transitions", node_count * 4,
-            require, f"{label}.{name}")
-        require(nodes["presence"] == delays["presence"]
-                == transitions["presence"]
-                and not any(nodes["presence"]),
-                f"{label}.{name} must use isolated ideal-clock roots")
+    section = timing["effective_clock"]
+    label = f"{label}.effective_clock"
+    nodes = _soa(section, "predecessor_nodes", node_count * 4, require, label)
+    delays = _soa(section, "predecessor_arc_delays", node_count * 4,
+                  require, label)
+    transitions = _soa(section, "predecessor_transitions", node_count * 4,
+                       require, label)
+    require(nodes["presence"] == delays["presence"]
+            == transitions["presence"] and not any(nodes["presence"]),
+            f"{label} must use isolated ideal-clock roots")
+
 
 
 def admissible_winner_sets(graph: dict[str, Any], timing: dict[str, Any],

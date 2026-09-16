@@ -1,6 +1,6 @@
 {
   "schema_version": "buffer-trace-contract-manifest/1.0.0",
-  "trace_schema": "buffer-fixed-trace/1.0.0",
+  "trace_schema": "buffer-fixed-trace/2.0.0",
   "stage3_contract_schema": "timing-edit-trace/1.0.0",
   "selection_mode": "fixed_trace",
   "source_artifact_roles": [

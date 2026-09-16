@@ -253,7 +253,7 @@ void testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs()
           "detached translation mutated the canonical source");
 }
 
-void testTranslatorRejectsSequentialAndClockPortMovedSinks()
+void testTranslatorChecksSequentialDataAndControlSinkRoles()
 {
   constexpr TimingEditSessionToken kToken{31};
   constexpr TransactionGeneration kGeneration{0};
@@ -275,14 +275,51 @@ void testTranslatorRejectsSequentialAndClockPortMovedSinks()
   require(sequential.database().get_instance_map().at("u_sink").get_is_sequential()
               && sequential.database().get_timing_library().get_cell_map().at("DFF_X1").get_is_sequential(),
           "sequential rejection fixture does not carry matching instance/library roles");
-  const std::string sequential_error = requireInvalid(
+  requireInvalid(
       [&] {
         static_cast<void>(NativeDesignEditTranslator::applyNormalizedBatch(
             sequential.database(), batch, staged_resolver));
       },
-      "sequential instance sink was accepted by the Stage 3 data-only boundary");
-  require(sequential_error.find("sequential and clock-gating sinks") != std::string::npos,
-          "sequential sink rejection reported the wrong gate: " + sequential_error);
+      "sequential sink without a setup/hold data role was accepted");
+
+  NativeDatabaseCandidate data = NativeDatabaseCandidate::create(fixture.database());
+  installInstanceSink(data.database(), true, false);
+  auto& data_cell = data.database().get_timing_library().get_cell_map().at("DFF_X1");
+  TimingCheckArc setup;
+  setup.set_data_port("D");
+  setup.set_clock_port("CK");
+  setup.set_check_type(TimingCheckType::kSetup);
+  data_cell.get_check_arc_list().push_back(setup);
+  // A register may have reset circuitry while its ordinary D remains movable.
+  data_cell.set_has_clear_arc(true);
+  TimingCellArc clear;
+  clear.set_source_port("RN");
+  clear.set_sink_port("Q");
+  clear.set_is_clear_preset_arc(true);
+  data_cell.get_cell_arc_list().push_back(clear);
+  const auto moved = NativeDesignEditTranslator::applyNormalizedBatch(data.database(), batch, staged_resolver);
+  require(moved.applied() && moved.reasons.empty(), "ordinary sequential D insertion fell back");
+  require(data.database().get_pin_map().at("out").get_net_name()
+              == staged_resolver.materialization(editTestCreationToken()).output_net_name,
+          "ordinary sequential D did not move onto the inserted buffer output net");
+  requireBidirectionalRawMembership(data.database());
+
+  for (const bool gating : {false, true}) {
+    NativeDatabaseCandidate control = NativeDatabaseCandidate::create(fixture.database());
+    installInstanceSink(control.database(), true, false);
+    auto& control_cell = control.database().get_timing_library().get_cell_map().at("DFF_X1");
+    control_cell.get_check_arc_list().push_back(setup);
+    control_cell.set_is_clock_gating(gating);
+    clear.set_source_port(gating ? "RN" : "D");
+    control_cell.get_cell_arc_list().push_back(clear);
+    requireInvalid([&] {
+      static_cast<void>(NativeDesignEditTranslator::applyNormalizedBatch(control.database(), batch, staged_resolver));
+    }, "clock-gating or clear/preset sink was accepted as ordinary D");
+    require(control.database().get_pin_map().at("out").get_net_name() == "n0"
+                && control.database().get_net_map().size() == fixture.database().get_net_map().size()
+                && control.database().get_instance_map().size() == 1,
+            "rejected control sink changed native memberships");
+  }
 
   NativeDatabaseCandidate clock_port = NativeDatabaseCandidate::create(fixture.database());
   installInstanceSink(clock_port.database(), false, true);
@@ -307,6 +344,6 @@ int main()
   testOnlyExactNonInvertingTwoPortBufferIsAccepted();
   testNativeDatabaseRejectsIncompleteTimingOrder();
   testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs();
-  testTranslatorRejectsSequentialAndClockPortMovedSinks();
+  testTranslatorChecksSequentialDataAndControlSinkRoles();
   return 0;
 }

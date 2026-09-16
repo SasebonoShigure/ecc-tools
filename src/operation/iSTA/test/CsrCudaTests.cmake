@@ -40,7 +40,7 @@ endif()
 
 if(ISTA_ENABLE_CUDA)
   add_executable(ista_cuda_dual_csr_session_test CudaDualCsrSessionTest.cpp CsrCpuReferenceTestFixture.cpp
-      CudaDualCsrTestReader.cu timing_edit/BufferTraceCsrJson.cpp)
+      CudaDualCsrTestReader.cu CsrCudaSequentialContract.cu timing_edit/BufferTraceCsrJson.cpp)
   target_include_directories(ista_cuda_dual_csr_session_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(ista_cuda_dual_csr_session_test PRIVATE ista_cuda CUDA::cudart)
   set_target_properties(ista_cuda_dual_csr_session_test PROPERTIES

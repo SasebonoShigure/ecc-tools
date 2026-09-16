@@ -27,6 +27,7 @@ namespace ista::csr::detail {
 // validateReferenceInput(), and input.unsupported_reasons is empty.
 [[nodiscard]] TimingResultViolations validateTimingResultClassified(const CsrReferenceInput& input, const CsrTimingResult& result);
 
-void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& result, const OptionalSoa<double>& data_slews, TimingResultViolations& errors);
+void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& result, const OptionalSoa<double>& data_slews,
+                          const OptionalSoa<double>& physical_slews, TimingResultViolations& errors);
 
 }  // namespace ista::csr::detail

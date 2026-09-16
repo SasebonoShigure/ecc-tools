@@ -37,11 +37,11 @@ std::size_t parsePrefix(std::string_view text)
   return value;
 }
 
-const std::string& require(const std::map<std::string, std::string>& values,
+const std::string& require(const std::multimap<std::string, std::string>& values,
                            std::string_view flag)
 {
   const auto found = values.find(std::string(flag));
-  if (found == values.end() || found->second.empty()) {
+  if (found == values.end() || found->second.empty() || values.count(std::string(flag)) != 1) {
     fail("missing command-line flag: " + std::string(flag));
   }
   return found->second;
@@ -56,12 +56,22 @@ fs::path requireAbsolute(const std::string& text, std::string_view flag)
   return path;
 }
 
-FreshBaselineArtifacts artifacts(const std::map<std::string, std::string>& values)
+FreshBaselineArtifacts artifacts(const std::multimap<std::string, std::string>& values)
 {
   FreshBaselineArtifacts result;
   result.tech_lef = requireAbsolute(require(values, "--tech-lef"), "--tech-lef");
-  result.cell_lef = requireAbsolute(require(values, "--cell-lef"), "--cell-lef");
-  result.liberty = requireAbsolute(require(values, "--liberty"), "--liberty");
+  const auto append_paths = [&](const std::string& flag, auto& paths) {
+    const auto [first, last] = values.equal_range(flag);
+    if (first == last)
+      fail("missing command-line flag: " + flag);
+    for (auto it = first; it != last; ++it)
+      paths.push_back(requireAbsolute(it->second, flag));
+  };
+  append_paths("--cell-lef", result.cell_lefs);
+  append_paths("--liberty", result.liberties);
+  result.analysis_context = {"slow", "25", "__no_rc_corner__"};
+  if (values.contains("--liberty-corner") || values.contains("--temperature") || values.contains("--rc-corner"))
+    result.analysis_context = {require(values, "--liberty-corner"), require(values, "--temperature"), require(values, "--rc-corner")};
   result.verilog = requireAbsolute(require(values, "--verilog"), "--verilog");
   result.sdc = requireAbsolute(require(values, "--sdc"), "--sdc");
   result.top = require(values, "--top");
@@ -195,27 +205,32 @@ OracleCliMode parseOracleCli(int argc, char* argv[], bool allow_trace_creation)
   const std::set<std::string> common{"--tech-lef", "--cell-lef", "--liberty", "--verilog",
                                      "--sdc", "--top", "--run-dir"};
   std::set<std::string> allowed = common;
+  allowed.insert({"--liberty-corner", "--temperature", "--rc-corner"});
   allowed.insert("--trace");
   allowed.insert("--prefix");
   allowed.insert("--output");
   allowed.insert("--mode");
   allowed.insert("--subject");
+  const std::set<std::string> creation_flags{
+      "--net", "--sink", "--buffer", "--input", "--output-port", "--profile", "--seed"};
   if (allow_trace_creation) {
+    allowed.insert(creation_flags.begin(), creation_flags.end());
     allowed.insert("--create-trace");
   }
 
-  std::map<std::string, std::string> values;
+  std::multimap<std::string, std::string> values;
   for (int index = 1; index < argc; index += 2) {
     const std::string flag = argv[index];
     if (!allowed.contains(flag)) {
       fail("unknown command-line flag: " + flag);
     }
-    if (!values.emplace(flag, argv[index + 1]).second) {
+    if (values.contains(flag) && flag != "--cell-lef" && flag != "--liberty")
       fail("duplicate command-line flag: " + flag);
-    }
+    values.emplace(flag, argv[index + 1]);
   }
   for (const std::string& flag : common) {
-    static_cast<void>(require(values, flag));
+    if (flag != "--cell-lef" && flag != "--liberty")
+      static_cast<void>(require(values, flag));
   }
 
   const bool create = values.contains("--create-trace");
@@ -229,13 +244,28 @@ OracleCliMode parseOracleCli(int argc, char* argv[], bool allow_trace_creation)
         || values.contains("--mode") || values.contains("--subject")) {
       fail("trace creation accepts neither --prefix nor --output");
     }
-    return OracleTraceCreationOptions{artifacts(values),
-                                      requireAbsolute(require(values, "--create-trace"), "--create-trace"),
-                                      executable};
+    OracleTraceCreationOptions result{artifacts(values),
+                                     requireAbsolute(require(values, "--create-trace"), "--create-trace"), executable};
+    if (values.contains("--net")) result.net = require(values, "--net");
+    if (values.contains("--sink")) result.sink = require(values, "--sink");
+    if (values.contains("--buffer")) result.buffer = require(values, "--buffer");
+    if (values.contains("--input")) result.input_port = require(values, "--input");
+    if (values.contains("--output-port")) result.output_port = require(values, "--output-port");
+    if (values.contains("--profile")) result.profile = require(values, "--profile");
+    if (values.contains("--seed")) {
+      const auto& seed = require(values, "--seed");
+      const auto parsed = std::from_chars(seed.data(), seed.data() + seed.size(), result.seed);
+      if (parsed.ec != std::errc{} || parsed.ptr != seed.data() + seed.size())
+        fail("--seed must be an unsigned integer");
+    }
+    return result;
   }
   if (values.contains("--create-trace")) {
     fail("trace creation is not supported by this probe");
   }
+  for (const auto& flag : creation_flags)
+    if (values.contains(flag))
+      fail("creation-only option used for replay: " + flag);
   OracleExecutionMode mode = OracleExecutionMode::kCpuFull;
   if (const auto found = values.find("--mode"); found != values.end()) {
     mode = parseMode(found->second);
@@ -321,11 +351,17 @@ std::vector<std::string> makeReplayArguments(const FreshBaselineArtifacts& artif
                                              OracleSubject subject)
 {
   std::vector<std::string> result{
-          "--tech-lef", artifacts.tech_lef.string(), "--cell-lef", artifacts.cell_lef.string(),
-          "--liberty", artifacts.liberty.string(), "--verilog", artifacts.verilog.string(),
+          "--tech-lef", artifacts.tech_lef.string(), "--verilog", artifacts.verilog.string(),
           "--sdc", artifacts.sdc.string(), "--top", artifacts.top,
           "--run-dir", run_directory.string(), "--trace", trace.string(),
           "--prefix", std::to_string(prefix), "--output", output.string()};
+  for (const auto& path : artifacts.cell_lefs)
+    result.insert(result.end(), {"--cell-lef", path.string()});
+  for (const auto& path : artifacts.liberties)
+    result.insert(result.end(), {"--liberty", path.string()});
+  result.insert(result.end(), {"--liberty-corner", artifacts.analysis_context.liberty_corner,
+                               "--temperature", artifacts.analysis_context.temperature,
+                               "--rc-corner", artifacts.analysis_context.rc_corner});
   result.insert(result.end(), {"--mode", std::string(token(mode)), "--subject",
                                std::string(subjectToken(subject))});
   return result;

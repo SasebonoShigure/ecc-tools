@@ -20,6 +20,9 @@ add_library(ista_timing_csr_core
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceBackend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceResultInitialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceArcTransfer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceClockPropagation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceSequentialSeeds.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceSequentialRequired.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceForwardPropagation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceRequiredPropagation.cpp
 )

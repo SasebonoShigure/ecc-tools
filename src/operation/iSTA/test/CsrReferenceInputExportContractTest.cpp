@@ -169,7 +169,7 @@ void verifyRichChain()
           "per-instance timing-check ordinal records are incomplete");
 
   const StartSeedModel& register_seed = seedByName(first, "ff0:CK");
-  require(register_seed.availability == StartSeedAvailability::kUnsupportedSequential && register_seed.path_source == PathSource::kRegister,
+  require(register_seed.availability == StartSeedAvailability::kDeferredSequential && register_seed.path_source == PathSource::kRegister,
           "reachable sequential clock did not become a structural register seed");
   require(nodeByName(first, "ff0:Q").id == register_seed.path_start_node && register_seed.crpr_node == nodeByName(first, "ff0:CK").id
               && register_seed.crpr_transition == Transition::kFall,
@@ -177,8 +177,8 @@ void verifyRichChain()
   require(allAbsent(register_seed.arrival) && allAbsent(register_seed.slew), "sequential register seed fabricated numeric lanes");
   for (const char* name : {"ff1:CK", "ff1:D"}) {
     const auto& seed = seedByName(first, name);
-    require(seed.availability == StartSeedAvailability::kUnsupportedSequential && !seed.path_source && allAbsent(seed.arrival) && allAbsent(seed.slew),
-            std::string(name) + ": unsupported sequential-null combination is wrong");
+    require(seed.availability == StartSeedAvailability::kDeferredSequential && !seed.path_source && allAbsent(seed.arrival) && allAbsent(seed.slew),
+            std::string(name) + ": deferred sequential-null combination is wrong");
   }
   const StartSeedModel& clock_seed = seedByName(first, "clk");
   require(clock_seed.availability == StartSeedAvailability::kMaterialized && clock_seed.path_source == PathSource::kInput && allPresent(clock_seed.arrival)
@@ -189,11 +189,7 @@ void verifyRichChain()
           "no-SPEF export must materialize every output-load matrix");
   const auto divider = std::ranges::find(first.arcs, "div_net", [](const ArcRecord& arc) { return arc.key.base.owner_name; });
   require(divider != first.arcs.end() && divider->kind == ArcKind::kNet && divider->is_disabled, "sequential divider exact disabled mirror is absent");
-  const std::vector expected_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance,   CsrReferenceUnsupportedReason::kSequentialLaunch,
-                                        CsrReferenceUnsupportedReason::kTimingCheck,          CsrReferenceUnsupportedReason::kCrpr,
-                                        CsrReferenceUnsupportedReason::kPropagatedClock,      CsrReferenceUnsupportedReason::kClockTreeFanout,
-                                        CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kConditionalTimingArc,
-                                        CsrReferenceUnsupportedReason::kCaseAnalysis};
+  const std::vector expected_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kCaseAnalysis};
   require(first.unsupported_reasons == expected_reasons, "rich chain support reasons are not exact-derived and sorted");
 }
 

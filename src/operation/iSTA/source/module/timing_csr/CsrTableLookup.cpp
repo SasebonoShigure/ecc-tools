@@ -243,4 +243,20 @@ std::optional<double> lookupCsrTimingTable(const TimingTableModel& table, double
   return std::isfinite(result) ? std::optional<double>{result} : std::nullopt;
 }
 
+std::optional<double> lookupCsrTimingCheckTable(const TimingTableModel& table, double clock_slew, double data_slew, double time_unit_scale)
+{
+  if (!table.present || !std::isfinite(clock_slew) || clock_slew < 0.0 || !std::isfinite(data_slew) || data_slew < 0.0
+      || !std::isfinite(time_unit_scale) || time_unit_scale <= 0.0)
+    return std::nullopt;
+  const double clock = clock_slew * time_unit_scale;
+  const double data = data_slew * time_unit_scale;
+  if (!std::isfinite(clock) || !std::isfinite(data))
+    return std::nullopt;
+  const auto value = evaluateTable(table, clock, data);
+  if (!value)
+    return std::nullopt;
+  const double result = *value / time_unit_scale;
+  return std::isfinite(result) ? std::optional<double>{result} : std::nullopt;
+}
+
 }  // namespace ista::csr

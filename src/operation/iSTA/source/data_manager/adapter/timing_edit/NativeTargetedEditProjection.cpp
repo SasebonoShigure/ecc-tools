@@ -87,9 +87,15 @@ csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTarget
   record.is_clock_arc = arc.get_is_clock_arc();
   record.is_disabled = arc.get_is_disable_arc();
   record.is_loop_disabled = arc.get_is_loop_disable();
-  if (record.is_clock_arc || (nodes[1].is_sequential && nodes[1].is_clock_pin))
+  // A data-net load change refreshes the existing CTQ payload feeding Q.
+  // It does not edit the clock network or add a clock arc.
+  const bool clock_to_q = record.kind == csr::ArcKind::kCell && nodes[0].is_sequential && nodes[0].is_clock_pin
+                          && nodes[1].is_sequential && !nodes[1].is_clock_pin
+                          && nodes[0].key.instance_name == nodes[1].key.instance_name;
+  if ((record.is_clock_arc && !clock_to_q) || (nodes[1].is_sequential && nodes[1].is_clock_pin))
     throw std::invalid_argument("targeted buffer edit touches a clock arc");
-  record.eligibility = csr::detail::projectCanonicalArcEligibility(record, nodes[1], false, false);
+  const bool clock_eligible = state.clock_arcs->contains(state.native_arc_ids.at(rank));
+  record.eligibility = csr::detail::projectCanonicalArcEligibility(record, nodes[1], false, clock_eligible);
   record.transfer = csr::detail::projectCanonicalArcTransfer(record, arc);
   auto load = loads.find(nodes[1].net_name);
   if (load == loads.end())

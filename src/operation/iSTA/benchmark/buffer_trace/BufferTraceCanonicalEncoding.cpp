@@ -84,11 +84,18 @@ void appendSynthetic(CanonicalEncoder& encoder, const SyntheticArtifactRecipe& v
 void appendSources(CanonicalEncoder& encoder, const SourceArtifactRefs& value)
 {
   encoder.appendString(value.tech_lef.path);
-  encoder.appendString(value.cell_lef.path);
-  encoder.appendString(value.liberty.path);
+  encoder.appendU64(value.cell_lefs.size());
+  for (const auto& source : value.cell_lefs)
+    encoder.appendString(source.path);
+  encoder.appendU64(value.liberties.size());
+  for (const auto& source : value.liberties)
+    encoder.appendString(source.path);
   encoder.appendString(value.verilog.path);
   encoder.appendString(value.sdc.path);
   encoder.appendString(value.top);
+  encoder.appendString(value.analysis_context.liberty_corner);
+  encoder.appendString(value.analysis_context.temperature);
+  encoder.appendString(value.analysis_context.rc_corner);
 }
 void appendPlans(CanonicalEncoder& encoder, const std::vector<timing_edit::DesignEditPlan>& plans)
 {
@@ -514,12 +521,18 @@ BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program
   } else {
     const auto& payload = std::get<RealReplayPayload>(program.workload);
     const auto& refs = payload.artifacts;
-    const std::array<std::string, 5> paths{refs.tech_lef.path, refs.cell_lef.path, refs.liberty.path, refs.verilog.path, refs.sdc.path};
+    std::vector<std::string> paths{refs.tech_lef.path, refs.verilog.path, refs.sdc.path};
+    for (const auto& source : refs.cell_lefs)
+      paths.push_back(source.path);
+    for (const auto& source : refs.liberties)
+      paths.push_back(source.path);
     std::set<std::string> unique_paths;
-    if (!validText(refs.top) || !std::all_of(paths.begin(), paths.end(), validText)
+    if (!validText(refs.top) || refs.cell_lefs.empty() || refs.liberties.empty()
+        || !validText(refs.analysis_context.liberty_corner) || !validText(refs.analysis_context.temperature)
+        || !validText(refs.analysis_context.rc_corner) || !std::all_of(paths.begin(), paths.end(), validText)
         || !std::all_of(paths.begin(), paths.end(), [&](const std::string& path) { return unique_paths.insert(path).second; }))
       reject(errors, BufferTraceContractCode::kInvalidSourceArtifacts, "replay.workload.artifacts",
-             "five real source paths must be nonempty and pairwise distinct");
+             "real source lists/context must be nonempty and paths pairwise distinct");
     for (const auto& violation : timing_edit::validateBaselineSemanticIdentity(payload.baseline))
       reject(errors, BufferTraceContractCode::kIdentityMismatch, "replay.workload.baseline." + violation.field, violation.message);
     validateReplayBatches(program, payload.batches, &payload.baseline, errors);

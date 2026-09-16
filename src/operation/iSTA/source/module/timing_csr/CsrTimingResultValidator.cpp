@@ -92,14 +92,9 @@ inline void validateNodeResultSoa(const NodeResultSoa& nodes, const ArcResultSoa
         }
       });
   if (clock_points_ok) {
-    std::vector<std::uint8_t> expected(node_count, 0);
-    for (const auto& clock : input.clocks)
-      for (const auto& source : clock.ordered_sources)
-        if (source.resolved_node)
-          expected[source.resolved_node->value()] = 1;
     for (std::size_t node = 0; node < node_count; ++node)
-      if (nodes.is_clock_point.values[node] != expected[node])
-        reject(errors, ResultClass::kIdMapping, "result.nodes.is_clock_point", "clock points must exactly equal isolated ideal-clock sources");
+      if (nodes.is_clock_point.values[node] != static_cast<std::uint8_t>(input.clock_owner_by_node[node].has_value()))
+        reject(errors, ResultClass::kIdMapping, "result.nodes.is_clock_point", "clock points must equal the replayed ideal-clock ownership");
   }
   const bool node_pred_shape = validateOptionalSoa(nodes.predecessor_nodes, node_count, false, errors, ResultClass::kShape, "result.nodes.predecessor_nodes",
                                                    [&](NodeId value, std::size_t) {
@@ -115,10 +110,8 @@ inline void validateNodeResultSoa(const NodeResultSoa& nodes, const ArcResultSoa
     return;
   const bool arc_delays_shape = arcs.delays.presence.size() == input.arcs.size() && arcs.delays.values.size() == input.arcs.size();
   std::vector<std::string> source_clock_names(node_count);
-  for (const auto& clock : input.clocks)
-    for (const auto& source : clock.ordered_sources)
-      if (source.resolved_node && source_clock_names[source.resolved_node->value()].empty())
-        source_clock_names[source.resolved_node->value()] = clock.map_key;
+  for (std::size_t node = 0; node < node_count; ++node)
+    source_clock_names[node] = input.clock_owner_by_node[node].value_or("");
   if (nodes.predecessor_nodes.presence != nodes.predecessor_arcs.presence) {
     reject(errors, ResultClass::kShape, "result.nodes.predecessor", "node and arc presence must match");
     return;
@@ -147,10 +140,14 @@ inline void validateNodeResultSoa(const NodeResultSoa& nodes, const ArcResultSoa
         if (seed != input.start_seeds.end()) {
           if (clock_names_ok && nodes.clock_names.presence[node] == 1 && nodes.clock_names.values[node] != seed->clock_tag)
             reject(errors, ResultClass::kIdMapping, "result.nodes.clock_names", "unreplaced startpoint clock name must equal its seed tag");
-          const double expected_arrival = seed->path_source ? *seed->arrival[0][0] : 0.0;
-          if (arrival != expected_arrival)
-            reject(errors, ResultClass::kNumeric, "result.nodes.arrivals", "unreplaced startpoint arrival must equal its native max/rise seed");
-          if (launches_ok && (!seed->path_source || *seed->path_source == PathSource::kInput)) {
+          if (seed->availability != StartSeedAvailability::kDeferredSequential) {
+            const double expected_arrival = seed->path_source ? *seed->arrival[0][0] : 0.0;
+            if (arrival != expected_arrival)
+              reject(errors, ResultClass::kNumeric, "result.nodes.arrivals", "unreplaced startpoint arrival must equal its native max/rise seed");
+          } else if (launches_ok && nodes.launches.values[node] != 0.0) {
+            reject(errors, ResultClass::kNumeric, "result.nodes.launches", "ideal-clock sequential launch must be zero");
+          }
+          if (launches_ok && seed->availability != StartSeedAvailability::kDeferredSequential) {
             double expected_launch = 0.0;
             const auto source_clock
                 = std::ranges::find_if(input.clocks, [&](const ClockConstraintModel& clock) { return hasResolvedClockSource(clock, seed->seed_node); });
@@ -200,8 +197,8 @@ inline void validateNodeResultSoa(const NodeResultSoa& nodes, const ArcResultSoa
   }
 }
 
-inline void validateClockSoa(const ClockResultSoa& clock, const CsrReferenceInput& input, std::size_t lane_count, TimingResultViolations& errors,
-                             const std::string& field)
+inline void validateClockSoa(const ClockResultSoa& clock, const ArcResultSoa& arcs, const CsrReferenceInput& input, std::size_t lane_count, TimingResultViolations& errors,
+                             const std::string& field, bool physical)
 {
   const bool arrivals_ok
       = validateOptionalSoa(clock.arrivals, lane_count, false, errors, ResultClass::kShape, field + ".arrivals", [&](double value, std::size_t) {
@@ -212,8 +209,6 @@ inline void validateClockSoa(const ClockResultSoa& clock, const CsrReferenceInpu
     if (!isFinite(value) || value < 0)
       reject(errors, ResultClass::kNumeric, field + ".slews", "present slew must be finite and nonnegative");
   });
-  if (arrivals_ok && slews_ok && clock.arrivals.presence != clock.slews.presence)
-    reject(errors, ResultClass::kShape, field, "clock arrival and slew presence arrays must match");
   const bool nodes_ok = validateOptionalSoa(clock.predecessor_nodes, lane_count, false, errors, ResultClass::kShape, field + ".predecessor_nodes",
                                             [&](NodeId value, std::size_t) {
                                               if (value.value() >= input.nodes.size())
@@ -233,18 +228,56 @@ inline void validateClockSoa(const ClockResultSoa& clock, const CsrReferenceInpu
     return;
   if (clock.predecessor_nodes.presence != clock.predecessor_arc_delays.presence || clock.predecessor_nodes.presence != clock.predecessor_transitions.presence)
     reject(errors, ResultClass::kShape, field + ".predecessor", "clock predecessor presence arrays must match");
+  std::size_t arc_lanes = 0;
+  const bool arc_shape = checkedProduct(input.arcs.size(), kAnalysisCount * kTransitionCount * kTransitionCount,
+                                        arc_lanes, errors, ResultClass::kShape, "result.arcs.input_output_delays")
+                         && arcs.input_output_delays.presence.size() == arc_lanes;
   for (std::size_t lane = 0; lane < lane_count; ++lane) {
     const std::size_t node = lane / (kAnalysisCount * kTransitionCount);
-    bool is_source = false;
-    for (const auto& constraint : input.clocks)
-      is_source |= hasResolvedClockSource(constraint, NodeId{node});
-    const std::uint8_t expected_presence = is_source ? 1 : 0;
-    if (clock.arrivals.presence[lane] != expected_presence || clock.slews.presence[lane] != expected_presence)
-      reject(errors, ResultClass::kShape, field, "isolated ideal-clock lanes must be present zero only at clock sources");
-    else if (is_source && (clock.arrivals.values[lane] != 0 || clock.slews.values[lane] != 0))
-      reject(errors, ResultClass::kNumeric, field, "isolated ideal-clock lanes must be present zero only at clock sources");
-    if (clock.predecessor_nodes.presence[lane] != 0 || clock.predecessor_arc_delays.presence[lane] != 0 || clock.predecessor_transitions.presence[lane] != 0)
-      reject(errors, ResultClass::kPredecessor, field + ".predecessor", "isolated ideal clocks must not have predecessors");
+    const bool owned = input.clock_owner_by_node[node].has_value();
+    if (!physical) {
+      const std::uint8_t expected_presence = owned ? 1 : 0;
+      if (clock.arrivals.presence[lane] != expected_presence || clock.slews.presence[lane] != expected_presence)
+        reject(errors, ResultClass::kShape, field, "effective ideal-clock lanes must exactly cover owned nodes");
+      else if (owned && (clock.arrivals.values[lane] != 0 || clock.slews.values[lane] != 0))
+        reject(errors, ResultClass::kNumeric, field, "effective ideal-clock arrival and slew must be zero");
+      if (clock.predecessor_nodes.presence[lane] != 0)
+        reject(errors, ResultClass::kPredecessor, field + ".predecessor", "effective ideal clocks must not have predecessors");
+      continue;
+    }
+    const bool is_source = std::ranges::any_of(input.clocks, [&](const auto& constraint) { return hasResolvedClockSource(constraint, NodeId{node}); });
+    if (is_source && (clock.arrivals.presence[lane] != 1 || clock.slews.presence[lane] != 1))
+      reject(errors, ResultClass::kShape, field, "resolved clock source must retain physical arrival and slew in every lane");
+    if (!owned && (clock.arrivals.presence[lane] || clock.slews.presence[lane] || clock.predecessor_nodes.presence[lane]))
+      reject(errors, ResultClass::kShape, field, "physical clock state requires a replayed owner");
+    if (clock.predecessor_nodes.presence[lane] == 0) {
+      if (clock.arrivals.presence[lane]) {
+        if (!is_source || clock.arrivals.values[lane] != 0.0)
+          reject(errors, ResultClass::kPredecessor, field, "physical clock arrival without predecessor must be a zero source seed");
+      }
+      continue;
+    }
+    const auto predecessor = clock.predecessor_nodes.values[lane].value();
+    const auto transition = static_cast<std::size_t>(clock.predecessor_transitions.values[lane]);
+    if (predecessor >= input.nodes.size() || transition >= kTransitionCount)
+      continue;
+    const auto upstream = (predecessor * kAnalysisCount + (lane / kTransitionCount) % kAnalysisCount) * kTransitionCount + transition;
+    bool edge_found = false;
+    for (std::size_t index = input.in_row_offsets[node]; index < input.in_row_offsets[node + 1]; ++index) {
+      const auto arc_id = input.in_arc_ids[index].value();
+      const auto& arc = input.arcs[arc_id];
+      const auto arc_lane = ((arc_id * kAnalysisCount + (lane / kTransitionCount) % kAnalysisCount) * kTransitionCount + transition)
+                            * kTransitionCount + lane % kTransitionCount;
+      edge_found |= arc.eligibility.clock && arc.source.value() == predecessor && arc_shape
+                    && arcs.input_output_delays.presence[arc_lane] == 1;
+    }
+    double expected_arrival = 0.0;
+    if (!owned || input.clock_owner_by_node[node] != input.clock_owner_by_node[predecessor] || !edge_found
+        || clock.arrivals.presence[lane] != 1 || clock.arrivals.presence[upstream] != 1)
+      reject(errors, ResultClass::kPredecessor, field, "physical predecessor must follow an owned clock edge with present arrivals");
+    else if (!checkedRoundedPathArrival(clock.arrivals.values[upstream], clock.predecessor_arc_delays.values[lane], expected_arrival)
+             || clock.arrivals.values[lane] != expected_arrival)
+      reject(errors, ResultClass::kNumeric, field, "physical arrival differs from its predecessor plus recorded delay");
   }
 }
 
@@ -313,10 +346,17 @@ inline void validatePathRoot(const PathResultSoa& paths, const CsrReferenceInput
       || (result_has_crpr
           && (paths.crpr_nodes.values[entry] != *matching_seed->crpr_node || paths.crpr_transitions.values[entry] != *matching_seed->crpr_transition)))
     reject(errors, ResultClass::kPredecessor, "result.paths.crpr", "root entry CRPR must exactly equal its start seed");
-  const auto& seed_arrival = matching_seed->arrival[lane.analysis][lane.transition];
-  const auto& seed_slew = matching_seed->slew[lane.analysis][lane.transition];
-  if (!seed_arrival || !seed_slew || paths.arrivals.values[entry] != *seed_arrival || paths.slews.values[entry] != *seed_slew)
-    reject(errors, ResultClass::kPredecessor, "result.paths.predecessor", "root entry arrival and slew must exactly equal its start seed lane");
+  if (matching_seed->availability == StartSeedAvailability::kDeferredSequential) {
+    // The input stores raw CTQ tables, not computed seed values. Fresh native
+    // comparison proves those values; this validator retains root/CRPR binding.
+    if (paths.launches.values[entry] != 0.0)
+      reject(errors, ResultClass::kPredecessor, "result.paths.launches", "ideal-clock register root launch must be zero");
+  } else {
+    const auto& seed_arrival = matching_seed->arrival[lane.analysis][lane.transition];
+    const auto& seed_slew = matching_seed->slew[lane.analysis][lane.transition];
+    if (!seed_arrival || !seed_slew || paths.arrivals.values[entry] != *seed_arrival || paths.slews.values[entry] != *seed_slew)
+      reject(errors, ResultClass::kPredecessor, "result.paths.predecessor", "root entry arrival and slew must exactly equal its start seed lane");
+  }
   if (source == PathSource::kInput) {
     const auto source_clock
         = std::ranges::find_if(input.clocks, [&](const ClockConstraintModel& clock) { return hasResolvedClockSource(clock, matching_seed->seed_node); });
@@ -341,7 +381,7 @@ inline void validateMaterializedSeedRoots(const PathResultSoa& paths, const CsrR
     const ClockTagId tag_id{static_cast<std::uint64_t>(std::distance(input.clock_tags.begin(), tag))};
     for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis) {
       for (std::size_t transition = 0; transition < kTransitionCount; ++transition) {
-        if (!seed.arrival[analysis][transition] || !seed.slew[analysis][transition])
+        if (seed.availability != StartSeedAvailability::kDeferredSequential && (!seed.arrival[analysis][transition] || !seed.slew[analysis][transition]))
           continue;
         const std::size_t row = encodePathLane(seed.seed_node.value(), analysis, source_index, transition);
         const auto entry = findPathEntry(paths, row, tag_id);
@@ -610,8 +650,8 @@ detail::TimingResultViolations detail::validateTimingResultClassified(const CsrR
 
   std::size_t clock_lanes = 0;
   checkedProduct(node_count, kAnalysisCount * kTransitionCount, clock_lanes, errors, ResultClass::kShape, "result.clock");
-  validateClockSoa(result.effective_clock, input, clock_lanes, errors, "result.effective_clock");
-  validateClockSoa(result.physical_clock, input, clock_lanes, errors, "result.physical_clock");
+  validateClockSoa(result.effective_clock, result.arcs, input, clock_lanes, errors, "result.effective_clock", false);
+  validateClockSoa(result.physical_clock, result.arcs, input, clock_lanes, errors, "result.physical_clock", true);
   const bool data_slews_ok
       = validateOptionalSoa(result.data_slews, clock_lanes, false, errors, ResultClass::kShape, "result.data_slews", [&](double value, std::size_t) {
           if (!isFinite(value) || value < 0)
@@ -622,7 +662,8 @@ detail::TimingResultViolations detail::validateTimingResultClassified(const CsrR
       for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis) {
         for (std::size_t transition = 0; transition < kTransitionCount; ++transition) {
           const std::size_t lane = (seed.seed_node.value() * kAnalysisCount + analysis) * kTransitionCount + transition;
-          if (result.data_slews.presence[lane] != 1 || result.data_slews.values[lane] != *seed.slew[analysis][transition])
+          if (result.data_slews.presence[lane] != 1
+              || (seed.availability != StartSeedAvailability::kDeferredSequential && result.data_slews.values[lane] != *seed.slew[analysis][transition]))
             reject(errors, ResultClass::kNumeric, "result.data_slews", "supported startpoint data slew must exactly equal its seed lane");
         }
       }
@@ -633,7 +674,7 @@ detail::TimingResultViolations detail::validateTimingResultClassified(const CsrR
   checkedProduct(node_count, kAnalysisCount * kPathSourceCount * kTransitionCount, path_lanes, errors, ResultClass::kShape, "result.paths");
   validatePathSoa(result.paths, result.arcs, result.data_slews, input, path_lanes, errors);
 
-  validateArcResultSoa(input, result.arcs, result.data_slews, errors);
+  validateArcResultSoa(input, result.arcs, result.data_slews, result.physical_clock.slews, errors);
   return errors;
 }
 

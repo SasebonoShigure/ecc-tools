@@ -30,9 +30,9 @@ void testCaptureAndSupport()
   requireInvalid(validateCaptureResult(CsrCaptureResult{static_cast<CsrCaptureCode>(0xff)}), "unknown capture code");
 
   requireValid(validateReferenceSupportResult(CsrReferenceSupportResult{}), "supported reference");
-  CsrReferenceSupportResult supported{{CsrReferenceUnsupportedReason::kParasiticNet, CsrReferenceUnsupportedReason::kSequentialInstance}};
+  CsrReferenceSupportResult supported{{CsrReferenceUnsupportedReason::kParasiticNet, CsrReferenceUnsupportedReason::kPropagatedClock}};
   requireValid(validateReferenceSupportResult(supported), "ordered unsupported reasons");
-  supported.unsupported_reasons = {CsrReferenceUnsupportedReason::kSequentialInstance, CsrReferenceUnsupportedReason::kParasiticNet};
+  supported.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kParasiticNet};
   requireInvalid(validateReferenceSupportResult(supported), "unordered unsupported reasons");
   supported.unsupported_reasons = {CsrReferenceUnsupportedReason::kParasiticNet, CsrReferenceUnsupportedReason::kParasiticNet};
   requireInvalid(validateReferenceSupportResult(supported), "duplicate unsupported reasons");
@@ -70,7 +70,10 @@ void testComputationOutcome()
   reject(cycle, CsrReferenceSupportResult{}, "cycle support result");
   reject(cycle, static_cast<CsrComputationCode>(0xff), "cycle unknown code");
 
-  const CsrReferenceInput unsupported = clockInput();
+  CsrReferenceInput unsupported = clockInput();
+  unsupported.clocks[0].propagated = true;
+  unsupported.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
+  refreshIdentity(unsupported);
   requireValid(validateReferenceInput(unsupported), "unsupported reference input");
   accept(unsupported, CsrReferenceSupportResult{unsupported.unsupported_reasons}, "exact support result");
   reject(unsupported, CsrReferenceSupportResult{}, "empty support result");

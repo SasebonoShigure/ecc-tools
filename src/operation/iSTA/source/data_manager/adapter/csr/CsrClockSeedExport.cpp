@@ -347,7 +347,7 @@ void exportStartSeeds(ReferenceBuildState& state, const NativeRoleIndex& roles)
 
     const auto owner = roles.instance_by_node[node_id.value()];
     if (owner && state.input.instances[*owner].is_sequential) {
-      seed.availability = StartSeedAvailability::kUnsupportedSequential;
+      seed.availability = StartSeedAvailability::kDeferredSequential;
       const auto clock_node = roles.clock_node_by_instance[*owner];
       const auto output_node = roles.output_node_by_instance[*owner];
       const bool reachable_clock = clock_node && state.clock_reachable_nodes[clock_node->value()] != 0;

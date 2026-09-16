@@ -19,7 +19,7 @@ struct ResultLayout
   std::vector<std::int32_t> child_indices;
   std::vector<std::string> clock_names, clock_tags;
   std::vector<std::uint8_t> is_clock_point;
-  ClockResultSoa effective_clock, physical_clock;
+  ClockResultSoa effective_clock;
 };
 struct DownloadData
 {
@@ -41,6 +41,7 @@ struct HostData : DownloadData
   CsrSnapshotIdentity identity;
   std::string schema;
   Index tag_count{0};
+  Index clock_count{0};
 };
 
 [[nodiscard]] Arc packArc(const ArcSemanticPayload& source, std::vector<Child>& children, std::vector<double>& tables,

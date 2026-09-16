@@ -150,6 +150,17 @@ foreach(stage IN ITEMS dual_csr stage6)
 endforeach()
 
 if(ISTA_ENABLE_CUDA)
+  # Explicit acceptance output can inspect OFF/ON state without enabling
+  # diagnostics in production or ordinary performance runs.
+  target_sources(ista_cuda_dual_csr_session_test PRIVATE
+      timing_dual_csr/DualCsrTargetedArtifactSupport.cpp
+      timing_edit/oracle/ProductionFreshSessionLoader.cpp
+      timing_edit/StaTimingEditSessionProbeAccess.cpp)
+  target_include_directories(ista_cuda_dual_csr_session_test PRIVATE
+      ${CMAKE_CURRENT_LIST_DIR}/timing_edit
+      ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle)
+  target_link_libraries(ista_cuda_dual_csr_session_test PRIVATE
+      ista_cuda_targeted_trace_runtime ${ISTA_TIMING_EDIT_PRODUCTION_ORACLE_LINKS})
   set(ISTA_CUDA_TRACE_PROBE_SOURCES ${ISTA_DUAL_CSR_FRESH_PROBE_SOURCES})
   list(REMOVE_ITEM ISTA_CUDA_TRACE_PROBE_SOURCES timing_dual_csr/DualCsrTraceProductionFreshProbe.cpp)
   add_executable(ista_cuda_full_trace_probe CudaFullTraceProbe.cpp ${ISTA_CUDA_TRACE_PROBE_SOURCES})

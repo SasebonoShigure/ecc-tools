@@ -123,16 +123,6 @@ void testCaseAndUnsupportedReasons()
   rejectMutation(input, "duplicate reason",
                  [](auto& value) { value.unsupported_reasons = {CsrReferenceUnsupportedReason::kCaseAnalysis, CsrReferenceUnsupportedReason::kCaseAnalysis}; });
   rejectMutation(input, "unknown reason", [](auto& value) { value.unsupported_reasons = {static_cast<CsrReferenceUnsupportedReason>(0xff)}; });
-
-  CsrReferenceInput conditional = cellInput();
-  conditional.arcs[0].key.base.library_arcs[0].sdf_condition = "A";
-  conditional.arcs[0].transfer.children[0].signature.sdf_condition = "A";
-  conditional.arc_ids_by_key[0].key = conditional.arcs[0].key;
-  conditional.referenced_library_cells[0].cell_arcs[0].transfer = conditional.arcs[0].transfer;
-  conditional.unsupported_reasons = {CsrReferenceUnsupportedReason::kConditionalTimingArc};
-  refreshIdentity(conditional);
-  requireValid(validateReferenceInput(conditional), "conditional-arc input");
-  rejectMutation(conditional, "conditional reason exact", [](auto& value) { value.unsupported_reasons.clear(); });
 }
 
 void testClockWaveformReachabilityAndOverlap()
@@ -167,7 +157,6 @@ void testClockWaveformReachabilityAndOverlap()
   requireValid(validateReferenceInput(edge_at_period), "finite raw clock edge at period");
 
   rejectMutation(input, "clock eligibility", [](auto& value) { value.arcs[0].eligibility.clock = false; });
-  rejectMutation(input, "clock fanout reason", [](auto& value) { value.unsupported_reasons.clear(); });
 
   CsrReferenceInput repeated_source = input;
   repeated_source.clocks[0].ordered_sources.push_back({"in", NodeId{0}});
@@ -195,7 +184,7 @@ void testClockWaveformReachabilityAndOverlap()
 
   CsrReferenceInput propagated = input;
   propagated.clocks[0].propagated = true;
-  propagated.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockTreeFanout};
+  propagated.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
   refreshIdentity(propagated);
   requireValid(validateReferenceInput(propagated), "propagated-clock input");
   rejectMutation(propagated, "propagated reason exact", [](auto& value) { value.unsupported_reasons.erase(value.unsupported_reasons.begin()); });

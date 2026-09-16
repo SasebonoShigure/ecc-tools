@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include "BufferTraceJson.hpp"
+#include "BufferTraceJsonInternal.hpp"
 #include <algorithm>
 #include <limits>
 #include <map>
@@ -28,16 +29,10 @@
 namespace ista::buffer_trace {
 namespace {
 using Json = nlohmann::json;
-class WireError : public std::runtime_error
-{
- public:
-  WireError(BufferTraceContractCode code, std::string field, std::string message)
-      : std::runtime_error(std::move(message)), code(code), field(std::move(field))
-  {
-  }
-  BufferTraceContractCode code;
-  std::string field;
-};
+using json_detail::WireError;
+using json_detail::exactObject;
+using json_detail::text;
+using json_detail::vectorOf;
 Json parseClosedWorldJson(std::string_view text)
 {
   std::map<int, std::set<std::string>> keys;
@@ -52,25 +47,6 @@ Json parseClosedWorldJson(std::string_view text)
     return true;
   };
   return Json::parse(text.begin(), text.end(), duplicate_rejector, true, false);
-}
-void exactObject(const Json& value, std::string_view field, std::initializer_list<std::string_view> required,
-                 std::initializer_list<std::string_view> optional = {})
-{
-  if (!value.is_object())
-    throw WireError(BufferTraceContractCode::kInvalidValue, std::string(field), "expected object");
-  for (const auto key : required)
-    if (!value.contains(std::string(key)))
-      throw WireError(BufferTraceContractCode::kInvalidValue, std::string(field) + "." + std::string(key), "required field is absent");
-  for (auto item = value.begin(); item != value.end(); ++item)
-    if (std::find(required.begin(), required.end(), item.key()) == required.end()
-        && std::find(optional.begin(), optional.end(), item.key()) == optional.end())
-      throw WireError(BufferTraceContractCode::kInvalidValue, std::string(field) + "." + item.key(), "unknown field");
-}
-std::string text(const Json& value, std::string_view field)
-{
-  if (!value.is_string())
-    throw WireError(BufferTraceContractCode::kInvalidValue, std::string(field), "expected string");
-  return value.get<std::string>();
 }
 std::uint64_t u64(const Json& value, std::string_view field)
 {
@@ -90,17 +66,6 @@ double number(const Json& value, std::string_view field)
   if (!value.is_number())
     throw WireError(BufferTraceContractCode::kInvalidValue, std::string(field), "expected number");
   return value.get<double>();
-}
-template <typename T, typename Parse>
-std::vector<T> vectorOf(const Json& value, std::string_view field, Parse parse)
-{
-  if (!value.is_array())
-    throw WireError(BufferTraceContractCode::kInvalidValue, std::string(field), "expected array");
-  std::vector<T> result;
-  result.reserve(value.size());
-  for (std::size_t index = 0; index < value.size(); ++index)
-    result.push_back(parse(value[index], std::string(field) + "[" + std::to_string(index) + "]"));
-  return result;
 }
 template <typename Enum>
 Enum enumValue(const Json& value, std::string_view field, std::initializer_list<std::pair<std::string_view, Enum>> choices)
@@ -449,14 +414,7 @@ ReplayProgram parseReplay(const Json& value)
   } else if (kind == "real_design") {
     exactObject(workload, "replay.workload", {"kind", "artifacts", "baseline", "batches"});
     const auto& sources = workload.at("artifacts");
-    exactObject(sources, "replay.workload.artifacts", {"tech_lef", "cell_lef", "liberty", "verilog", "sdc", "top"});
-    const auto source_path = [&](std::string_view role) {
-      const std::string field = "replay.workload.artifacts." + std::string(role);
-      exactObject(sources.at(std::string(role)), field, {"path"});
-      return text(sources.at(std::string(role)).at("path"), field + ".path");
-    };
-    SourceArtifactRefs refs{{source_path("tech_lef")}, {source_path("cell_lef")}, {source_path("liberty")},
-                            {source_path("verilog")}, {source_path("sdc")}, text(sources.at("top"), "replay.workload.artifacts.top")};
+    SourceArtifactRefs refs = json_detail::parseSources(sources);
     const bool default_template = workload.at("batches").empty() && workload.at("baseline") == defaultBaselineJson();
     auto baseline_value = default_template ? timing_edit::BaselineSemanticIdentity{} : parseBaseline(workload.at("baseline"));
     result.workload = RealReplayPayload{std::move(refs), std::move(baseline_value),
@@ -576,9 +534,7 @@ Json toReplay(const ReplayProgram& value)
       const Json baseline_json = payload.baseline == timing_edit::BaselineSemanticIdentity{} ? defaultBaselineJson()
                                  : plan_values.empty() ? baselineJson(payload.baseline)
                                                        : plan_values.front().at("baseline");
-      return {{"kind", "real_design"}, {"artifacts", {{"tech_lef", {{"path", payload.artifacts.tech_lef.path}}},
-               {"cell_lef", {{"path", payload.artifacts.cell_lef.path}}}, {"liberty", {{"path", payload.artifacts.liberty.path}}},
-               {"verilog", {{"path", payload.artifacts.verilog.path}}}, {"sdc", {{"path", payload.artifacts.sdc.path}}}, {"top", payload.artifacts.top}}},
+      return {{"kind", "real_design"}, {"artifacts", json_detail::sourcesToJson(payload.artifacts)},
               {"baseline", baseline_json}, {"batches", plan_values}};
     }
   }, value.workload);

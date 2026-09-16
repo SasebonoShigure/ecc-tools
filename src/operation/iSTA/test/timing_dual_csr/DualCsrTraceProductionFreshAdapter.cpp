@@ -45,7 +45,10 @@ FunctionalSemanticReceipt normalizeFresh(
   DualCsrBaselineAttempt baseline
       = DualCsrBaselineFactory::create(input, token, high_water);
   if (!baseline.success()) {
-    fail("flat fresh input cannot form a validated all-active state");
+    std::string message = "flat fresh input cannot form a validated all-active state";
+    for (const auto& error : baseline.violations)
+      message += "\n" + error.field + ": " + error.message;
+    fail(std::move(message));
   }
   DualCsrTimingResult projected_timing{
       .values = std::move(timing),
@@ -54,7 +57,10 @@ FunctionalSemanticReceipt normalizeFresh(
       = projectDualCsrFunctionalSemanticReceipt(
           *baseline.state, projected_timing);
   if (!projected.success()) {
-    fail("fresh CPU/full result cannot form a semantic receipt");
+    std::string message = "fresh CPU/full result cannot form a semantic receipt";
+    for (const auto& error : projected.violations)
+      message += "\n" + error.field + ": " + error.message;
+    fail(std::move(message));
   }
   return std::move(*projected.receipt);
 }

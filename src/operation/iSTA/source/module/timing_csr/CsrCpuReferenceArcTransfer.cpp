@@ -72,21 +72,6 @@ void resetRequiredSoa(OptionalSoa<T>& soa, std::size_t size, const T& value)
   return child.delay_tables[output].present || child.slew_tables[output].present || child.check_tables[output].present;
 }
 
-[[nodiscard]] bool childSelected(const ChildTimingArcModel& child, Transition input_transition, Transition output_transition)
-{
-  const bool flipped = input_transition != output_transition;
-  switch (child.signature.sense) {
-    case TimingSense::kNegativeUnate:
-      return flipped;
-    case TimingSense::kNonUnate:
-      return true;
-    case TimingSense::kNoneUsesPositiveFallback:
-    case TimingSense::kPositiveUnate:
-      return !flipped;
-  }
-  return false;
-}
-
 [[nodiscard]] bool usesBothOutputs(const CellTransferModel& transfer)
 {
   bool has_negative = false;
@@ -206,7 +191,7 @@ void writeInitializationCache(std::size_t lane, double candidate, AnalysisMode a
         double aggregate_delay = 0.0;
         for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index) {
           const auto& child = arc.transfer.children[child_index];
-          if (!childSelected(child, input_transition, output_transition))
+          if (!csrChildSelected(child, input_transition, output_transition))
             continue;
           const TimingTableModel& table = child.delay_tables[csrTransitionIndex(output_transition)];
           if (!table.present)
@@ -414,7 +399,7 @@ CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges,
     const std::size_t child_begin = work.result.arcs.timing_arc_row_offsets[arc_index];
     for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index) {
       const auto& child = arc.transfer.children[child_index];
-      if (!childSelected(child, input_transition, output_transition))
+      if (!csrChildSelected(child, input_transition, output_transition))
         continue;
       const double output_load = (*arc.output_load)[csrAnalysisIndex(analysis)][csrTransitionIndex(output_transition)];
       const TimingTableModel& delay_table = child.delay_tables[csrTransitionIndex(output_transition)];

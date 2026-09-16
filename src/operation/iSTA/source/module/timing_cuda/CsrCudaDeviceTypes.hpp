@@ -37,7 +37,7 @@ struct Child
   std::int32_t arc_index{0};
   std::uint8_t sense{0};
   std::uint8_t trigger{2};
-  bool check_present[2]{};
+  Table check[2];
 };
 
 struct Arc
@@ -57,6 +57,25 @@ struct Arc
   bool levelization{false};
   bool data_arrival{false};
   bool data_slew{false};
+  bool clock_eligible{false};
+};
+
+struct ClockLane
+{
+  Value<double> arrival, slew;
+  Index predecessor{absent};
+  double predecessor_delay{0.0};
+  std::uint8_t predecessor_transition{2};
+};
+
+enum class SeedKind : std::uint8_t { none, clock, output, scalar };
+struct SequentialSeed
+{
+  SeedKind kind{SeedKind::none};
+  Index clock_node{absent}, path_start{absent}, path_tag{absent};
+  Index child_begin{0}, child_count{0};
+  double delay{0.0}, delay_min{0.0}, delay_max{0.0};
+  std::uint8_t trigger{0};
 };
 
 struct NodeState
@@ -69,6 +88,10 @@ struct NodeState
   Index predecessor_node{absent};
   Index predecessor_arc{absent};
   Value<double> slew[4];
+  Index clock_owner{absent};
+  Value<double> effective_arrival[4], effective_slew[4];
+  ClockLane physical_clock[4];
+  SequentialSeed sequential;
 };
 
 struct PathState
@@ -81,6 +104,8 @@ struct PathState
   Index predecessor_node{absent};
   Index predecessor_arc{absent};
   std::uint8_t predecessor_transition{2};
+  Index crpr_node{absent};
+  std::uint8_t crpr_transition{2};
   bool present{false};
 };
 
@@ -106,6 +131,10 @@ struct Endpoint
   Index node{0};
   double period{0.0};
   Value<double> output_delay;
+  bool sequential_check{false};
+  Index clock_node{absent}, child_begin{0}, child_count{0};
+  double check_time{0.0};
+  std::uint8_t clock_transition{0};
 };
 
 // All storage is owned by one invocation's host runtime. No device allocation
@@ -116,6 +145,7 @@ struct DeviceView
   Index arc_count{0};
   Index child_count{0};
   Index tag_count{0};
+  Index clock_count{0};
   Index root_count{0};
   Index end_count{0};
   Index endpoint_count{0};

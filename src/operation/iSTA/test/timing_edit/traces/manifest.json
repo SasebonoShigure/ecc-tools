@@ -4,7 +4,7 @@
   "traces": [
     {
       "path": "synthetic_two_batch.json",
-      "trace_schema_version": 1,
+      "trace_schema_version": 2,
       "selection_mode": "fixed_trace",
       "workload_kind": "synthetic",
       "profile_id": "engineering_smoke",
@@ -16,7 +16,7 @@
     },
     {
       "path": "real_buffer_fanout.json",
-      "trace_schema_version": 1,
+      "trace_schema_version": 2,
       "selection_mode": "fixed_trace",
       "workload_kind": "real_design",
       "profile_id": "engineering_smoke",

@@ -301,7 +301,7 @@ inline CsrReferenceInput clockInput()
   input.clock_owner_by_node = {std::optional<std::string>{"clk"}, std::optional<std::string>{"clk"}};
   input.arcs[0].eligibility.clock = true;
   input.endpoint_required[0].clock_period = 10.0;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kClockTreeFanout};
+  input.unsupported_reasons = {};
   auto& seed = input.start_seeds[0];
   seed.arrival[0][0] = 0.0;
   seed.arrival[0][1] = 5.0;

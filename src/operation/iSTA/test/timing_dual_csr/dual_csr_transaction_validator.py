@@ -220,7 +220,7 @@ def validate_identity_sequences(nodes: list[object], active_arcs: list[object],
 
 def _validate_identity(value: object, generation: int,
                        structural: dict[str, Any], functional: dict[str, Any],
-                       label: str,
+                       resolver: dict[str, Any], label: str,
                        require: Require) -> None:
     item = _object(value, {"generation", "current_fingerprints",
                            "canonical_pre_state"}, label, require)
@@ -256,8 +256,9 @@ def _validate_identity(value: object, generation: int,
             f"{label}.canonical_pre_state contains a non-string name")
     require(set(state["instances"]) == set(published_instances),
             f"{label}.canonical_pre_state instances differ from the reference")
-    require(set(state["nets"]) == set(published_nets),
-            f"{label}.canonical_pre_state nets differ from published nodes")
+    resolved_nets = {record["binding"]["native_name"] for record in resolver["net_bindings"]}
+    require(set(state["nets"]) == resolved_nets and set(published_nets) <= resolved_nets,
+            f"{label}.canonical_pre_state nets differ from resolver or omit published node nets")
     high = structural["high_water"]
     require(len(state["nets"]) == high["net_slots"]
             and len(state["nodes"]) == high["node_slots"],
@@ -594,7 +595,7 @@ def validate_transaction(value: object, generation: int,
             f"{label}.traversal_telemetry differs from updater evidence")
     _validate_resolver(item["resolver"], structural, f"{label}.resolver", require)
     _validate_identity(item["identity"], generation, structural, functional,
-                       f"{label}.identity", require)
+                       item["resolver"], f"{label}.identity", require)
     descriptors = _array(item["descriptor_trace"],
                          f"{label}.descriptor_trace", require)
     require(len(descriptors) == generation, f"{label} descriptor count differs")

@@ -215,8 +215,10 @@ def validate_resolver_semantics(resolver: dict[str, Any],
         require(expected not in net_names,
                 f"{item_label} repeats a live net name")
         net_names.add(expected)
-    require(net_names == nets,
-            f"{label}.net_bindings differ from functional node nets")
+    baseline_nets = set(semantic_trace[0]["baseline"]["canonical_pre_state"]["nets"])
+    created_nets = {value["output_net_name"] for _, value in materializations.values()}
+    require(net_names == baseline_nets | created_nets and nets <= net_names,
+            f"{label}.net_bindings differ from baseline and created nets or omit functional nodes")
 
     materialized_names: set[str] = set()
     final_sink_nets: dict[str, str] = {}
@@ -384,23 +386,42 @@ def run_resolver_semantics_self_test(require: Require) -> None:
         "arc_id": 0, "ref": {"kind": "existing", "baseline_key": baseline_arc},
         "current_active_key": arc}]}}
     baseline = {"arcs": [{"key": baseline_arc}]}
+    baseline_trace = [{"baseline": {"canonical_pre_state": {"nets": ["n"]}}, "edits": []}]
     errors: list[str] = []
     validate_resolver_semantics(
-        resolver, functional, structural, baseline, [], "valid-resolver-canary",
+        resolver, functional, structural, baseline, baseline_trace, "valid-resolver-canary",
         lambda ok, message: errors.append(message) if not ok else None)
     require(not errors, f"valid resolver semantics was rejected: {errors}")
+    orphan_resolver = copy.deepcopy(resolver)
+    orphan_resolver["net_bindings"].append({
+        "ref": {"kind": "existing", "baseline_name": "orphan"},
+        "binding": {"slot": 1, "native_name": "orphan", "tombstone": False}})
+    orphan_trace = copy.deepcopy(baseline_trace)
+    orphan_trace[0]["baseline"]["canonical_pre_state"]["nets"].append("orphan")
+    errors = []
+    validate_resolver_semantics(
+        orphan_resolver, functional, structural, baseline, orphan_trace, "orphan-net",
+        lambda ok, message: errors.append(message) if not ok else None)
+    require(not errors, f"unreferenced baseline net was rejected: {errors}")
+    orphan_resolver["net_bindings"][-1]["ref"]["baseline_name"] = "forged"
+    orphan_resolver["net_bindings"][-1]["binding"]["native_name"] = "forged"
+    errors = []
+    validate_resolver_semantics(
+        orphan_resolver, functional, structural, baseline, orphan_trace, "forged-orphan-net",
+        lambda ok, message: errors.append(message) if not ok else None)
+    require(errors, "coordinated unreferenced net rename escaped baseline identity")
     tampered = copy.deepcopy(resolver)
     tampered["net_bindings"][0]["binding"]["native_name"] = "WRONG_NET"
     errors = []
     validate_resolver_semantics(
-        tampered, functional, structural, baseline, [], "resolver-native-name-tamper",
+        tampered, functional, structural, baseline, baseline_trace, "resolver-native-name-tamper",
         lambda ok, message: errors.append(message) if not ok else None)
     require(errors, "resolver native-name tamper was accepted")
     tampered = copy.deepcopy(resolver)
     tampered["arc_bindings"][0]["binding"]["native_name"] = "WRONG_ARC"
     errors = []
     validate_resolver_semantics(
-        tampered, functional, structural, baseline, [], "arc-native-name-tamper",
+        tampered, functional, structural, baseline, baseline_trace, "arc-native-name-tamper",
         lambda ok, message: errors.append(message) if not ok else None)
     require(errors, "arc binding native-name tamper was accepted")
 
@@ -483,7 +504,7 @@ def run_resolver_semantics_self_test(require: Require) -> None:
         {"arc_id": 2, "ref": new_arc_ref, "current_active_key": new_key}]}}
     errors = []
     validate_resolver_semantics(created_resolver, created_functional,
-        created_structural, {"arcs": []}, [{"edits": [edit]}],
+        created_structural, {"arcs": []}, [{**baseline_trace[0], "edits": [edit]}],
         "created-ref-canary",
         lambda ok, message: errors.append(message) if not ok else None)
     require(not errors, f"valid created refs were rejected: {errors}")
@@ -507,7 +528,7 @@ def run_resolver_semantics_self_test(require: Require) -> None:
     errors = []
     validate_resolver_semantics(
         survivor_resolver, created_functional, survivor_structural,
-        {"arcs": []}, [{"edits": [survivor_edit]}],
+        {"arcs": []}, [{**baseline_trace[0], "edits": [survivor_edit]}],
         "created-survivor-reordinal-canary",
         lambda ok, message: errors.append(message) if not ok else None)
     require(not errors,
@@ -521,7 +542,7 @@ def run_resolver_semantics_self_test(require: Require) -> None:
         "current_active_key"]["parallel_ordinal"] = 1
     errors = []
     validate_resolver_semantics(tampered, created_functional,
-        tampered_structural, {"arcs": []}, [{"edits": [edit]}],
+        tampered_structural, {"arcs": []}, [{**baseline_trace[0], "edits": [edit]}],
         "stable-ordinal-tamper",
         lambda ok, message: errors.append(message) if not ok else None)
-    require(errors, "coordinated created StableArcRef ordinal tamper was accepted")
+    require(bool(errors), "coordinated created StableArcRef ordinal tamper was accepted")

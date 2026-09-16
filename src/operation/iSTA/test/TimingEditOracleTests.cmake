@@ -125,3 +125,14 @@ set_tests_properties(
     TIMEOUT 300
     RUN_SERIAL TRUE
 )
+
+add_test(
+    NAME ista_timing_edit_oracle_rejects_non_buffer_selection
+    COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle/test_trace_creation_inputs.py"
+    --probe "$<TARGET_FILE:ista_timing_edit_independent_oracle_probe>"
+    --fixture-dir "${CMAKE_CURRENT_LIST_DIR}/timing_edit/fixtures/buffer_fanout"
+    --run-root "${CMAKE_CURRENT_BINARY_DIR}/non-buffer-creation"
+)
+set_tests_properties(ista_timing_edit_oracle_rejects_non_buffer_selection PROPERTIES
+    LABELS "ista_timing_edit;ista_diagnostic;ista_integration" TIMEOUT 90)

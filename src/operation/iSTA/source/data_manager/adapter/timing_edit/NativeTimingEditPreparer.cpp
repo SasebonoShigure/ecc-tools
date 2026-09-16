@@ -17,6 +17,7 @@
 
 #include "Database.hpp"
 #include "NativeBufferCellValidation.hpp"
+#include "NativeBufferInsertionInternal.hpp"
 #include "TimingEditCanonicalEncoding.hpp"
 #include "TimingEditResolver.hpp"
 #include "TimingEditValidation.hpp"
@@ -128,37 +129,6 @@ TimingGraphDelta requireNormalizedDelta(TimingGraphDelta delta, std::string_view
 bool isDriver(const Pin& pin)
 {
   return pin.get_is_port() ? pin.get_direction() == PinDirection::kInput : pin.get_direction() == PinDirection::kOutput;
-}
-
-void requireSupportedMovedSink(const Database& database, const Pin& pin)
-{
-  if (pin.get_is_port()) {
-    if (pin.get_direction() != PinDirection::kOutput) {
-      invalid("moved top-level sink must be an output port");
-    }
-    return;
-  }
-  if (pin.get_direction() != PinDirection::kInput) {
-    invalid("moved instance sink must be an input pin");
-  }
-  const auto instance = database.get_instance_map().find(pin.get_instance_name());
-  if (instance == database.get_instance_map().end()) {
-    invalid("moved sink instance does not exist");
-  }
-  if (instance->second.get_is_sequential() || instance->second.get_is_clock_gating()) {
-    invalid("sequential and clock-gating sinks are outside the Stage 3 data-only boundary");
-  }
-  const auto cell = database.get_timing_library().get_cell_map().find(instance->second.get_cell_name());
-  if (cell == database.get_timing_library().get_cell_map().end()) {
-    invalid("moved sink cell does not exist in the timing library");
-  }
-  if (cell->second.get_is_sequential() || cell->second.get_is_clock_gating()) {
-    invalid("sequential and clock-gating library sinks are outside the Stage 3 data-only boundary");
-  }
-  const auto port = cell->second.get_port_map().find(pin.get_pin_name());
-  if (port == cell->second.get_port_map().end() || port->second.get_is_clock()) {
-    invalid("clock or unresolved library sink is outside the Stage 3 data-only boundary");
-  }
 }
 
 void requireDataNet(const Database& database, const csr::CsrReferenceInput& input, const Net& net)
@@ -458,7 +428,7 @@ void appendExpansion(BatchBuilder& builder, const Database& database, const csr:
         || std::ranges::count(source_net->second.get_pin_name_list(), sink_name) != 1) {
       invalid("moved sink is not exactly one load member of the original net");
     }
-    requireSupportedMovedSink(database, native_sink->second);
+    detail::requireSupportedMovedSink(database, native_sink->second);
 
     const csr::ArcKey& current_key = requireCurrentNetArc(input, source_net_name, driver_name, sink_name);
     const StableArcRef old_arc = requireCurrentStableArc(resolver, current_key, edit.original_net, driver, sink);

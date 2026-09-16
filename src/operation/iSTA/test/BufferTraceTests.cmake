@@ -36,6 +36,7 @@ ista_register_buffer_trace_test(ista_buffer_candidate_selector_test)
 
 set(ISTA_BUFFER_TRACE_CONTRACT_TEST_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/BufferTraceContractTest.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/BufferTraceArtifactListTest.cpp"
 )
 add_executable(ista_buffer_trace_contract_test
     ${ISTA_BUFFER_TRACE_CONTRACT_TEST_SOURCES}
@@ -114,7 +115,7 @@ add_test(
     "${ISTA_TEST_PYTHON_EXECUTABLE}"
     "${CMAKE_CURRENT_LIST_DIR}/../benchmark/schema/validate_buffer_fixed_trace.py"
     --schema
-    "${CMAKE_CURRENT_LIST_DIR}/../benchmark/schema/buffer_fixed_trace_v1.schema.json"
+    "${CMAKE_CURRENT_LIST_DIR}/../benchmark/schema/buffer_fixed_trace_v2.schema.json"
     --manifest
     "${CMAKE_CURRENT_LIST_DIR}/../benchmark/schema/buffer_trace_contract_manifest_v1.json"
     --self-test

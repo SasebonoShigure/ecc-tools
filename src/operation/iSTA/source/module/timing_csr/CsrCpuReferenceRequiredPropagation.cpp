@@ -233,12 +233,6 @@ template <typename T>
   resetOptionalSoa(paths.crpr_nodes, entry_count, NodeId{});
   resetOptionalSoa(paths.crpr_transitions, entry_count, Transition::kNone);
 
-  for (std::size_t node = 0; node < work.node_count; ++node)
-    for (AnalysisMode analysis : {AnalysisMode::kMax, AnalysisMode::kMin})
-      for (Transition transition : {Transition::kRise, Transition::kFall})
-        if (!work.path_rows[csrPathRow(node, analysis, PathSource::kRegister, transition)].empty())
-          return CsrCpuReferenceStageStatus::kInvariantViolation;
-
   std::size_t flat = 0;
   for (std::size_t row_index = 0; row_index < work.path_rows.size(); ++row_index) {
     paths.row_offsets[row_index] = flat;
@@ -247,7 +241,7 @@ template <typename T>
       const auto& path = row[position];
       if ((position != 0 && !(row[position - 1].clock_tag < path.clock_tag)) || path.clock_tag.value() >= work.clock_tag_count
           || path.start_node.value() >= work.node_count || !std::isfinite(path.arrival) || !std::isfinite(path.slew) || path.slew < 0.0
-          || !std::isfinite(path.launch) || path.crpr_node || path.crpr_transition)
+          || !std::isfinite(path.launch) || path.crpr_node.has_value() != path.crpr_transition.has_value())
         return CsrCpuReferenceStageStatus::kInvariantViolation;
 
       paths.clock_tags.values[flat] = path.clock_tag;
@@ -255,6 +249,14 @@ template <typename T>
       paths.slews.values[flat] = path.slew;
       paths.launches.values[flat] = path.launch;
       paths.start_nodes.values[flat] = path.start_node;
+      if (path.crpr_node) {
+        if (path.crpr_node->value() >= work.node_count || *path.crpr_transition == Transition::kNone)
+          return CsrCpuReferenceStageStatus::kInvariantViolation;
+        paths.crpr_nodes.presence[flat] = 1;
+        paths.crpr_nodes.values[flat] = *path.crpr_node;
+        paths.crpr_transitions.presence[flat] = 1;
+        paths.crpr_transitions.values[flat] = *path.crpr_transition;
+      }
 
       if (path.predecessor_node.has_value() != path.predecessor_arc.has_value())
         return CsrCpuReferenceStageStatus::kInvariantViolation;
@@ -280,17 +282,22 @@ template <typename T>
   return flat == entry_count ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kInvariantViolation;
 }
 
-[[nodiscard]] bool validateClockShape(const ClockResultSoa& clock, std::size_t lane_count)
+[[nodiscard]] bool validateClockShape(const ClockResultSoa& clock, std::size_t node_count)
 {
+  const auto lane_count = node_count * kAnalysisCount * kTransitionCount;
   if (!validateOptionalSoa(clock.arrivals, lane_count, false) || !validateOptionalSoa(clock.slews, lane_count, false)
       || !validateOptionalSoa(clock.predecessor_nodes, lane_count, false) || !validateOptionalSoa(clock.predecessor_arc_delays, lane_count, false)
       || !validateOptionalSoa(clock.predecessor_transitions, lane_count, false))
     return false;
   for (std::size_t lane = 0; lane < lane_count; ++lane) {
-    if (clock.arrivals.presence[lane] != clock.slews.presence[lane] || clock.predecessor_nodes.presence[lane] != 0
-        || clock.predecessor_arc_delays.presence[lane] != 0 || clock.predecessor_transitions.presence[lane] != 0)
+    const auto predecessor = clock.predecessor_nodes.presence[lane];
+    if (predecessor != clock.predecessor_arc_delays.presence[lane] || predecessor != clock.predecessor_transitions.presence[lane])
       return false;
-    if (clock.arrivals.presence[lane] != 0 && (!isPositiveZero(clock.arrivals.values[lane]) || !isPositiveZero(clock.slews.values[lane])))
+    if ((clock.arrivals.presence[lane] != 0 && !std::isfinite(clock.arrivals.values[lane]))
+        || (clock.slews.presence[lane] != 0 && (!std::isfinite(clock.slews.values[lane]) || clock.slews.values[lane] < 0.0)))
+      return false;
+    if (predecessor != 0 && (clock.arrivals.presence[lane] == 0 || clock.predecessor_nodes.values[lane].value() >= node_count
+                            || !std::isfinite(clock.predecessor_arc_delays.values[lane]) || clock.predecessor_transitions.values[lane] == Transition::kNone))
       return false;
   }
   return true;
@@ -341,7 +348,9 @@ template <typename T>
         || !std::isfinite(paths.launches.values[entry]) || paths.clock_tags.values[entry].value() >= work.clock_tag_count
         || paths.start_nodes.values[entry].value() >= work.node_count || paths.predecessor_arcs.presence[entry] != predecessor_presence
         || paths.predecessor_arc_delays.presence[entry] != predecessor_presence || paths.predecessor_transitions.presence[entry] != predecessor_presence
-        || paths.crpr_nodes.presence[entry] != 0 || paths.crpr_transitions.presence[entry] != 0)
+        || paths.crpr_nodes.presence[entry] != paths.crpr_transitions.presence[entry]
+        || (paths.crpr_nodes.presence[entry] != 0 && (paths.crpr_nodes.values[entry].value() >= work.node_count
+                                                    || paths.crpr_transitions.values[entry] == Transition::kNone)))
       return false;
   }
   return true;
@@ -406,9 +415,8 @@ template <typename T>
   const auto& result = work.result;
   if (result.level_offsets.empty() || result.level_offsets.front() != 0 || result.level_offsets.back() != work.node_count
       || result.level_nodes.size() != work.node_count || result.node_to_level.size() != work.node_count || result.timing_order.size() != work.node_count
-      || result.timing_order != result.level_nodes || !validateNodeShape(work) || !validateClockShape(result.effective_clock, work.node_lane_count)
-      || !validateClockShape(result.physical_clock, work.node_lane_count) || result.effective_clock.arrivals.presence != result.physical_clock.arrivals.presence
-      || result.effective_clock.slews.presence != result.physical_clock.slews.presence || !validateOptionalSoa(result.data_slews, work.node_lane_count, false)
+      || result.timing_order != result.level_nodes || !validateNodeShape(work) || !validateClockShape(result.effective_clock, work.node_count)
+      || !validateClockShape(result.physical_clock, work.node_count) || !validateOptionalSoa(result.data_slews, work.node_lane_count, false)
       || !validatePathShape(work) || !validateArcShape(edges, work))
     return false;
   for (std::size_t lane = 0; lane < work.node_lane_count; ++lane)
@@ -422,6 +430,9 @@ template <typename T>
 CsrCpuReferenceStageStatus propagateCsrCpuReferenceRequired(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
   CsrCpuReferenceStageStatus status = seedEndpointRequired(payloads, work);
+  if (status != CsrCpuReferenceStageStatus::kSuccess)
+    return status;
+  status = seedCsrCpuSequentialRequired(payloads, work);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
   status = reverseRequired(edges, work);

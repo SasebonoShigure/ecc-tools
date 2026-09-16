@@ -27,8 +27,10 @@
 #include "CsrReferenceTypes.hpp"
 #include "Database.hpp"
 #include "IndependentFreshBaselineLoader.hpp"
+#include "CsrReferenceInputAdapterInternal.hpp"
 #include "IndependentOracleObservation.hpp"
 #include "IndependentSemanticReplayer.hpp"
+#include "../../PublicTimingJson.hpp"
 #include "TimingSemanticKey.hpp"
 #include "TimingEditOracleCli.hpp"
 #include "TimingGraphCsrAdapter.hpp"
@@ -111,45 +113,41 @@ csr::NodeKey requireNode(const csr::CsrReferenceInput& input, std::string_view f
   return found->key;
 }
 
-std::vector<csr::LibraryArcSignature> requireBufferSignatures(const csr::CsrReferenceInput& input,
-                                                              std::string_view instance_name,
-                                                              std::string_view source_port,
-                                                              std::string_view sink_port)
+LibraryCellRef requireBuffer(const FreshBaselineView& view, const OracleTraceCreationOptions& options)
 {
-  const auto found = std::ranges::find_if(input.arcs, [&](const csr::ArcRecord& arc) {
-    return arc.kind == csr::ArcKind::kCell && arc.key.base.source.instance_name == instance_name
-           && arc.key.base.library_source_port == source_port && arc.key.base.library_sink_port == sink_port;
-  });
-  if (found == input.arcs.end() || found->key.base.library_arcs.empty()) {
-    fail("baseline buffer Liberty signatures are absent");
-  }
-  return found->key.base.library_arcs;
+  const TimingCell& cell = view.database.get_timing_library().get_cell_map().at(options.buffer);
+  LibraryCellRef reference{cell.get_library_name(), options.buffer, options.input_port, options.output_port, {}};
+  for (const auto& arc : cell.get_cell_arc_list())
+    if (arc.get_is_timing_graph_arc() && !arc.get_is_disable_arc() && !arc.get_is_clock_arc()
+        && !arc.get_is_clear_preset_arc() && arc.get_source_port() == options.input_port && arc.get_sink_port() == options.output_port)
+      for (const auto& child : arc.get_timing_arc_list())
+        reference.ordered_arc_signatures.push_back(csr::detail::exportReferenceLibraryArcSignature(child));
+  // IndependentSemanticReplayer validates the selected cell before its first edit.
+  return reference;
 }
 
 TimingEditTrace makeRealTrace(const FreshBaselineView& view,
                               const OracleTraceCreationOptions& options)
 {
-  constexpr std::uint64_t kSeed = 20260831;
-  constexpr std::string_view kProfile = "stage3_real_cpu_full";
-  const TimingCell& buffer = view.database.get_timing_library().get_cell_map().at("BUF_X1");
+  const auto& profile = options.profile;
+  const auto seed = options.seed;
   const BaselineSemanticIdentity baseline = baselineIdentity(view);
-  const CreationToken first_token{1, view.database.get_design_name(), std::string(kProfile),
-                                  kSeed, 1, 0};
-  const CreationToken second_token{1, view.database.get_design_name(), std::string(kProfile),
-                                   kSeed, 2, 0};
-  LibraryCellRef library{buffer.get_library_name(), "BUF_X1", "A", "Y",
-                         requireBufferSignatures(view.reference_input, "u0", "A", "Y")};
-  const StableNodeRef sink = ExistingNodeRef{requireNode(view.reference_input, "u1:A")};
+  const CreationToken first_token{1, view.database.get_design_name(), profile,
+                                  seed, 1, 0};
+  const CreationToken second_token{1, view.database.get_design_name(), profile,
+                                   seed, 2, 0};
+  const LibraryCellRef library = requireBuffer(view, options);
+  const StableNodeRef sink = ExistingNodeRef{requireNode(view.reference_input, options.sink)};
   std::vector<BufferInsertionMutation> edits;
-  edits.push_back({ExistingNetRef{"n0"}, {sink}, library, UnplacedInputs{},
+  edits.push_back({ExistingNetRef{options.net}, {sink}, library, UnplacedInputs{},
                    NoParasiticRcInputs{}, first_token});
   edits.push_back({CreatedNetRef{first_token, CreatedNetRole::kOutputNet}, {sink}, library,
                    UnplacedInputs{}, NoParasiticRcInputs{}, second_token});
 
   TimingEditTrace trace;
   trace.workload_kind = TraceWorkloadKind::kRealDesign;
-  trace.seed = kSeed;
-  trace.profile = kProfile;
+  trace.seed = seed;
+  trace.profile = profile;
   trace.baseline = baseline;
   for (const FreshArtifactEvidence& artifact : view.artifact_evidence) {
     trace.source_artifacts.push_back({artifact.role, artifact.logical_name, artifact.content_sha256});
@@ -223,6 +221,7 @@ void runReal(const OracleReplayOptions& options)
     }
     writeOracleFile(options.output,
                     canonicalOracleObservationText(captureOracleObservation(view.database, receipt)));
+    writeOracleFile(options.output.string() + ".public.json", ista::test::capturePublicTiming().dump(2));
   });
 }
 
@@ -254,6 +253,10 @@ int wrongSinkSelfTest()
                     {"src", "sink_expected", "sink_wrong"}}};
   const TimingEditTrace trace = makeWrongSinkSelfTestTrace();
   const RawDesignObservation expected = projectExpectedRawAfterPrefix(baseline, trace, 1);
+  const auto source_net = std::ranges::find(expected.nets, "n0", &RawNetObservation::map_name);
+  if (source_net == expected.nets.end()
+      || source_net->load_pins != std::vector<std::string>{"__ista_buf_b1_e0:A", "sink_wrong"})
+    fail("expected net caches do not preserve native sorted load order");
   RawDesignObservation wrong = expected;
   const std::string instance = "__ista_buf_b1_e0";
   const std::string new_net = "__ista_net_b1_e0";

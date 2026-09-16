@@ -89,6 +89,19 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
 
 [[nodiscard]] CsrCpuReferenceStageStatus initializeIdealClocks(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
+  if (payloads.clockOwners().size() != work.node_count)
+    return CsrCpuReferenceStageStatus::kInvariantViolation;
+  for (std::size_t node = 0; node < work.node_count; ++node) {
+    const auto& owner = payloads.clockOwners()[node];
+    if (!owner)
+      continue;
+    work.result.nodes.is_clock_point.values[node] = 1;
+    work.result.nodes.clock_names.presence[node] = 1;
+    work.result.nodes.clock_names.values[node] = *owner;
+    for (AnalysisMode analysis : kAnalyses)
+      for (Transition transition : kTransitions)
+        initializeClockSourceLane(work.result.effective_clock, csrNodeLane(node, analysis, transition));
+  }
   for (const auto& clock : payloads.clocks()) {
     for (const auto& source : clock.ordered_sources) {
       if (!source.resolved_node)
@@ -125,6 +138,8 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
     if (node >= work.node_count || payloads.orderedStartIds()[index] != seed.seed_node)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
 
+    if (seed.availability == StartSeedAvailability::kDeferredSequential)
+      continue;
     const ClockConstraintModel* direct_clock = findDirectClock(payloads, seed.seed_node);
     for (AnalysisMode analysis : kAnalyses) {
       for (Transition transition : kTransitions) {

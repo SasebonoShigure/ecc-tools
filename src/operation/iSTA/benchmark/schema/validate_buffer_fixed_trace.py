@@ -8,12 +8,13 @@ import math
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from buffer_trace_profile_contract import validate_frozen_profiles
 from json_schema_contract import ValidationError, fail, load_json, loads_json, validate_schema
 import validate_timing_edit_trace as stage3
 
-SCHEMA_PATH = Path(__file__).with_name("buffer_fixed_trace_v1.schema.json")
+SCHEMA_PATH = Path(__file__).with_name("buffer_fixed_trace_v2.schema.json")
 MANIFEST_PATH = Path(__file__).with_name("buffer_trace_contract_manifest_v1.json")
 STAGE3_SCHEMA_PATH = Path(__file__).with_name("timing_edit_trace_v1.schema.json")
 _STAGE3_REF_PREFIX = "timing_edit_trace_v1.schema.json#/$defs/"
@@ -80,11 +81,11 @@ def _validate_manifest(manifest: object) -> dict[str, dict[str, object]]:
         fail("manifest", "must have the exact version-1 key set")
     if (
         manifest["schema_version"] != "buffer-trace-contract-manifest/1.0.0"
-        or manifest["trace_schema"] != "buffer-fixed-trace/1.0.0"
+        or manifest["trace_schema"] != "buffer-fixed-trace/2.0.0"
         or manifest["stage3_contract_schema"] != "timing-edit-trace/1.0.0"
         or manifest["selection_mode"] != "fixed_trace"
     ):
-        fail("manifest", "version or selection mode is not frozen v1")
+        fail("manifest", "version or selection mode differs from the frozen contract")
     if manifest["source_artifact_roles"] != [
         "tech_lef",
         "cell_lef",
@@ -132,7 +133,7 @@ def _created_ref_token(reference: dict[str, object]) -> tuple[object, ...] | Non
     return None
 
 
-def _validate_sources(workload: dict[str, object]) -> None:
+def _validate_sources(workload: dict[str, Any]) -> None:
     if workload["kind"] == "synthetic":
         recipe = workload["source_recipe"]
         roles = ("tech_lef", "cell_lef", "liberty", "verilog", "sdc")
@@ -145,9 +146,11 @@ def _validate_sources(workload: dict[str, object]) -> None:
             fail("$.replay.workload.source_recipe", "tech and cell LEF content must be distinct")
     else:
         artifacts = workload["artifacts"]
-        paths = [artifacts[role]["path"] for role in ("tech_lef", "cell_lef", "liberty", "verilog", "sdc")]
+        paths = [artifacts[role]["path"] for role in ("tech_lef", "verilog", "sdc")]
+        paths.extend(source["path"] for source in artifacts["cell_lefs"])
+        paths.extend(source["path"] for source in artifacts["liberties"])
         if len(set(paths)) != len(paths):
-            fail("$.replay.workload.artifacts", "five real source paths must be distinct")
+            fail("$.replay.workload.artifacts", "real source paths must be distinct")
 
 
 def _validate_batches(
@@ -402,11 +405,13 @@ def _valid_artifact(*, real: bool = False) -> dict[str, object]:
             "kind": "real_design",
             "artifacts": {
                 "tech_lef": {"path": "fixture/tech.lef"},
-                "cell_lef": {"path": "fixture/cell.lef"},
-                "liberty": {"path": "fixture/stage4.lib"},
+                "cell_lefs": [{"path": "fixture/cell.lef"}],
+                "liberties": [{"path": "fixture/stage4.lib"}],
                 "verilog": {"path": "fixture/design.v"},
                 "sdc": {"path": "fixture/design.sdc"},
                 "top": "top",
+                "analysis_context": {"liberty_corner": "slow", "temperature": "25",
+                                     "rc_corner": "__no_rc_corner__"},
             },
             "baseline": baseline,
             "batches": [plan],
@@ -460,7 +465,7 @@ def _valid_artifact(*, real: bool = False) -> dict[str, object]:
     return {
         "replay": {
             "header": {
-                "schema_version": 1,
+                "schema_version": 2,
                 "selection_mode": "fixed_trace",
                 "semantic_workload_kind": workload["kind"],
                 "profile_id": "engineering_smoke",

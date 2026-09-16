@@ -300,8 +300,7 @@ Transition selectedCrprTransition(const ReferencedLibraryCellModel& cell)
   return trigger == Transition::kNone ? Transition::kRise : trigger;
 }
 
-void validateSeeds(const CsrReferenceInput& input, const ClockReplay& replay, const std::vector<const PortConstraintModel*>& ports, bool& has_register,
-                   bool& has_crpr, Violations& errors)
+void validateSeeds(const CsrReferenceInput& input, const ClockReplay& replay, const std::vector<const PortConstraintModel*>& ports, Violations& errors)
 {
   if (input.start_seeds.size() != input.ordered_start_ids.size())
     reject(errors, "start_seeds", "seeds must exactly cover ordered startpoints");
@@ -338,26 +337,24 @@ void validateSeeds(const CsrReferenceInput& input, const ClockReplay& replay, co
     }
 
     if (expected_register) {
-      has_register = true;
-      has_crpr = true;
       if (!expected_clock || !expected_output) {
         reject(errors, "start_seeds", "register seed requires selected clock and output pins");
         continue;
       }
       const NodeId expected_path_start = seed.seed_node == expected_clock ? *expected_output : seed.seed_node;
       const Transition expected_transition = selectedCrprTransition(*cell);
-      if (seed.availability != StartSeedAvailability::kUnsupportedSequential || seed.path_source != PathSource::kRegister
+      if (seed.availability != StartSeedAvailability::kDeferredSequential || seed.path_source != PathSource::kRegister
           || seed.path_start_node != expected_path_start || seed.crpr_node != expected_clock || seed.crpr_transition != expected_transition
           || !allAbsent(seed.arrival) || !allAbsent(seed.slew)) {
-        reject(errors, "start_seeds", "register seed differs from unsupported-sequential structural contract");
+        reject(errors, "start_seeds", "register seed differs from deferred-sequential structural contract");
       }
       continue;
     }
 
     if (!node.is_port && node.is_sequential) {
-      if (seed.availability != StartSeedAvailability::kUnsupportedSequential || seed.path_source || seed.path_start_node != seed.seed_node || seed.crpr_node
+      if (seed.availability != StartSeedAvailability::kDeferredSequential || seed.path_source || seed.path_start_node != seed.seed_node || seed.crpr_node
           || seed.crpr_transition || !allAbsent(seed.arrival) || !allAbsent(seed.slew)) {
-        reject(errors, "start_seeds", "non-register sequential start must use unsupported-sequential null seed");
+        reject(errors, "start_seeds", "non-register sequential start must use deferred-sequential null seed");
       }
       continue;
     }
@@ -466,24 +463,29 @@ void validateLoads(const CsrReferenceInput& input, const std::vector<const PortC
       caps[cap.node.value()] = &cap;
   std::map<std::string, ArcOutputLoadMatrix> net_loads;
   std::vector<std::uint8_t> seen(input.nodes.size(), 0);
-  std::vector<std::size_t> native_order(input.arcs.size());
-  std::iota(native_order.begin(), native_order.end(), 0);
-  std::ranges::sort(native_order,
-                    [&](std::size_t lhs, std::size_t rhs) { return input.arcs[lhs].native_traversal_rank < input.arcs[rhs].native_traversal_rank; });
-  for (std::size_t index : native_order) {
-    const auto& arc = input.arcs[index];
-    if (arc.kind != ArcKind::kNet || arc.sink.value() >= input.nodes.size() || seen[arc.sink.value()]++ != 0)
-      continue;
-    const auto& sink = input.nodes[arc.sink.value()];
+  std::vector<NodeId> load_nodes;
+  for (const auto& arc : input.arcs) {
+    if (arc.kind == ArcKind::kNet && arc.sink.value() < input.nodes.size() && !seen[arc.sink.value()]) {
+      seen[arc.sink.value()] = 1;
+      load_nodes.push_back(arc.sink);
+    }
+  }
+  // Native refreshNetDriverLoad sorts full pin names. Diagnostic Dual-CSR
+  // projections have canonical ArcKey ranks, which need not preserve this sum.
+  std::ranges::sort(load_nodes, [&](NodeId lhs, NodeId rhs) {
+    return byteStringLess(input.nodes[lhs.value()].key.full_name, input.nodes[rhs.value()].key.full_name);
+  });
+  for (NodeId id : load_nodes) {
+    const auto& sink = input.nodes[id.value()];
     auto& load = net_loads[sink.net_name];
     for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis)
       for (std::size_t transition = 0; transition < kTransitionCount; ++transition)
         if (sink.is_port) {
-          if ((sink.direction == PinDirection::kOutput || sink.direction == PinDirection::kInout) && ports[arc.sink.value()]
-              && ports[arc.sink.value()]->output_load)
-            load[analysis][transition] += *ports[arc.sink.value()]->output_load;
-        } else if (caps[arc.sink.value()]) {
-          const auto& cap = *caps[arc.sink.value()];
+          if ((sink.direction == PinDirection::kOutput || sink.direction == PinDirection::kInout) && ports[id.value()]
+              && ports[id.value()]->output_load)
+            load[analysis][transition] += *ports[id.value()]->output_load;
+        } else if (caps[id.value()]) {
+          const auto& cap = *caps[id.value()];
           load[analysis][transition] += cap.transition_capacitance[analysis][transition].value_or(cap.default_capacitance);
         }
   }
@@ -495,19 +497,6 @@ void validateLoads(const CsrReferenceInput& input, const std::vector<const PortC
     if (*arc.output_load != expected)
       reject(errors, "arcs.output_load", "no-parasitic load differs from exact native-order sink-net sum");
   }
-}
-
-bool hasConditionalTiming(const CsrReferenceInput& input)
-{
-  for (const auto& cell : input.referenced_library_cells) {
-    for (const auto& arc : cell.cell_arcs)
-      if (std::ranges::any_of(arc.transfer.children, [](const auto& child) { return !child.signature.sdf_condition.empty(); }))
-        return true;
-    for (const auto& check : cell.timing_checks)
-      if (std::ranges::any_of(check.children, [](const auto& child) { return !child.signature.sdf_condition.empty(); }))
-        return true;
-  }
-  return false;
 }
 
 void validateClockTags(const CsrReferenceInput& input, Violations& errors)
@@ -546,10 +535,8 @@ void validateReferenceConstraints(const CsrReferenceInput& input, Violations& er
   validateNodeRoles(input, replay, check_data_nodes, errors);
   const auto ports = portConstraintsByNode(input, errors);
 
-  bool has_sequential = false;
   bool has_gating = false;
   for (const auto& instance : input.instances) {
-    has_sequential |= instance.is_sequential;
     has_gating |= instance.is_clock_gating;
   }
   bool has_divider = false;
@@ -588,35 +575,20 @@ void validateReferenceConstraints(const CsrReferenceInput& input, Violations& er
   if (!net_shape_valid)
     reject(errors, "arcs.net_projection", "net arcs require one driver and unique non-self load sinks");
 
-  bool has_register = false;
-  bool has_crpr = false;
-  validateSeeds(input, replay, ports, has_register, has_crpr, errors);
+  validateSeeds(input, replay, ports, errors);
   validateEndpoints(input, replay, ports, errors);
   validateCapacitances(input, errors);
   validateLoads(input, ports, errors);
   validateClockTags(input, errors);
 
-  const bool has_clock_fanout = std::ranges::any_of(replay.arcs, [](std::uint8_t value) { return value != 0; });
   const bool has_propagated = std::ranges::any_of(input.clocks, &ClockConstraintModel::propagated);
   std::vector<CsrReferenceUnsupportedReason> expected_reasons;
   if (!input.parasitics.nets.empty())
     expected_reasons.push_back(CsrReferenceUnsupportedReason::kParasiticNet);
-  if (has_sequential)
-    expected_reasons.push_back(CsrReferenceUnsupportedReason::kSequentialInstance);
-  if (has_register)
-    expected_reasons.push_back(CsrReferenceUnsupportedReason::kSequentialLaunch);
-  if (!input.timing_check_endpoints.empty())
-    expected_reasons.push_back(CsrReferenceUnsupportedReason::kTimingCheck);
-  if (has_crpr)
-    expected_reasons.push_back(CsrReferenceUnsupportedReason::kCrpr);
   if (has_propagated)
     expected_reasons.push_back(CsrReferenceUnsupportedReason::kPropagatedClock);
-  if (has_clock_fanout)
-    expected_reasons.push_back(CsrReferenceUnsupportedReason::kClockTreeFanout);
   if (has_gating || has_divider)
     expected_reasons.push_back(CsrReferenceUnsupportedReason::kClockGatingOrDivider);
-  if (hasConditionalTiming(input))
-    expected_reasons.push_back(CsrReferenceUnsupportedReason::kConditionalTimingArc);
   if (!input.case_analysis_constraints.empty())
     expected_reasons.push_back(CsrReferenceUnsupportedReason::kCaseAnalysis);
   if (input.unsupported_reasons != expected_reasons)

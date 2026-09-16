@@ -2,7 +2,6 @@
 """Stage 8 device-targeted/native trace, independent full oracles, and OFF samples."""
 
 import argparse
-import concurrent.futures
 import json
 import pathlib
 import subprocess
@@ -78,7 +77,8 @@ def run(args: argparse.Namespace) -> int:
     performance_mode = "incremental-performance" if incremental else "performance"
     rollback_mode = "incremental-rollback" if incremental else "rollback"
     probe = args.probe.resolve(strict=True)
-    trace = args.trace.resolve(strict=True)
+    trace = (args.replay or args.trace).resolve(strict=True)
+    input_flag = "--replay" if args.replay else "--trace"
     root = args.run_root.resolve()
     for name in ("verdict.json", "performance.json"):
         (root / name).unlink(missing_ok=True)
@@ -90,7 +90,9 @@ def run(args: argparse.Namespace) -> int:
     if args.performance and build["build_config"] != "Release":
         print("SKIP: targeted CUDA performance requires Release")
         return 77
-    batches = json.loads(trace.read_text())["replay"]["workload"]["batches"]
+    value = json.loads(trace.read_text())
+    program = value if args.replay else value["replay"]
+    batches = program["workload"]["batches"]
     require(isinstance(batches, list) and batches, "frozen trace requires nonempty batches")
     root.mkdir(parents=True, exist_ok=True)
     names = (
@@ -107,7 +109,9 @@ def run(args: argparse.Namespace) -> int:
         (root / name).unlink(missing_ok=True)
     if args.performance:
         warmup, _ = run_child(
-            probe, performance_mode, trace, len(batches), root / "warmup.json", args.timeout_seconds
+            probe, performance_mode, trace, len(batches),
+            root / "warmup.json", args.timeout_seconds,
+            input_flag=input_flag,
         )
         require_performance_result(warmup, args.strategy, len(batches))
         samples = []
@@ -118,7 +122,7 @@ def run(args: argparse.Namespace) -> int:
                 trace,
                 len(batches),
                 root / f"sample-{index}.json",
-                args.timeout_seconds,
+                args.timeout_seconds, input_flag=input_flag,
             )
             require_performance_result(result, args.strategy, len(batches))
             samples.append({"process_ms": duration, "result": result})
@@ -141,37 +145,16 @@ def run(args: argparse.Namespace) -> int:
     verdicts = []
     previous_batches = []
     for prefix in range(1, len(batches) + 1):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            targeted_task = pool.submit(
-                run_child,
-                probe,
-                protocol,
-                trace,
-                prefix,
-                root / f"targeted-{prefix}.json",
-                args.timeout_seconds,
-            )
-            full_task = pool.submit(
-                run_child,
-                full_probe,
-                "cuda",
-                trace,
-                prefix,
-                root / f"cuda-full-{prefix}.json",
-                args.timeout_seconds,
-            )
-            fresh_task = pool.submit(
-                run_child,
-                full_probe,
-                "fresh",
-                trace,
-                prefix,
-                root / f"fresh-{prefix}.json",
-                args.timeout_seconds,
-            )
-            targeted, targeted_ms = targeted_task.result()
-            full, full_ms = full_task.result()
-            fresh, fresh_ms = fresh_task.result()
+        # Preserve independent processes without overlapping multi-GiB snapshots.
+        targeted, targeted_ms = run_child(
+            probe, protocol, trace, prefix, root / f"targeted-{prefix}.json",
+            args.timeout_seconds, input_flag=input_flag)
+        full, full_ms = run_child(
+            full_probe, "cuda", trace, prefix, root / f"cuda-full-{prefix}.json",
+            args.timeout_seconds, input_flag=input_flag)
+        fresh, fresh_ms = run_child(
+            full_probe, "fresh", trace, prefix, root / f"fresh-{prefix}.json",
+            args.timeout_seconds, input_flag=input_flag)
         require(
             targeted["schema_version"] == f"ista-cuda-{protocol}-trace/1.0.0"
             and targeted["executed_backend"] == "cuda"
@@ -225,7 +208,8 @@ def run(args: argparse.Namespace) -> int:
         )
     if len(batches) >= 2:
         recovered, _ = run_child(
-            probe, rollback_mode, trace, len(batches), root / "rollback.json", args.timeout_seconds
+            probe, rollback_mode, trace, len(batches), root / "rollback.json", args.timeout_seconds,
+            input_flag=input_flag,
         )
         require(
             first_difference(recovered["batches"], previous_batches) is None
@@ -248,7 +232,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", type=pathlib.Path, required=True)
     parser.add_argument("--full-probe", type=pathlib.Path)
-    parser.add_argument("--trace", type=pathlib.Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--trace", type=pathlib.Path)
+    inputs.add_argument("--replay", type=pathlib.Path)
     parser.add_argument("--run-root", type=pathlib.Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     parser.add_argument(

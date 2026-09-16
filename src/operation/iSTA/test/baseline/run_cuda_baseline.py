@@ -2,12 +2,51 @@
 """Real-design CUDA full baseline versus independent fresh CPU executions."""
 
 import argparse
+import json
 import tempfile
 from pathlib import Path
 
 from baseline_artifacts import artifact_bundle, compare_artifacts
-from baseline_contract import assert_equal, atomic_json, load_json, validate_manifest
+from baseline_contract import BaselineError, assert_equal, atomic_json, load_json, validate_manifest
 from run_baseline import run_probe, validate_generated_destination
+
+
+def require_sequential_coverage(snapshot: dict) -> None:
+    paths = [
+        path
+        for group in snapshot["timing"]["path_groups"]
+        for endpoint in group["endpoints"]
+        for path in endpoint["paths"]
+    ]
+    if not {"setup", "hold", "recovery", "removal"} <= {path["check_type"] for path in paths}:
+        raise BaselineError("sequential fixture did not execute all four timing check kinds")
+    points = {point["node"]: point for point in snapshot["timing"]["points"]}
+    triggers = {
+        path["crpr_clock_transition"]
+        for point in points.values()
+        for path in point["path_states"]
+        if path["source_type"] == "register"
+    }
+    if triggers != {"rise", "fall"}:
+        raise BaselineError("sequential fixture lost rising/falling register launch identities")
+    if any(path["clock_reconvergence_pessimism"] != 0.0 for path in paths):
+        raise BaselineError("ideal-clock fixture acquired nonzero CRPR correction")
+    for pin in ("launch:CK", "capture:CK"):
+        point = points[pin]
+        if not point["is_clock_point"] or not point["clock_physical"]["predecessor"]:
+            raise BaselineError(f"clock fanout did not reach {pin}")
+        if not any(lane["value"] > 0.0 for lane in point["clock_physical"]["arrival"]):
+            raise BaselineError(f"physical clock buffer delay was lost at {pin}")
+        if any(lane["value"] != 0.0 for lane in point["clock_effective"]["arrival"]):
+            raise BaselineError(f"ideal effective clock changed at {pin}")
+    conditions = {
+        json.loads(entry["timing_arc"].split("#parallel=")[0])[-1]
+        for arc in snapshot["timing"]["arcs"]
+        for entry in arc["timing_arc_delay"]
+        if isinstance(entry["timing_arc"], str)
+    }
+    if not {"RN", "!RN"} <= conditions:
+        raise BaselineError("conditional CTQ candidates were not both evaluated")
 
 
 def main() -> None:
@@ -33,9 +72,21 @@ def main() -> None:
     absolute = float(manifest["tolerances"]["absolute"])
     relative = float(manifest["tolerances"]["relative"])
     results = []
-    for case in manifest["cases"]:
+    sequential_case = {
+        "name": "sequential",
+        "top": "stage10_sequential",
+        "verilog": "fixtures/sequential.v",
+        "sdc": "fixtures/sequential.sdc",
+        "liberty": "fixtures/sequential.lib",
+        "cell_lef": "fixtures/sequential_cells.lef",
+        "expected_clock": "clk",
+        "required_artifacts": manifest["cases"][0]["required_artifacts"],
+    }
+    for case in [*manifest["cases"], sequential_case]:
         cpu_dir = run_root / case["name"] / "cpu"
         expected = run_probe(args.probe.resolve(), case, baseline, cpu_dir)
+        if case["name"] == "sequential":
+            require_sequential_coverage(expected)
         expected_artifacts = artifact_bundle(cpu_dir, case)
         for repeat in range(2):
             cuda_dir = run_root / case["name"] / f"cuda-{repeat}"

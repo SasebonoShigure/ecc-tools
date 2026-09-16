@@ -315,8 +315,8 @@ def validate_snapshot(snapshot: dict[str, Any], case: dict[str, Any]) -> None:
         "top": case["top"],
         "inputs": {
             "tech_lef": "stage0_tech.lef",
-            "cell_lef": "stage0_cells.lef",
-            "liberty": "stage0.lib",
+            "cell_lef": Path(case.get("cell_lef", "fixtures/stage0_cells.lef")).name,
+            "liberty": Path(case.get("liberty", "fixtures/stage0.lib")).name,
             "verilog": Path(case["verilog"]).name,
             "sdc": Path(case["sdc"]).name,
         },

@@ -2,7 +2,6 @@
 """Stage 7 real-device frozen-prefix differential and separate OFF smoke."""
 
 import argparse
-import concurrent.futures
 import json
 import pathlib
 import subprocess
@@ -12,7 +11,8 @@ from dual_csr_trace_controller import first_difference, require, run_child, writ
 
 def run(args: argparse.Namespace) -> int:
     probe = args.probe.resolve(strict=True)
-    trace = args.trace.resolve(strict=True)
+    trace = (args.replay or args.trace).resolve(strict=True)
+    input_flag = "--replay" if args.replay else "--trace"
     root = args.run_root.resolve()
     # Remove only this invocation's verdict files before any validation can fail.
     for name in ("verdict.json", "performance.json"):
@@ -23,7 +23,9 @@ def run(args: argparse.Namespace) -> int:
     if args.performance and build["build_config"] != "Release":
         print("SKIP: CUDA performance requires Release")
         return 77
-    batches = json.loads(trace.read_text())["replay"]["workload"]["batches"]
+    value = json.loads(trace.read_text())
+    program = value if args.replay else value["replay"]
+    batches = program["workload"]["batches"]
     require(isinstance(batches, list) and batches, "frozen trace requires nonempty batches")
     root.mkdir(parents=True, exist_ok=True)
     # run_child requires successful exit plus an output file, but does not remove
@@ -39,11 +41,13 @@ def run(args: argparse.Namespace) -> int:
         # Each child loads and cleans its own initial design; there is no
         # comparison child or functional receipt in this execution branch.
         run_child(probe, "performance", trace, len(batches),
-                  root / "warmup.json", args.timeout_seconds)
+                  root / "warmup.json", args.timeout_seconds,
+                                   input_flag=input_flag)
         samples = []
         for index in range(args.samples):
             result, duration = run_child(probe, "performance", trace, len(batches),
-                                         root / f"sample-{index}.json", args.timeout_seconds)
+                                         root / f"sample-{index}.json", args.timeout_seconds,
+                                   input_flag=input_flag)
             require("functional" not in result and "batches" not in result,
                     "performance child generated a diagnostic receipt")
             samples.append({"process_ms": duration, "result": result})
@@ -55,13 +59,14 @@ def run(args: argparse.Namespace) -> int:
         return 0
     verdicts = []
     for prefix in range(1, len(batches) + 1):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            gpu_task = pool.submit(run_child, probe, "cuda", trace, prefix,
-                                   root / f"cuda-{prefix}.json", args.timeout_seconds)
-            cpu_task = pool.submit(run_child, probe, "fresh", trace, prefix,
-                                   root / f"fresh-{prefix}.json", args.timeout_seconds)
-            gpu, gpu_ms = gpu_task.result()
-            cpu, cpu_ms = cpu_task.result()
+        # Real-design diagnostic children can each use 6 GiB; keep independent
+        # processes sequential so validation fits the 16 GiB WSL environment.
+        gpu, gpu_ms = run_child(
+            probe, "cuda", trace, prefix, root / f"cuda-{prefix}.json",
+            args.timeout_seconds, input_flag=input_flag)
+        cpu, cpu_ms = run_child(
+            probe, "fresh", trace, prefix, root / f"fresh-{prefix}.json",
+            args.timeout_seconds, input_flag=input_flag)
         difference = first_difference(gpu["batches"][-1], cpu["functional"])
         require(difference is None, f"prefix {prefix}: {difference}")
         require(len(gpu["batches"]) == prefix and gpu["native_final_rollback_completed"],
@@ -83,7 +88,8 @@ def run(args: argparse.Namespace) -> int:
                     "repeated CUDA prefix changed earlier batch values")
     if len(batches) >= 2:
         recovered, _ = run_child(probe, "rollback", trace, len(batches),
-                                  root / "rollback.json", args.timeout_seconds)
+                                  root / "rollback.json", args.timeout_seconds,
+                                   input_flag=input_flag)
         require(first_difference(recovered["batches"][-1], gpu["batches"][-1]) is None,
                 "healthy replay after failed second batch changed result")
     write_json(root / "verdict.json", {"schema_version": "ista-cuda-full-verdict/1.0.0",
@@ -94,7 +100,9 @@ def run(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", type=pathlib.Path, required=True)
-    parser.add_argument("--trace", type=pathlib.Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--trace", type=pathlib.Path)
+    inputs.add_argument("--replay", type=pathlib.Path)
     parser.add_argument("--run-root", type=pathlib.Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     parser.add_argument("--performance", action="store_true")

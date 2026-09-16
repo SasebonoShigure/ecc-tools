@@ -78,6 +78,13 @@ struct OracleTraceCreationOptions
   FreshBaselineArtifacts artifacts;
   std::filesystem::path trace_output;
   std::filesystem::path executable;
+  std::string net{"n0"};
+  std::string sink{"u1:A"};
+  std::string buffer{"BUF_X1"};
+  std::string input_port{"A"};
+  std::string output_port{"Y"};
+  std::string profile{"stage3_real_cpu_full"};
+  std::uint64_t seed{20260831};
 };
 
 using OracleCliMode = std::variant<OracleReplayOptions, OracleTraceCreationOptions>;

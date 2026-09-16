@@ -2,7 +2,8 @@
 """Executable equal-cost canaries for the Stage 6 winner comparator."""
 
 import copy
-from typing import Any, Callable
+from collections.abc import Callable, Sequence
+from typing import Any
 
 
 def _key(name: str) -> dict[str, str]:
@@ -14,7 +15,7 @@ def _number(value: float) -> dict[str, Any]:
     return {"kind": "finite", "negative_zero": False, "value": value}
 
 
-def _soa(presence: list[int], values: list[object]) -> dict[str, object]:
+def _soa(presence: list[int], values: Sequence[object]) -> dict[str, object]:
     return {"presence": presence, "values": values}
 
 
@@ -28,11 +29,11 @@ def _seed(node: object) -> dict[str, object]:
             "crpr_transition": None}
 
 
-def _row_offsets() -> list[int]:
+def _row_offsets(source: int = 0) -> list[int]:
     result = [0]
     entries = 0
     for row in range(24):
-        if row in (0, 8, 16):
+        if row in (source * 2, 8 + source * 2, 16 + source * 2):
             entries += 1
         result.append(entries)
     return result
@@ -134,6 +135,53 @@ def _expect_rejected(graph: dict[str, Any], left: dict[str, Any],
     raise error_type(f"{label} invalid winner was accepted")
 
 
+def _run_sequential_canary(compare: Callable, first_difference: Callable,
+                           require: Callable,
+                           error_type: type[Exception]) -> None:
+    graph, timing = _equal_cost_fixture(0)
+    paths = timing["paths"]
+    paths["row_offsets"] = _row_offsets(1)
+    paths["crpr_nodes"] = copy.deepcopy(paths["start_nodes"])
+    paths["crpr_transitions"] = _soa([1, 1, 1], ["rise"] * 3)
+    for seed in graph["reference_payload"]["start_seeds"]:
+        seed.update(availability="deferred_sequential", path_source="register",
+                    arrival=None, slew=None, crpr_node=seed["seed_node"],
+                    crpr_transition="rise")
+    physical = timing["physical_clock"]
+    for field in ("predecessor_nodes", "predecessor_arc_delays",
+                  "predecessor_transitions"):
+        physical[field]["presence"][8] = 1
+    physical["predecessor_nodes"]["values"][8] = _key("s0")
+    physical["predecessor_arc_delays"]["values"][8] = _number(1.0)
+    compare(graph, timing, copy.deepcopy(timing), "sequential-canary",
+            first_difference, require)
+
+    bad = copy.deepcopy(timing)
+    bad["physical_clock"]["predecessor_nodes"]["values"][8] = _key("s1")
+    _expect_rejected(graph, timing, bad, compare, first_difference,
+                     require, error_type, "physical-clock-winner-tamper")
+    bad = copy.deepcopy(timing)
+    bad["effective_clock"] = copy.deepcopy(physical)
+    _expect_rejected(graph, bad, bad, compare, first_difference,
+                     require, error_type, "effective-clock-predecessor")
+    for field, value in (("start_nodes", _key("s1")),
+                         ("crpr_nodes", _key("s1")),
+                         ("launches", _number(1.0))):
+        bad = copy.deepcopy(timing)
+        bad["paths"][field]["values"][0] = value
+        _expect_rejected(graph, bad, bad, compare, first_difference,
+                         require, error_type, f"deferred-{field}-tamper")
+    bad_graph = copy.deepcopy(graph)
+    bad_graph["reference_payload"]["start_seeds"][0]["path_source"] = "input"
+    _expect_rejected(bad_graph, timing, timing, compare, first_difference,
+                     require, error_type, "deferred-source-tamper")
+    for field in ("arrivals", "slews"):
+        bad = copy.deepcopy(timing)
+        bad["paths"][field]["values"][0] = _number(0.1)
+        _expect_rejected(graph, timing, bad, compare, first_difference,
+                         require, error_type, f"deferred-{field}-tamper")
+
+
 def run_equal_cost_canary(compare: Callable, first_difference: Callable,
                           require: Callable,
                           error_type: type[Exception]) -> dict[str, int]:
@@ -152,4 +200,5 @@ def run_equal_cost_canary(compare: Callable, first_difference: Callable,
     bad_path["paths"]["predecessor_nodes"]["values"][2] = _key("s0")
     _expect_rejected(graph, left, bad_path, compare, first_difference,
                      require, error_type, "path-endpoint-tamper")
+    _run_sequential_canary(compare, first_difference, require, error_type)
     return evidence

@@ -185,6 +185,9 @@ set(ISTA_STAGE6_RECOVERY_SOURCES
     timing_dual_csr/DualCsrFunctionalTimingJson.cpp
     timing_dual_csr/DualCsrReceiptJsonCommon.cpp
     timing_incremental_levelization/DualCsrModeRecoveryReplayTest.cpp
+    timing_incremental_levelization/DualCsrModeRecoveryRealReplay.cpp
+    timing_dual_csr/DualCsrTargetedArtifactSupport.cpp
+    timing_edit/oracle/ProductionFreshSessionLoader.cpp
     timing_dual_csr/DualCsrStructuredBatchTestSupport.cpp
     timing_edit/StaTimingEditSessionProbeAccess.cpp
     timing_edit/StaTimingEditCsrReceiptProbe.cpp
@@ -216,10 +219,12 @@ target_include_directories(ista_stage6_mode_recovery_replay_test
     ${ISTA_BENCHMARK}/dual_csr
     ${ISTA_TEST}/timing_dual_csr
     ${ISTA_TEST}/timing_edit
+    ${ISTA_TEST}/timing_edit/oracle
 )
 target_link_libraries(ista_stage6_mode_recovery_replay_test
     PRIVATE
     ${ISTA_STAGE6_RECOVERY_LINKS}
+    ista_source idm
 )
 target_compile_features(
     ista_stage6_mode_recovery_replay_test PRIVATE cxx_std_20)
@@ -288,3 +293,17 @@ set_tests_properties(ista_stage6_active_payload_microcase_test PROPERTIES
     LABELS "ista_unit;ista_cpu;ista_incremental_levelization;ista_timing_incremental_levelization;ista_transaction"
     TIMEOUT 120
 )
+
+# Functional replay carries no selector receipt; the artifact entry remains strict.
+if(ECC_INCREGPUSTA_DEBUG_CHECKS)
+  add_test(NAME ista_stage6_replay_program_input
+      COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_LIST_DIR}/timing_edit/test_replay_program_input.py"
+      --probe "$<TARGET_FILE:ista_stage6_production_fresh_probe>"
+      --controller "${CMAKE_CURRENT_LIST_DIR}/timing_incremental_levelization/incremental_levelization_controller.py"
+      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
+      --run-root "${CMAKE_CURRENT_BINARY_DIR}/stage6-controller/replay-input")
+  set_tests_properties(ista_stage6_replay_program_input PROPERTIES
+      LABELS "ista_integration;ista_cpu;ista_diagnostic;ista_incremental_levelization"
+      TIMEOUT 360 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+endif()

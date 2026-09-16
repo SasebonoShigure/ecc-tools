@@ -78,7 +78,7 @@ def _start_seeds(
         crpr_transition: model.Transition | None = None
 
         if instance is not None and candidate.instances[instance].is_sequential:
-            availability = model.StartSeedAvailability.UNSUPPORTED_SEQUENTIAL
+            availability = model.StartSeedAvailability.DEFERRED_SEQUENTIAL
             clock_node = facts.clock_node_by_instance[instance]
             output_node = facts.output_node_by_instance[instance]
             reachable = clock_node is not None and facts.clock_reachable_nodes[clock_node]
@@ -238,40 +238,23 @@ def _unsupported(
             _fail(f"net arc {arc.arc_id} disabled flag differs from divider predicate")
         divider |= is_divider
 
-    has_crpr = False
     for seed in candidate.start_seeds:
         if (seed.crpr_node is None) != (seed.crpr_transition is None):
             _fail("start seed has a one-sided CRPR pair")
-        has_crpr |= seed.crpr_node is not None
 
-    conditional = any(
-        child.signature.sdf_condition
-        for cell in candidate.referenced_library_cells
-        for arc in cell.cell_arcs
-        for child in arc.transfer.children
-    ) or any(
-        child.signature.sdf_condition
-        for cell in candidate.referenced_library_cells
-        for check in cell.timing_checks
-        for child in check.children
-    )
     conditions = (
-        bool(candidate.parasitics.nets),
-        any(instance.is_sequential for instance in candidate.instances),
-        any(seed.path_source == model.PathSource.REGISTER for seed in candidate.start_seeds),
-        bool(candidate.timing_check_endpoints),
-        has_crpr,
-        any(clock.propagated for clock in candidate.clocks),
-        any(facts.replayed_clock_arcs),
-        divider or any(instance.is_clock_gating for instance in candidate.instances),
-        conditional,
-        bool(candidate.case_analysis_constraints),
+        (model.UnsupportedReason.PARASITIC_NET, bool(candidate.parasitics.nets)),
+        (
+            model.UnsupportedReason.PROPAGATED_CLOCK,
+            any(clock.propagated for clock in candidate.clocks),
+        ),
+        (
+            model.UnsupportedReason.CLOCK_GATING_OR_DIVIDER,
+            divider or any(instance.is_clock_gating for instance in candidate.instances),
+        ),
+        (model.UnsupportedReason.CASE_ANALYSIS, bool(candidate.case_analysis_constraints)),
     )
-    expected = tuple(
-        reason
-        for reason, present in zip(model.UnsupportedReason, conditions, strict=True)
-        if present
-    )
+    expected = tuple(reason for reason, present in conditions if present)
     if candidate.unsupported_reasons != expected:
         _fail("candidate unsupported reasons differ from exact derived predicates")
     return expected

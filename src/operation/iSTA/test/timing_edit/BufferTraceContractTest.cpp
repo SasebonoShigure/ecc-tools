@@ -17,6 +17,10 @@
 #include "BufferTraceJson.hpp"
 #include "TimingEditValidation.hpp"
 
+namespace ista::buffer_trace {
+void testArtifactLists(ReplayProgram program);
+}
+
 namespace {
 
 using namespace ista;
@@ -146,11 +150,12 @@ ReplayProgram realProgram()
       .workload = RealReplayPayload{
           .artifacts = SourceArtifactRefs{
               .tech_lef = {"/fixture/tech.lef"},
-              .cell_lef = {"/fixture/cell.lef"},
-              .liberty = {"/fixture/stage4.lib"},
+              .cell_lefs = {{"/fixture/cell.lef"}},
+              .liberties = {{"/fixture/stage4.lib"}},
               .verilog = {"/fixture/design.v"},
               .sdc = {"/fixture/design.sdc"},
-              .top = "stage4_buffer_fanout"},
+              .top = "stage4_buffer_fanout",
+              .analysis_context = {"slow", "25", "__no_rc_corner__"}},
           .baseline = baseline(),
           .batches = {plan(
               0, timing_edit::ExistingNetRef{"fanout"}, real_token)}}};
@@ -267,7 +272,7 @@ void testTaggedUnionAndFiveSourceRolesFailClosed()
 
   program = realProgram();
   auto& artifacts = std::get<RealReplayPayload>(program.workload).artifacts;
-  artifacts.cell_lef.path = artifacts.tech_lef.path;
+  artifacts.cell_lefs.front().path = artifacts.tech_lef.path;
   require(hasCode(validateReplayProgram(program),
                   BufferTraceContractCode::kInvalidSourceArtifacts),
           "aliased real tech/cell LEF paths were accepted");
@@ -659,6 +664,7 @@ void testGenerationNumericDecisionMatrix()
 
 int main()
 {
+  testArtifactLists(realProgram());
   testValidTaggedUnionAndCreatedNetChain();
   testTaggedUnionAndFiveSourceRolesFailClosed();
   testRealComparabilityAndEnvironmentAreExact();

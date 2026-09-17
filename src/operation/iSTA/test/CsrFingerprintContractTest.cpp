@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -145,6 +146,36 @@ void testSha256AndPrimitiveEncoding()
   require(sha256Hex(fifty_five_a) == "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318", "55-byte SHA-256");
   const std::vector<std::uint8_t> fifty_six_a(56, 'a');
   require(sha256Hex(fifty_six_a) == "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a", "56-byte SHA-256");
+
+  for (const std::size_t size : {0U, 3U, 55U, 56U, 63U, 64U, 65535U, 65536U, 65537U, 1000000U}) {
+    std::string payload(size, '\0');
+    for (std::size_t index = 0; index < size; ++index)
+      payload[index] = static_cast<char>(index % 251);
+    std::istringstream stream(payload);
+    require(sha256Hex(stream, size)
+                == sha256Hex(std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size())),
+            "stream SHA-256 disagrees at block/padding boundary");
+  }
+  for (const auto size : {2U, 4U}) {
+    std::istringstream stream("abc");
+    bool rejected = false;
+    try {
+      static_cast<void>(sha256Hex(stream, size));
+    } catch (const std::runtime_error&) {
+      rejected = true;
+    }
+    require(rejected, "stream SHA-256 accepted an incorrect declared size");
+  }
+  std::istringstream failed_stream;
+  failed_stream.setstate(std::ios::badbit);
+  bool read_failed = false;
+  try {
+    static_cast<void>(sha256Hex(failed_stream, 0));
+  } catch (const std::runtime_error&) {
+    read_failed = true;
+  }
+  require(read_failed, "stream SHA-256 accepted failed input");
 
   CanonicalEncoder signed_values;
   signed_values.appendI32(0);

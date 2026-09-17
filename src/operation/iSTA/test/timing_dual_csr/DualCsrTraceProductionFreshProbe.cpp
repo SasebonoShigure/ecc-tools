@@ -50,14 +50,15 @@ std::string readText(const fs::path& path)
           std::istreambuf_iterator<char>()};
 }
 
-void writeText(const fs::path& path, std::string_view text)
+void writeJson(const fs::path& path, const Json& value)
 {
   if (!path.parent_path().empty())
     fs::create_directories(path.parent_path());
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   if (!output)
     fail("cannot write " + path.string());
-  output << text;
+  output << value;
+  output.close();
   if (!output)
     fail("failed while writing " + path.string());
 }
@@ -125,7 +126,7 @@ void fresh(const Options& options)
   auto receipt = timing_dual_csr::test::runProductionFreshSemanticPrefix(
       artifact.replay, static_cast<std::size_t>(prefix));
   Json envelope{
-      {"schema_version", "ista-dual-csr-trace-process/1.0.0"},
+      {"schema_version", "ista-dual-csr-trace-process/2.0.0"},
       {"role", "fresh-oracle"},
       {"prefix_batches", prefix},
       {"functional",
@@ -139,7 +140,7 @@ void fresh(const Options& options)
                 {"guarded_work_invocation_count",
                  receipt.guarded_work_invocation_count},
                 {"one_shot_state", "finished"}}}};
-  writeText(options.at("--output"), envelope.dump(2));
+  writeJson(options.at("--output"), envelope);
 }
 
 Json phaseTimings(const std::vector<timing_dual_csr::DualCsrBatchPhaseTimings>& values)
@@ -178,8 +179,8 @@ void targeted(const Options& options)
     fail("targeted adapter did not finish its one-shot state");
 
   if constexpr (!incregpusta_debug_checks_enabled) {
-    writeText(options.at("--output"),
-              timing_dual_csr::test::performanceResultToJson(result.replay, prefix, phaseTimings(result.replay.envelope.batch_phase_timings)).dump(2));
+    writeJson(options.at("--output"),
+              timing_dual_csr::test::performanceResultToJson(result.replay, prefix, phaseTimings(result.replay.envelope.batch_phase_timings)));
     return;
   }
 
@@ -194,12 +195,12 @@ void targeted(const Options& options)
           timing_dual_csr::test::structuralReceiptToJson(
               observation.structural)}});
   }
-  Json envelope{{"schema_version", "ista-dual-csr-trace-process/1.0.0"},
+  Json envelope{{"schema_version", "ista-dual-csr-trace-process/2.0.0"},
                 {"role", "targeted-under-test"},
                 {"prefix_batches", prefix},
                 {"receipt_validated", true},
                 {"published_observations", std::move(observations)},
-                {"exact_receipt", timing_dual_csr::test::exactReceiptToJson(result.replay.exact_receipt.value())},
+                {"transaction_receipt", timing_dual_csr::test::transactionReceiptToJson(result.replay.transaction_receipt.value())},
                 {"source_isolation", timing_dual_csr::test::sourceIsolationToJson(result.source_isolation)},
                 {"run",
                  {{"child_pid", static_cast<std::uint64_t>(::getpid())},
@@ -210,7 +211,7 @@ void targeted(const Options& options)
                   {"baseline_factory_calls_inside_targeted", result.replay.envelope.baseline_factory_calls_inside_targeted},
                   {"batch_phase_timings", phaseTimings(result.replay.envelope.batch_phase_timings)},
                   {"batch_resource_observations", timing_dual_csr::test::resourceObservationsToJson(result.replay.envelope.batch_resource_observations)}}}};
-  writeText(options.at("--output"), envelope.dump(2));
+  writeJson(options.at("--output"), envelope);
 }
 
 }  // namespace

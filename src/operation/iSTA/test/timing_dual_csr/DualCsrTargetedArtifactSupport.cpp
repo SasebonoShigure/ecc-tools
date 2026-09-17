@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include "CsrFingerprint.hpp"
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -185,16 +186,16 @@ std::vector<SourceArtifactFunctionalRecord> captureArtifacts(
     if (error || size > static_cast<std::uintmax_t>(
                             std::numeric_limits<std::streamsize>::max()))
       artifactFail("source artifact size cannot be captured exactly");
-    std::string bytes(static_cast<std::size_t>(size), '\0');
-    input.read(bytes.data(), static_cast<std::streamsize>(size));
-    if (input.bad()
-        || input.gcount() != static_cast<std::streamsize>(size)
-        || input.peek() != std::char_traits<char>::eof())
-      artifactFail("source artifact bytes cannot be captured exactly");
+    std::string digest;
+    try {
+      digest = csr::sha256Hex(input, size);
+    } catch (const std::exception& error) {
+      artifactFail(error.what());
+    }
     result.push_back(
         {files[index].role, files[index].logical_name,
-         canonical.string(), static_cast<std::uint64_t>(bytes.size()),
-         std::move(bytes)});
+         canonical.string(), static_cast<std::uint64_t>(size),
+         digest});
   }
   return result;
 }

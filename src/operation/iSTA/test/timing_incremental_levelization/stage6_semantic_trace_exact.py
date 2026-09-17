@@ -2,11 +2,10 @@
 """Exact Stage 6 binding for the persisted normalized semantic plan."""
 
 import copy
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from dual_csr_transaction_validator import normalize_plan
-
-
 
 
 def validate_exact_semantic_trace(value: dict[str, Any],
@@ -14,9 +13,7 @@ def validate_exact_semantic_trace(value: dict[str, Any],
                                   exact_difference: Callable,
                                   require: Callable,
                                   label: str) -> None:
-    exact = value.get("exact_receipt")
-    require(isinstance(exact, dict), f"{label}.exact_receipt is absent")
-    transaction = exact.get("transaction")
+    transaction = value.get("transaction_receipt")
     require(isinstance(transaction, dict),
             f"{label}.transaction is absent")
     semantic = transaction.get("semantic_trace")
@@ -41,17 +38,17 @@ def run_semantic_trace_exact_canary(exact_difference: Callable,
         "edits": [{"rc_inputs": {"kind": "no_parasitic"}}],
     }
     expected = normalize_plan(batch)
-    value = {"exact_receipt": {"transaction": {
+    value = {"transaction_receipt": {
         "semantic_trace": [expected],
-    }}}
+    }}
     validate_exact_semantic_trace(
         value, [batch], exact_difference, require, "semantic-canary")
     tampered = copy.deepcopy(value)
-    tampered["exact_receipt"]["transaction"]["semantic_trace"][0][
+    tampered["transaction_receipt"]["semantic_trace"][0][
         "baseline"]["canonical_pre_state"]["active_arcs"][0][
             "delay"] += tamper_delta
     mismatch = tolerant_difference(
-        tampered["exact_receipt"]["transaction"]["semantic_trace"],
+        tampered["transaction_receipt"]["semantic_trace"],
         [expected], "semantic-canary.tolerant")
     require(mismatch is None,
             "semantic float canary must be below Stage2 timing tolerance")

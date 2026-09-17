@@ -2,6 +2,7 @@
 """Run and validate the production-loader first-empty generation boundary."""
 
 import argparse
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -68,7 +69,7 @@ def validate(value: object, artifacts: list[pathlib.Path]) -> None:
         "first-empty receipt",
     )
     expected_scalars = {
-        "schema_version": "buffer-first-empty-receipt/1.0.0",
+        "schema_version": "buffer-first-empty-receipt/2.0.0",
         "error_code": "invalid_generated_artifact",
         "error_what": (
             "invalid_generated_artifact: empty_accepted_batch: "
@@ -108,17 +109,18 @@ def validate(value: object, artifacts: list[pathlib.Path]) -> None:
     roles = ["tech_lef", "cell_lef", "liberty", "verilog", "sdc"]
     for index, (role, path) in enumerate(zip(roles, artifacts, strict=True)):
         canonical = path.resolve(strict=True)
-        exact_bytes = canonical.read_bytes()
+        with canonical.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
         item = observed[index]
         if item["role"] != role:
             raise FirstEmptyError(f"artifact {index} role differs")
         logical_name = f"0-{canonical.name}" if role in ("cell_lef", "liberty") else canonical.name
         if item["logical_name"] != logical_name or canonical_paths[index].name != canonical.name:
             raise FirstEmptyError(f"artifact {role} logical name differs")
-        if item["size"] != len(exact_bytes):
+        if item["size"] != canonical.stat().st_size:
             raise FirstEmptyError(f"artifact {role} byte size differs")
-        if item["bytes_hex"] != exact_bytes.hex():
-            raise FirstEmptyError(f"artifact {role} exact bytes differ")
+        if item["sha256"] != digest:
+            raise FirstEmptyError(f"artifact {role} SHA-256 differs")
     validate_derived_freshness(
         value["derived_timing_freshness"],
         "synthetic",

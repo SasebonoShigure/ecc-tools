@@ -392,17 +392,9 @@ nlohmann::json structuralReceiptToJson(
           {"update_telemetry", telemetry(receipt.update_telemetry)}};
 }
 
-nlohmann::json exactReceiptToJson(const DualCsrExactReceipt& receipt)
+nlohmann::json transactionReceiptToJson(const DualCsrTransactionReceipt& transaction)
 {
-  const auto& transaction = receipt.transaction;
-  return {
-      {"schema", receipt.schema},
-      {"published",
-       {{"functional",
-         functionalSemanticReceiptToJson(receipt.published.functional)},
-        {"structural", structuralReceiptToJson(receipt.published.structural)}}},
-      {"transaction",
-       {{"session_token", transaction.session_token.value()},
+  return {{"session_token", transaction.session_token.value()},
         {"generation", transaction.generation.value()},
         {"baseline_reference_input",
          semantic_json::referenceInput(
@@ -418,7 +410,7 @@ nlohmann::json exactReceiptToJson(const DualCsrExactReceipt& receipt)
         {"execution_trace",
          arrayOf(transaction.execution_trace, executionTrace)},
         {"update_telemetry", telemetry(transaction.update_telemetry)},
-        {"evidence", evidence(transaction.evidence)}}}};
+        {"evidence", evidence(transaction.evidence)}};
 }
 
 }  // namespace ista::timing_dual_csr::test

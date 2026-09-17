@@ -43,7 +43,7 @@ from stage6_winner_equivalence import (  # noqa: E402
     compare_timing_with_admissible_winners,
 )
 
-WIRE_SCHEMA = "ista-stage6-trace-process/2.0.0"
+WIRE_SCHEMA = "ista-stage6-trace-process/3.0.0"
 LEVEL_FIELDS = {
     "level_offsets", "level_nodes", "node_to_level", "timing_order",
 }
@@ -279,7 +279,7 @@ def validate_synthetic_second_batch(transaction: dict[str, Any],
 def validate_mixed_execution(targeted: dict[str, Any], prefix: int,
                              trace_name: str,
                              label: str) -> list[dict[str, Any]]:
-    transaction = targeted["exact_receipt"]["transaction"]
+    transaction = targeted["transaction_receipt"]
     records = transaction["execution_trace"]
     observations = targeted["published_observations"]
     require(len(records) == prefix == len(observations),
@@ -432,8 +432,8 @@ def replay(args: argparse.Namespace) -> None:
                 f"prefix {prefix} did not use two new isolated processes")
         all_pids |= pids
         observations = targeted["published_observations"]
-        for index, prior in enumerate(prior_observations):
-            difference = first_exact_difference(observations[index], prior)
+        for index in range(len(prior_observations)):
+            difference = first_exact_difference(observations[index], prior_observations[index])
             require(difference is None,
                     f"prefix {prefix} changed prior observation: {difference}")
         prior_observations = observations
@@ -464,6 +464,8 @@ def replay(args: argparse.Namespace) -> None:
             "batch_phase_timings": timings,
             "batch_resource_observations": resources,
         })
+        del targeted, fresh, targeted_functional, fresh_functional
+        del targeted_levels, fresh_levels, target_source, fresh_source
     write_json(root / "controller-summary.json", {
         "schema_version": "ista-stage6-differential-verdict/2.0.0",
         "trace": str(trace),

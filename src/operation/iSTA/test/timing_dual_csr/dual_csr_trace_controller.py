@@ -2,7 +2,6 @@
 """Three-process Stage 5 frozen-trace functional acceptance controller."""
 
 import argparse
-import concurrent.futures
 import json
 import math
 import os
@@ -23,8 +22,7 @@ from dual_csr_timing_evidence import (
 from dual_csr_trace_controller_selftest import run_controller_self_test
 from dual_csr_transaction_validator import validate_transaction as validate_full_transaction
 
-WIRE_SCHEMA = "ista-dual-csr-trace-process/1.0.0"
-EXACT_SCHEMA = "ista-dual-csr-exact-receipt/1.4.0"
+WIRE_SCHEMA = "ista-dual-csr-trace-process/2.0.0"
 ABS_TOLERANCE = 1.0e-9
 REL_TOLERANCE = 1.0e-9
 
@@ -46,9 +44,9 @@ def read_json(path: pathlib.Path) -> dict[str, Any]:
 
 def write_json(path: pathlib.Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    with path.open("w", encoding="utf-8") as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write("\n")
 
 
 def numeric_equal(left: object, right: object) -> bool:
@@ -248,17 +246,20 @@ def validate_structural(value: object, generation: int, label: str) -> dict[str,
 
 
 def normalized_source(value: object, label: str) -> dict[str, Any]:
-    require(isinstance(value, dict), f"{label} must be an object")
+    if not isinstance(value, dict):
+        raise ControllerError(f"{label} must be an object")
     require(value.get("source_unchanged") is True
             and value.get("artifacts_before") == value.get("artifacts_after")
             and value.get("idb_before") == value.get("idb_after"),
             f"{label} source evidence changed")
-    result = json.loads(json.dumps(value))
+    result = dict(value)
     for field in ("artifacts_before", "artifacts_after"):
-        for artifact in result[field]:
+        result[field] = []
+        for artifact in value[field]:
             require(pathlib.Path(artifact["canonical_path"]).is_absolute(),
                     f"{label} contains a non-absolute source path")
-            del artifact["canonical_path"]
+            result[field].append({key: item for key, item in artifact.items()
+                                  if key != "canonical_path"})
     return result
 
 
@@ -291,21 +292,6 @@ def validate_targeted(value: dict[str, Any], prefix: int,
             f"{label} envelope differs")
     require(value.get("receipt_validated") is True,
             f"{label} did not seal a validated exact receipt")
-    exact = value.get("exact_receipt")
-    require(isinstance(exact, dict) and exact.get("schema") == EXACT_SCHEMA,
-            f"{label} exact receipt schema differs")
-    published = exact.get("published")
-    require(isinstance(published, dict), f"{label} published receipt is absent")
-    structural = validate_structural(
-        published.get("structural"), prefix, f"{label}.structural"
-    )
-    functional = published.get("functional")
-    require(isinstance(functional, dict), f"{label} functional receipt is absent")
-    validate_full_transaction(
-        exact.get("transaction"), prefix, structural, functional, expected_batches,
-        f"{label}.transaction", require,
-        lambda left, right, path: first_difference(left, right, path),
-    )
     observations = value.get("published_observations")
     require(isinstance(observations, list) and len(observations) == prefix,
             f"{label} published observation count differs")
@@ -317,8 +303,16 @@ def validate_targeted(value: dict[str, Any], prefix: int,
         validate_structural(
             observation["structural"], index + 1,
             f"{label}.published_observations[{index}].structural")
-    require(observations[-1] == published,
-            f"{label} final published observation differs")
+    published = observations[-1]
+    functional = published["functional"]
+    transaction = value.get("transaction_receipt")
+    if not isinstance(transaction, dict):
+        raise ControllerError(f"{label}.transaction_receipt must be an object")
+    validate_full_transaction(
+        transaction, prefix, published["structural"], functional, expected_batches,
+        f"{label}.transaction", require,
+        lambda left, right, path: first_difference(left, right, path),
+    )
     run = value.get("run")
     require(isinstance(run, dict) and run.get("child_pid", 0) > 0
             and run.get("loader_invocation_count") == 1
@@ -332,7 +326,7 @@ def validate_targeted(value: dict[str, Any], prefix: int,
         f"{label}.run.batch_phase_timings", require)
     resources = validate_resource_observations(
         run.get("batch_resource_observations"), observations,
-        exact["transaction"], prefix,
+        transaction, prefix,
         f"{label}.run.batch_resource_observations", require)
     normalized_source(value.get("source_isolation"), f"{label}.source_isolation")
     return functional, timings, resources
@@ -377,17 +371,10 @@ def replay(args: argparse.Namespace) -> None:
     for prefix in range(1, len(batches) + 1):
         target_output = root / f"prefix-{prefix}" / "targeted.json"
         fresh_output = root / f"prefix-{prefix}" / "fresh.json"
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            target_future = executor.submit(
-                run_child, probe, "targeted", trace, prefix, target_output,
-                args.timeout_seconds,
-            )
-            fresh_future = executor.submit(
-                run_child, probe, "fresh", trace, prefix, fresh_output,
-                args.timeout_seconds,
-            )
-            targeted, targeted_wall_ms = target_future.result()
-            fresh, fresh_oracle_ms = fresh_future.result()
+        targeted, targeted_wall_ms = run_child(
+            probe, "targeted", trace, prefix, target_output, args.timeout_seconds)
+        fresh, fresh_oracle_ms = run_child(
+            probe, "fresh", trace, prefix, fresh_output, args.timeout_seconds)
         targeted_functional, phase_timings, resources = validate_targeted(
             targeted, prefix, batches[:prefix], f"targeted prefix {prefix}"
         )
@@ -408,8 +395,8 @@ def replay(args: argparse.Namespace) -> None:
                 f"prefix {prefix} did not use two new child processes")
         all_pids |= pids
         observations = targeted["published_observations"]
-        for index, prior in enumerate(prior_observations):
-            difference = first_difference(observations[index], prior)
+        for index in range(len(prior_observations)):
+            difference = first_difference(observations[index], prior_observations[index])
             require(difference is None,
                     f"prefix {prefix} changed observation {index + 1}: {difference}")
         prior_observations = observations
@@ -430,6 +417,8 @@ def replay(args: argparse.Namespace) -> None:
             "batch_phase_timings": phase_timings,
             "batch_resource_observations": resources,
         })
+        del targeted, fresh, targeted_functional, fresh_functional
+        del target_source, fresh_source
     write_json(root / "controller-summary.json", {
         "schema_version": "ista-dual-csr-differential-verdict/1.0.0",
         "trace": str(trace),

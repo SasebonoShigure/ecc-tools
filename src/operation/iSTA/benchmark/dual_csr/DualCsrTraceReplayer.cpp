@@ -548,7 +548,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
                                      .executed_mode = committed_result.execution_trace.back().mode(),
                                      .native_final_rollback_completed = true};
   if constexpr (!incregpusta_debug_checks_enabled) {
-    return {.exact_receipt = std::nullopt,
+    return {.transaction_receipt = std::nullopt,
             .result = actual,
             .published_observations = {},
             .envelope = {.batch_phase_timings = std::move(phase_timings), .batch_resource_observations = {}}};
@@ -570,12 +570,13 @@ DualCsrTraceRunResult replayPrefixWithMode(
                           prefix_batches);
 
   auto exact = finalizeDualCsrExactReceipt(
-      coordinator.committed(), observations.back(),
+      coordinator.committed(), std::move(observations.back()),
       context.baseline_reference_input, std::move(evidence));
   if (!exact.success())
     fail(DualCsrTraceFailureCode::kReceiptRejected,
          "final rollback evidence could not seal the exact receipt");
-  return {.exact_receipt = std::move(*exact.receipt),
+  observations.back() = std::move(exact.receipt->published);
+  return {.transaction_receipt = std::move(exact.receipt->transaction),
           .result = actual,
           .published_observations = std::move(observations),
           .envelope

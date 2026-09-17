@@ -597,7 +597,8 @@ int main(int argc, char** argv)
       replayCrossBuild(argv[4], mode, *snapshots);
     if (snapshots) {
       std::ofstream stream(output);
-      stream << snapshots->dump(2) << '\n';
+      stream << *snapshots << '\n';
+      stream.close();
       require(bool(stream), "cross-build output write failed");
     }
     std::cout << "CUDA persistent Dual-CSR Aux/seed/ownership contracts passed\n";

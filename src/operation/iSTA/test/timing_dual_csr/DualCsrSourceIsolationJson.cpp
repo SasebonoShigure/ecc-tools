@@ -13,25 +13,13 @@ namespace {
 
 using Json = nlohmann::json;
 
-std::string bytesHex(std::string_view value)
-{
-  constexpr char digits[] = "0123456789abcdef";
-  std::string result;
-  result.reserve(value.size() * 2);
-  for (const unsigned char byte : value) {
-    result.push_back(digits[byte >> 4]);
-    result.push_back(digits[byte & 0x0f]);
-  }
-  return result;
-}
-
 Json artifact(const buffer_trace::SourceArtifactFunctionalRecord& value)
 {
   return {{"role", value.role},
           {"logical_name", value.logical_name},
           {"canonical_path", value.canonical_path},
           {"size", value.size},
-          {"bytes_hex", bytesHex(value.exact_bytes)}};
+          {"sha256", value.sha256}};
 }
 
 Json pin(const buffer_trace::SourcePinFunctionalRecord& value)

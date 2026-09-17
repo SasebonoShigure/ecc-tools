@@ -55,29 +55,16 @@ fs::path requireRegularFile(const fs::path& path, std::string_view role)
   return canonical;
 }
 
-std::vector<std::uint8_t> readBytes(const fs::path& path)
-{
-  std::ifstream input(path, std::ios::binary);
-  if (!input) {
-    fail("cannot open source artifact");
-  }
-  input.seekg(0, std::ios::end);
-  const std::streamoff size = input.tellg();
-  if (size < 0) {
-    fail("cannot size source artifact");
-  }
-  input.seekg(0, std::ios::beg);
-  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-  if (size != 0 && !input.read(reinterpret_cast<char*>(bytes.data()), size)) {
-    fail("cannot read source artifact");
-  }
-  return bytes;
-}
-
 FreshArtifactEvidence evidence(const FreshArtifactFile& file)
 {
-  const std::vector<std::uint8_t> bytes = readBytes(file.path);
-  return {file.role, file.logical_name, csr::sha256Hex(std::span<const std::uint8_t>(bytes))};
+  std::ifstream input(file.path, std::ios::binary);
+  if (!input)
+    fail("cannot open source artifact");
+  try {
+    return {file.role, file.logical_name, csr::sha256Hex(input, fs::file_size(file.path))};
+  } catch (const std::exception& error) {
+    fail(error.what());
+  }
 }
 
 std::map<std::string, std::any> makeConfig(const fs::path& run_directory)

@@ -457,7 +457,8 @@ void runtimeRecoveryContract(const char* output)
                           {"after_two_batch_replay", functionalSemanticReceiptToJson(*replayed.receipt)},
                           {"generation", current.generation.value()}};
     std::ofstream file(output);
-    file << result.dump(2);
+    file << result;
+    file.close();
     require(static_cast<bool>(file), "could not write development comparison output");
   }
 }

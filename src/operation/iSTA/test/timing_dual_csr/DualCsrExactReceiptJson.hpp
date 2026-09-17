@@ -13,7 +13,7 @@ namespace ista::timing_dual_csr::test {
 
 [[nodiscard]] nlohmann::json structuralReceiptToJson(
     const DualCsrStructuralReceipt& receipt);
-[[nodiscard]] nlohmann::json exactReceiptToJson(
-    const DualCsrExactReceipt& receipt);
+[[nodiscard]] nlohmann::json transactionReceiptToJson(
+    const DualCsrTransactionReceipt& receipt);
 
 }  // namespace ista::timing_dual_csr::test

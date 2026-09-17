@@ -90,7 +90,7 @@ std::string readText(const fs::path& path)
   return value;
 }
 
-void writeText(const fs::path& path, std::string_view value)
+void writeOutput(const fs::path& path, const auto& value)
 {
   const fs::path parent = path.parent_path();
   std::error_code error;
@@ -104,7 +104,7 @@ void writeText(const fs::path& path, std::string_view value)
   if (!output) {
     fail("cannot open output " + path.string());
   }
-  output.write(value.data(), static_cast<std::streamsize>(value.size()));
+  output << value;
   output.put('\n');
   output.close();
   if (!output) {
@@ -194,25 +194,13 @@ const char* stateToken(OneShotProcessState state)
   fail("unknown one-shot state");
 }
 
-std::string bytesHex(std::string_view value)
-{
-  constexpr char digits[] = "0123456789abcdef";
-  std::string result;
-  result.reserve(value.size() * 2);
-  for (const unsigned char byte : value) {
-    result.push_back(digits[byte >> 4]);
-    result.push_back(digits[byte & 0x0f]);
-  }
-  return result;
-}
-
 Json artifact(const SourceArtifactFunctionalRecord& value)
 {
   return {{"role", value.role},
           {"logical_name", value.logical_name},
           {"canonical_path", value.canonical_path},
           {"size", value.size},
-          {"bytes_hex", bytesHex(value.exact_bytes)}};
+          {"sha256", value.sha256}};
 }
 
 Json sourcePin(const SourcePinFunctionalRecord& value)
@@ -380,7 +368,7 @@ ReplayReceipt runReplay(BufferTraceProductionFreshAdapter& adapter,
 Json replayEnvelope(BufferTraceProductionFreshAdapter& adapter,
                     const ReplayReceipt& receipt, std::uint64_t repetition)
 {
-  return {{"schema_version", "buffer-replay-probe/1.0.0"},
+  return {{"schema_version", "buffer-replay-probe/2.0.0"},
           {"functional", replayReceiptToJson(receipt)},
           {"source_isolation", sourceIsolation(adapter.sourceIsolationReceipt())},
           {"derived_timing_freshness",
@@ -408,8 +396,8 @@ void replayMode(const Options& options)
   BufferTraceProductionFreshAdapter adapter;
   ReplayReceipt receipt
       = runReplay(adapter, parsed.replay, static_cast<std::size_t>(prefix));
-  writeText(option(options, "--output"),
-            replayEnvelope(adapter, receipt, repetition).dump(2));
+  writeOutput(option(options, "--output"),
+            replayEnvelope(adapter, receipt, repetition));
 }
 
 void templateMode(const Options& options, bool synthetic)
@@ -454,7 +442,7 @@ void templateMode(const Options& options, bool synthetic)
         .baseline = {},
         .batches = {}};
   }
-  writeText(option(options, "--output"),
+  writeOutput(option(options, "--output"),
             replayTemplateToJson({header, std::move(payload)}));
 }
 
@@ -476,10 +464,10 @@ void generateMode(const Options& options)
        .case_id = option(options, "--case-id"),
        .seed = seed});
   test_support::requireProductionGenerationGain(generated);
-  writeText(option(options, "--trace-output"),
+  writeOutput(option(options, "--trace-output"),
             bufferTraceArtifactToJson(generated.artifact));
-  writeText(option(options, "--output"),
-            replayEnvelope(adapter, generated.functional_receipt, 0).dump(2));
+  writeOutput(option(options, "--output"),
+            replayEnvelope(adapter, generated.functional_receipt, 0));
 }
 
 void firstEmptyMode(const Options& options)
@@ -541,9 +529,9 @@ void firstEmptyMode(const Options& options)
       || adapter.oneShotState() != OneShotProcessState::kFinished) {
     fail("first empty failure touched generation, loader, or guarded state");
   }
-  writeText(
+  writeOutput(
       option(options, "--output"),
-      Json{{"schema_version", "buffer-first-empty-receipt/1.0.0"},
+      Json{{"schema_version", "buffer-first-empty-receipt/2.0.0"},
            {"error_code", "invalid_generated_artifact"},
            {"error_what", error_what},
            {"generation_zero_exact", true},
@@ -555,7 +543,7 @@ void firstEmptyMode(const Options& options)
            {"guarded_work_invocation_count",
             adapter.guardedWorkInvocationCount()},
            {"one_shot_state", stateToken(adapter.oneShotState())}}
-          .dump(2));
+          );
 }
 
 void preloaderRejectionMode(const Options& options)
@@ -600,7 +588,7 @@ void preloaderRejectionMode(const Options& options)
       || adapter.oneShotState() != OneShotProcessState::kFinished) {
     fail("artifact rejection occurred after loader or guarded work entry");
   }
-  writeText(
+  writeOutput(
       option(options, "--output"),
       Json{{"schema_version", "buffer-preloader-rejection/1.0.0"},
            {"error_code", "artifact_materialization_rejected"},
@@ -609,7 +597,7 @@ void preloaderRejectionMode(const Options& options)
            {"guarded_work_invocation_count",
             adapter.guardedWorkInvocationCount()},
            {"one_shot_state", stateToken(adapter.oneShotState())}}
-          .dump(2));
+          );
 }
 
 void doubleInvocationMode(const Options& options)
@@ -646,8 +634,8 @@ void doubleInvocationMode(const Options& options)
       || adapter.oneShotState() != OneShotProcessState::kFinished) {
     fail("typed reuse rejection occurred after entering loader/work");
   }
-  writeText(option(options, "--output"),
-            Json{{"schema_version", "buffer-one-shot-self-test/1.0.0"},
+  writeOutput(option(options, "--output"),
+            Json{{"schema_version", "buffer-one-shot-self-test/2.0.0"},
                  {"first_functional", replayReceiptToJson(first)},
                  {"source_isolation", sourceIsolation(adapter.sourceIsolationReceipt())},
                  {"derived_timing_freshness",
@@ -659,7 +647,7 @@ void doubleInvocationMode(const Options& options)
                  {"guarded_work_invocation_count",
                   adapter.guardedWorkInvocationCount()},
                  {"one_shot_state", stateToken(adapter.oneShotState())}}
-                .dump(2));
+                );
 }
 
 }  // namespace

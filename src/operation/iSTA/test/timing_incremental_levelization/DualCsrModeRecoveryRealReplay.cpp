@@ -123,7 +123,8 @@ void realReplayRecovery(const char* replay, const char* output)
   observations["restored_prefix_batches"] = 1;
   observations["continued_batches"] = plans.size() - 1;
   std::ofstream file(output);
-  file << observations.dump(2) << '\n';
+  file << observations << '\n';
+  file.close();
   require(bool(file), "real recovery output write failed");
 }
 }  // namespace ista::timing_dual_csr::test

@@ -20,6 +20,7 @@
 #include <bit>
 #include <cmath>
 #include <limits>
+#include <istream>
 #include <stdexcept>
 
 #include "TimingSemanticKey.hpp"
@@ -117,22 +118,29 @@ std::string componentFingerprint(std::string_view domain, std::span<const std::u
   return sha256Hex(encoder.bytes());
 }
 
-std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> value)
+namespace {
+
+constexpr std::array<std::uint32_t, 8> kSha256Initial
+    = {0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
+
+void checkSha256Size(std::uint64_t size)
 {
-  if (value.size() > (std::numeric_limits<std::uint64_t>::max() / 8))
+  if (size > std::numeric_limits<std::uint64_t>::max() / 8)
     throw std::length_error("SHA-256 input is too large");
-  std::vector<std::uint8_t> padded(value.begin(), value.end());
-  std::uint64_t bit_length = static_cast<std::uint64_t>(value.size()) * 8;
-  padded.push_back(0x80);
-  while ((padded.size() % 64) != 56)
-    padded.push_back(0);
-  for (int shift = 56; shift >= 0; shift -= 8)
-    padded.push_back(static_cast<std::uint8_t>(bit_length >> shift));
+}
 
-  std::array<std::uint32_t, 8> state = {0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU, 0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U};
-  for (std::size_t offset = 0; offset < padded.size(); offset += 64)
+std::array<std::uint8_t, 32> finishSha256(
+    std::array<std::uint32_t, 8> state, std::span<const std::uint8_t> tail, std::uint64_t size)
+{
+  std::array<std::uint8_t, 128> padded{};
+  std::ranges::copy(tail, padded.begin());
+  padded[tail.size()] = 0x80;
+  const std::size_t length = tail.size() < 56 ? 64 : 128;
+  const std::uint64_t bits = size * 8;
+  for (std::size_t index = 0; index < 8; ++index)
+    padded[length - 1 - index] = static_cast<std::uint8_t>(bits >> (index * 8));
+  for (std::size_t offset = 0; offset < length; offset += 64)
     compressSha256(state, std::span<const std::uint8_t, 64>(padded.data() + offset, 64));
-
   std::array<std::uint8_t, 32> digest{};
   for (std::size_t index = 0; index < state.size(); ++index) {
     digest[index * 4] = static_cast<std::uint8_t>(state[index] >> 24);
@@ -143,16 +151,56 @@ std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> value)
   return digest;
 }
 
-std::string sha256Hex(std::span<const std::uint8_t> value)
+std::string digestHex(const std::array<std::uint8_t, 32>& digest)
 {
   constexpr char kHex[] = "0123456789abcdef";
-  const auto digest = sha256(value);
   std::string result(digest.size() * 2, '\0');
   for (std::size_t index = 0; index < digest.size(); ++index) {
     result[index * 2] = kHex[digest[index] >> 4];
     result[index * 2 + 1] = kHex[digest[index] & 0x0fU];
   }
   return result;
+}
+
+}  // namespace
+
+std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> value)
+{
+  checkSha256Size(value.size());
+  auto state = kSha256Initial;
+  const std::size_t end = value.size() - value.size() % 64;
+  for (std::size_t offset = 0; offset < end; offset += 64)
+    compressSha256(state, std::span<const std::uint8_t, 64>(value.data() + offset, 64));
+  return finishSha256(state, value.subspan(end), value.size());
+}
+
+std::string sha256Hex(std::span<const std::uint8_t> value)
+{
+  return digestHex(sha256(value));
+}
+
+std::string sha256Hex(std::istream& input, std::uint64_t size)
+{
+  checkSha256Size(size);
+  auto state = kSha256Initial;
+  std::array<std::uint8_t, 65536> buffer{};
+  std::uint64_t remaining = size;
+  std::size_t tail = 0;
+  while (remaining != 0) {
+    const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, buffer.size()));
+    input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(count));
+    if (!input || input.gcount() != static_cast<std::streamsize>(count))
+      throw std::runtime_error("cannot read complete SHA-256 source");
+    tail = count % 64;
+    for (std::size_t offset = 0; offset < count - tail; offset += 64)
+      compressSha256(state, std::span<const std::uint8_t, 64>(buffer.data() + offset, 64));
+    if (tail != 0)
+      std::copy_n(buffer.data() + count - tail, tail, buffer.data());
+    remaining -= count;
+  }
+  if (!input || input.peek() != std::char_traits<char>::eof() || input.bad())
+    throw std::runtime_error("SHA-256 source size changed or read failed");
+  return digestHex(finishSha256(state, std::span<const std::uint8_t>(buffer.data(), tail), size));
 }
 
 bool isLowercaseSha256(std::string_view value)

@@ -212,7 +212,8 @@ int main(int argc, char** argv)
     }
     std::ofstream file(options.at("--output"));
     require(bool(file), "cannot open output");
-    file << output.dump(2) << '\n';
+    file << output << '\n';
+    file.close();
     require(bool(file), "output write failed");
     return 0;
   } catch (const std::exception& error) {

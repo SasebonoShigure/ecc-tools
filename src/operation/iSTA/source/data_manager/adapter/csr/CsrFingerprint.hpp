@@ -19,6 +19,7 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <iosfwd>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,6 +44,8 @@ struct FingerprintPayloads
 
 [[nodiscard]] std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> value);
 [[nodiscard]] std::string sha256Hex(std::span<const std::uint8_t> value);
+// Reads exactly size bytes and rejects short, long, or failed input.
+[[nodiscard]] std::string sha256Hex(std::istream& input, std::uint64_t size);
 [[nodiscard]] bool isLowercaseSha256(std::string_view value);
 [[nodiscard]] CsrSnapshotIdentity makeSnapshotIdentity(std::uint64_t session_token, std::uint64_t graph_generation, const FingerprintPayloads& payloads);
 

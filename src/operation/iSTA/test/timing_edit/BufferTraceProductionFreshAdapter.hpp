@@ -37,7 +37,7 @@ struct SourceArtifactFunctionalRecord
   std::string logical_name;
   std::string canonical_path;
   std::uint64_t size{0};
-  std::string exact_bytes;
+  std::string sha256;
   friend bool operator==(const SourceArtifactFunctionalRecord&,
                          const SourceArtifactFunctionalRecord&) = default;
 };

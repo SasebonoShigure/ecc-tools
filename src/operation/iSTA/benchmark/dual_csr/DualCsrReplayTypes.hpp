@@ -83,7 +83,7 @@ struct DualCsrWorkloadResult
 
 struct DualCsrTraceRunResult
 {
-  std::optional<DualCsrExactReceipt> exact_receipt;
+  std::optional<DualCsrTransactionReceipt> transaction_receipt;
   DualCsrWorkloadResult result;
   std::vector<DualCsrPublishedObservation> published_observations;
   DualCsrTraceRunEnvelope envelope;

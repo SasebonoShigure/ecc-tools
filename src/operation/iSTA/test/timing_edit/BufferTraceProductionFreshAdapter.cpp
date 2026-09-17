@@ -12,6 +12,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include "CsrFingerprint.hpp"
 #include <limits>
 #include <memory>
 #include <optional>
@@ -224,16 +225,15 @@ std::vector<SourceArtifactFunctionalRecord> captureSourceArtifacts(
       freshFail(FreshBaselineFailureCode::kArtifactEvidenceMismatch,
                 "source artifact size could not be captured exactly");
     }
-    std::string bytes(static_cast<std::size_t>(size), '\0');
-    input.read(bytes.data(), static_cast<std::streamsize>(size));
-    if (input.bad() || input.gcount() != static_cast<std::streamsize>(size)
-        || input.peek() != std::char_traits<char>::eof()) {
-      freshFail(FreshBaselineFailureCode::kArtifactEvidenceMismatch,
-                "source artifact bytes could not be captured exactly");
+    std::string digest;
+    try {
+      digest = csr::sha256Hex(input, size);
+    } catch (const std::exception& error) {
+      freshFail(FreshBaselineFailureCode::kArtifactEvidenceMismatch, error.what());
     }
     result.push_back({files[index].role, files[index].logical_name,
-                      canonical.string(), static_cast<std::uint64_t>(bytes.size()),
-                      std::move(bytes)});
+                      canonical.string(), static_cast<std::uint64_t>(size),
+                      digest});
   }
   return result;
 }

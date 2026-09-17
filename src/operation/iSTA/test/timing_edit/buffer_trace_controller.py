@@ -2,6 +2,7 @@
 """Process-isolated controller for Stage 4 fixed semantic buffer traces."""
 
 import argparse
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -19,7 +20,7 @@ from buffer_trace_functional_check import (
     workload_kind,
 )
 
-WIRE_SCHEMA = "buffer-replay-probe/1.0.0"
+WIRE_SCHEMA = "buffer-replay-probe/2.0.0"
 SUMMARY_SCHEMA = "buffer-replay-controller/1.0.0"
 
 
@@ -137,15 +138,15 @@ def validate_source_isolation(value: object, label: str) -> dict[str, Any]:
         for item in artifacts:
             require_exact_keys(
                 item,
-                {"role", "logical_name", "canonical_path", "size", "bytes_hex"},
+                {"role", "logical_name", "canonical_path", "size", "sha256"},
                 f"{label}.{field} artifact",
             )
-            if not isinstance(item.get("bytes_hex"), str):
-                raise ControllerError(f"{label}.{field} lacks exact source bytes")
+            if (not isinstance(item.get("sha256"), str)
+                    or len(item["sha256"]) != 64
+                    or any(ch not in "0123456789abcdef" for ch in item["sha256"])):
+                raise ControllerError(f"{label}.{field} has an invalid SHA-256")
             if not isinstance(item.get("size"), int) or item["size"] < 0:
                 raise ControllerError(f"{label}.{field} has an invalid byte size")
-            if item.get("size") * 2 != len(item["bytes_hex"]):
-                raise ControllerError(f"{label}.{field} byte size differs")
     physical = value["idb_before"]
     require_exact_keys(
         physical,
@@ -164,10 +165,10 @@ def validate_source_isolation(value: object, label: str) -> dict[str, Any]:
 
 
 def cross_process_source_isolation(value: dict[str, Any]) -> dict[str, Any]:
-    """Remove only the per-process path while preserving exact source bytes."""
-    normalized = json.loads(json.dumps(value))
+    """Return a read-only comparison view without per-process paths."""
+    normalized = dict(value)
     for field in ("artifacts_before", "artifacts_after"):
-        artifacts = normalized[field]
+        artifacts = value[field]
         if not isinstance(artifacts, list):
             raise ControllerError(f"source isolation {field} must be an array")
         for index, artifact in enumerate(artifacts):
@@ -175,7 +176,10 @@ def cross_process_source_isolation(value: dict[str, Any]) -> dict[str, Any]:
                 raise ControllerError(
                     f"source isolation {field}[{index}] lacks canonical_path"
                 )
-            del artifact["canonical_path"]
+        normalized[field] = [
+            {key: item for key, item in artifact.items() if key != "canonical_path"}
+            for artifact in artifacts
+        ]
     return normalized
 
 
@@ -217,7 +221,7 @@ def validate_source_contents(
                     or item["logical_name"] != evidence_name
                     or paths[index].name != logical_name
                     or item["size"] != len(exact)
-                    or item["bytes_hex"] != exact.hex()):
+                    or item["sha256"] != hashlib.sha256(exact).hexdigest()):
                 raise ControllerError(
                     f"{label} {role} differs from the synthetic recipe")
         return parent
@@ -238,14 +242,15 @@ def validate_source_contents(
         if not isinstance(raw_path, str) or not raw_path:
             raise ControllerError(f"{label} {role} artifact path is malformed")
         canonical = (source_root / raw_path).resolve(strict=True)
-        exact = canonical.read_bytes()
+        with canonical.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
         logical_name = prefix + canonical.name
         item = observed[index]
         if (item["role"] != role
                 or item["logical_name"] != logical_name
                 or pathlib.Path(item["canonical_path"]) != canonical
-                or item["size"] != len(exact)
-                or item["bytes_hex"] != exact.hex()):
+                or item["size"] != canonical.stat().st_size
+                or item["sha256"] != digest):
             raise ControllerError(
                 f"{label} {role} differs from its real source artifact")
     return None
@@ -554,7 +559,7 @@ def self_test() -> None:
             "logical_name": f"0-{suffix}" if role in ("cell_lef", "liberty") else suffix,
             "canonical_path": f"/tmp/ista-buffer-trace-run-a/{suffix}",
             "size": 1,
-            "bytes_hex": source_texts[index].encode("utf-8").hex(),
+            "sha256": hashlib.sha256(source_texts[index].encode("utf-8")).hexdigest(),
         }
         for index, (role, suffix) in enumerate(zip(roles, suffixes, strict=True))
     ]
@@ -608,6 +613,21 @@ def self_test() -> None:
         cross_process_source_isolation(other_root),
     ) is not None:
         raise ControllerError("different temporary roots changed source comparability")
+    view = cross_process_source_isolation(source)
+    if view["idb_before"] is not source["idb_before"]:
+        raise ControllerError("normalization copied the physical projection")
+    if "canonical_path" not in source["artifacts_before"][0]:
+        raise ControllerError("normalization mutated its input")
+    tampered = json.loads(json.dumps(source))
+    for field in ("artifacts_before", "artifacts_after"):
+        tampered[field][0]["sha256"] = hashlib.sha256(b"X").hexdigest()
+    try:
+        validate_source_contents(synthetic_trace, pathlib.Path("/tmp/unused/trace.json"),
+                                 tampered, "same-size tamper")
+    except ControllerError:
+        pass
+    else:
+        raise ControllerError("same-size source tamper was accepted")
     self_test_terminal_empty_round()
     self_test_derived_freshness()
 

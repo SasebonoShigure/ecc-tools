@@ -22,8 +22,16 @@
 #include <utility>
 
 #include "CsrReferenceValidator.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "CsrSessionSnapshotAdapter.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
+#if ISTA_ENABLE_CUDA
+#include "StaCudaSessionState.hpp"
+#include "NativeCandidateExecutor.hpp"
+#include "DataManager.hpp"
+#include "DelayCalculator.hpp"
+#include "StaProductionLifecycle.hpp"
+#endif
 
 namespace ista {
 namespace {
@@ -90,6 +98,45 @@ StaCsrSessionContext::StaCsrSessionContext(csr::StaAnalysisContext context, std:
 
 StaCsrSessionContext::~StaCsrSessionContext() noexcept = default;
 
+csr::detail::NativeLibraryModels& StaCsrSessionContext::libraryModels(Database& database)
+{
+  if (!_library_models)
+    _library_models = std::make_unique<csr::detail::NativeLibraryModels>(database);
+  _library_models->requireDatabase(database);
+  return *_library_models;
+}
+
+#if ISTA_ENABLE_CUDA
+StaCudaSessionState& StaCsrSessionContext::cudaState(const timing_edit::NativeExecutionAuthority& authority)
+{
+  if (!authority.active() || authority.sessionToken().value() != _session_token
+      || !_cuda || _cuda->_poisoned || _cuda->token() != _session_token || _substate == StaCsrSessionSubstate::kReleased)
+    throw std::logic_error("CUDA result access requires the active session operation guard");
+  return *_cuda;
+}
+void StaCsrSessionContext::materializeCudaTiming(Database& database, const timing_edit::NativeExecutionAuthority& authority)
+{
+  if (!authority.readyForQuery() || &database != &STADM.getDatabase())
+    throw std::logic_error("CUDA query requires a committed canonical Database");
+  cudaState(authority).materialize(database);
+}
+void StaCsrSessionContext::prepareCudaReport(Database& database, const timing_edit::NativeExecutionAuthority& authority)
+{
+  materializeCudaTiming(database, authority);
+  auto& state = cudaState(authority);
+  if (state._report_generation == state.device.generation())
+    return;
+  const auto result = executeStaLifecyclePipeline(
+      {{"CUDA report preparation", [] {}, [&] { state.prepareReport(database); }, [] {}}},
+      StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+  if (result.cleanup_failed)
+    state._poisoned = true;
+  if (!result.succeeded)
+    throw std::runtime_error("CUDA report query failed: " + result.message);
+}
+#endif
+
+
 StaCsrCaptureAttempt StaCsrSessionContext::capture(const Database& database)
 {
   if (_substate != StaCsrSessionSubstate::kAwaitingCapture)
@@ -132,10 +179,13 @@ StaCsrScatterAttempt StaCsrSessionContext::scatter(Database& database, const csr
   return attempt;
 }
 
-void StaCsrSessionContext::release(std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) noexcept
+bool StaCsrSessionContext::release(std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) noexcept
 {
-  if (detached_out == nullptr || *detached_out || _substate == StaCsrSessionSubstate::kReleased)
-    return;
+  if (detached_out == nullptr || *detached_out)
+    return false;
+  if (_substate == StaCsrSessionSubstate::kReleased)
+    return true;
+  bool clean = true;
 
   if (_substate == StaCsrSessionSubstate::kReady || _substate == StaCsrSessionSubstate::kInvalidated) {
     if (_snapshot) {
@@ -144,7 +194,13 @@ void StaCsrSessionContext::release(std::unique_ptr<csr::CsrSnapshotObservation>*
         *detached_out = std::move(_snapshot->active_observation);
     }
   }
+#if ISTA_ENABLE_CUDA
+  if (_cuda)
+    clean = _cuda->device.close();
+  _cuda.reset();
+#endif
   _substate = StaCsrSessionSubstate::kReleased;
+  return clean;
 }
 
 bool StaCsrSessionContext::copyObservation(std::unique_ptr<csr::CsrSnapshotObservation>* detached_out)

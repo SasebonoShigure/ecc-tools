@@ -98,7 +98,16 @@ void runExternalLevelBackendContracts()
   requireExactComputationResult(external.computation, full.computation, "external levels versus full backend");
 
   const auto controlled_full = csr::detail::computeCsrCpuReferenceForStage(edges, payloads);
-  const auto controlled_levels = csr::detail::propagateCsrCpuReferenceWithLevels(edges, payloads, supplied);
+  auto owned_levels = supplied;
+  const auto* owned_nodes = owned_levels.level_nodes.data();
+  const auto* owned_offsets = owned_levels.level_offsets.data();
+  const auto* owned_inverse = owned_levels.node_to_level.data();
+  const auto controlled_levels = csr::detail::propagateCsrCpuReferenceWithLevels(edges, payloads, std::move(owned_levels));
+  const std::string owned_label{"owned levels"};
+  const auto& moved_result = requireTiming(controlled_levels.computation, owned_label);
+  requireCpuReference(moved_result.level_nodes.data() == owned_nodes && moved_result.level_offsets.data() == owned_offsets
+                          && moved_result.node_to_level.data() == owned_inverse,
+                      "controlled propagation copied the generated level buffers");
   requireExactComputationResult(controlled_full.computation, full.computation, "controlled full versus public backend");
   requireExactComputationResult(controlled_levels.computation, external.computation, "controlled levels versus public backend");
 

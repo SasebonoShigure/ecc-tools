@@ -26,32 +26,30 @@ namespace {
   throw BufferGenerationError(code, std::move(message));
 }
 
-std::vector<timing_edit::DesignEditPlan>& mutableBatches(ReplayProgram& program)
+std::vector<timing_edit::EditBatch>& mutableBatches(ReplayProgram& program)
 {
   return std::visit(
-      [](auto& payload) -> std::vector<timing_edit::DesignEditPlan>& {
+      [](auto& payload) -> std::vector<timing_edit::EditBatch>& {
         return payload.batches;
       },
       program.workload);
 }
 
-const std::vector<timing_edit::DesignEditPlan>& replayBatches(
+const std::vector<timing_edit::EditBatch>& replayBatches(
     const ReplayProgram& program)
 {
   return std::visit(
-      [](const auto& payload) -> const std::vector<timing_edit::DesignEditPlan>& {
+      [](const auto& payload) -> const std::vector<timing_edit::EditBatch>& {
         return payload.batches;
       },
       program.workload);
 }
 
-void bindRealGenerationBaseline(
+void bindGenerationBaseline(
     ReplayProgram& program,
     const timing_edit::BaselineSemanticIdentity& actual_baseline)
 {
-  if (auto* real = std::get_if<RealReplayPayload>(&program.workload)) {
-    real->baseline = actual_baseline;
-  }
+  std::visit([&](auto& payload) { payload.baseline = actual_baseline; }, program.workload);
 }
 
 std::vector<timing_edit::CreationToken> reservedTokens(
@@ -107,13 +105,12 @@ std::vector<std::string> reservedNames(
   return result;
 }
 
-timing_edit::DesignEditPlan makePlan(
-    const timing_edit::TimingEditCoordinator& coordinator,
+timing_edit::EditBatch makePlan(
+    timing_edit::TransactionGeneration generation,
     const GreedySelection& selection)
 {
-  timing_edit::DesignEditPlan plan{.baseline = coordinator.baseline(),
-                                   .expected_generation
-                                   = coordinator.committedIdentity().generation,
+  timing_edit::EditBatch plan{.expected_generation
+                                   = generation,
                                    .edits = {}};
   plan.edits.reserve(selection.accepted.size());
   for (const SelectedBufferCandidate& selected : selection.accepted) {
@@ -196,11 +193,14 @@ BufferTraceGenerationResult BufferFixedTraceGenerator::generate(
                                                    .rounds = {},
                                                    .stop_reason = GenerationStopReason::kEmptyAcceptedBatch}};
   std::vector<FunctionalBatchReceipt> batch_receipts;
+  batch_receipts.reserve(request.profile.rounds);
+  mutableBatches(artifact.replay).reserve(request.profile.rounds);
+  artifact.generation_only.rounds.reserve(request.profile.rounds);
   ReplayReceipt functional = runner.withFreshGenerationBaseline(
       artifact.replay, [&](BufferReplayContext& context) {
         try {
-        bindRealGenerationBaseline(artifact.replay,
-                                   context.coordinator().baseline());
+        bindGenerationBaseline(artifact.replay,
+                                   *context._baseline);
         std::uint64_t inserted = 0;
         bool stopped = false;
         for (std::uint64_t round = 1; round <= request.profile.rounds; ++round) {
@@ -210,7 +210,7 @@ BufferTraceGenerationResult BufferFixedTraceGenerator::generate(
           std::vector<BufferCandidateObservation> observations;
           try {
             observations = NativeBufferObservationExtractor::extract(
-                context.database(), context.coordinator().resolverState(),
+                context.database(), context._resolver,
                 round_profile);
           } catch (const NativeObservationError& error) {
             fail(BufferGenerationFailureCode::kObservationFailed, error.what());
@@ -223,10 +223,10 @@ BufferTraceGenerationResult BufferFixedTraceGenerator::generate(
               .max_acceptances = remaining,
               .candidates = std::move(observations),
               .reserved_creation_tokens
-              = reservedTokens(context.coordinator().resolverState()),
+              = reservedTokens(context._resolver),
               .reserved_materialized_names
               = reservedNames(context.database(),
-                              context.coordinator().resolverState())};
+                              context._resolver)};
           GreedySelectionResult selected
               = GreedyBufferCandidateSelector{}.select(selection_request);
           if (const auto* error = std::get_if<GreedySelectionError>(&selected)) {
@@ -246,8 +246,8 @@ BufferTraceGenerationResult BufferFixedTraceGenerator::generate(
             stopped = true;
             break;
           }
-          timing_edit::DesignEditPlan plan
-              = makePlan(context.coordinator(), selection);
+          timing_edit::EditBatch plan
+              = makePlan(context._identity.generation, selection);
           FunctionalBatchReceipt applied
               = BufferTraceReplayer::applyNextBatch(context, plan, round - 1);
           mutableBatches(artifact.replay).push_back(std::move(plan));

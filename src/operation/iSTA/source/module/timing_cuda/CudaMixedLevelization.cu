@@ -14,10 +14,6 @@ double elapsed(Clock::time_point start)
 {
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
-struct NewNodePlacement
-{
-  Index node, position;
-};
 struct OldLevelCopy
 {
   Index begin, count, destination;
@@ -78,20 +74,31 @@ unsigned blocks(Index count)
 
 std::optional<CsrFifoLevelization> CudaDualCsrSession::Impl::reconstructMixed()
 {
-  demand(origin && origin->values, "mixed reconstruction requires a successful origin");
+  demand(origin && origin->levels.complete, "mixed reconstruction requires a successful origin");
   Status patch_status;
-  memory.download(view.status, &patch_status, 1);
-  memory.synchronize();
+  try {
+    memory.download(view.status, &patch_status, 1);
+    memory.synchronize();
+  } catch (...) {
+    try {
+      memory.synchronize();
+    } catch (...) {
+      storage->poisoned = true;
+    }
+    throw;
+  }
   if (patch_status != Status::success) {
     code = CsrComputationCode::kInvariantViolation;
     return std::nullopt;
   }
-  const auto& old = *origin->values;
-  const mixed::detail::PreviousLevels previous(old.level_offsets, old.level_nodes, old.node_to_level, true);
+  const auto& cached = origin->values;
+  const mixed::detail::PreviousLevels previous = cached
+      ? mixed::detail::PreviousLevels(cached->level_offsets, cached->level_nodes, cached->node_to_level, true)
+      : mixed::detail::PreviousLevels(origin->levels);
   const mixed::MixedLevelizationRequest request{origin->view.node_count, origin->generation.value(), generation.value()};
   std::vector<std::uint8_t> root_state(view.node_count, 0);
   const mixed::detail::TopologyTraversal topology{static_cast<std::size_t>(view.node_count), [&](const mixed::detail::TopologyVisitor& visitor) {
-                                                    for (const auto& arc : bindings) {
+                                                    for (const auto& arc : host->bindings) {
                                                       if (!arc.active)
                                                         continue;
                                                       if (arc.source >= view.node_count || arc.sink >= view.node_count)
@@ -169,7 +176,7 @@ std::optional<CsrFifoLevelization> CudaDualCsrSession::Impl::reconstructMixed()
   }
   // Roots are external patch input. Check their actual eligible incidences
   // gathered during the required topology traversal, not with a second scan.
-  for (Index root : roots) {
+  for (Index root : host->roots) {
     if (root >= view.node_count || root_state[root] != 0) {
       reject(mixed::MixedStageFailureCode::kInvariantFailure);
       return std::nullopt;
@@ -195,7 +202,7 @@ std::optional<CsrFifoLevelization> CudaDualCsrSession::Impl::reconstructMixed()
       if (mixed::isVirtualOldLevel(vertex, graph.domain)) {
         demand(!has_old, "mixed frontier has multiple old levels");
         has_old = true;
-        const Index begin = old.level_offsets[vertex.value()], end = old.level_offsets[vertex.value() + 1];
+        const Index begin = previous.level_offsets[vertex.value()], end = previous.level_offsets[vertex.value() + 1];
         demand(begin < end && end <= origin->view.node_count, "old level D2D range invalid");
         copies.push_back({begin, end - begin, destination});
         destination = checkedAdd(destination, end - begin);
@@ -221,28 +228,39 @@ std::optional<CsrFifoLevelization> CudaDualCsrSession::Impl::reconstructMixed()
   }
   std::optional<CsrFifoLevelization> oracle;
   if constexpr (incregpusta_debug_checks_enabled) {
-    const CsrFifoLevelization oracle_previous(true, old.level_offsets, old.level_nodes, old.node_to_level);
+    const CsrFifoLevelization oracle_previous(true, previous.level_offsets, previous.level_nodes, previous.node_to_level);
     auto result = mixed::reconstructMixedLevelization(graph.domain, oracle_previous, levels);
     demand(std::holds_alternative<CsrFifoLevelization>(result), "CPU reconstruction oracle rejected mixed levels");
     oracle = std::get<CsrFifoLevelization>(std::move(result));
   }
-  auto* device_new_nodes = memory.allocate<NewNodePlacement>(new_nodes.size());
-  memory.record(7);
-  for (const auto& copy : copies)
-    memory.copy(origin->view.order + copy.begin, view.order + copy.destination, copy.count);
-  memory.upload(new_nodes, device_new_nodes);
-  memory.upload(offsets, view.level_offsets);
-  memory.zero(view.node_levels, view.node_count);
-  if (!new_nodes.empty()) {
-    insertNewLevelNodes<<<blocks(new_nodes.size()), 256, 0, memory.stream()>>>(view, device_new_nodes, new_nodes.size());
+  if (memory.ensure(storage->placements, new_nodes.size()))
+    ++telemetry.grown_buffers;
+  auto* device_new_nodes = storage->placements.data;
+  try {
+    memory.record(7);
+    for (const auto& copy : copies)
+      memory.copy(origin->view.order + copy.begin, view.order + copy.destination, copy.count);
+    memory.upload(new_nodes, device_new_nodes);
+    memory.upload(offsets, view.level_offsets);
+    memory.zero(view.node_levels, view.node_count);
+    if (!new_nodes.empty()) {
+      insertNewLevelNodes<<<blocks(new_nodes.size()), 256, 0, memory.stream()>>>(view, device_new_nodes, new_nodes.size());
+      ++telemetry.cuda.kernel_launches;
+      check(cudaGetLastError(), "CUDA insert mixed new nodes launch");
+    }
+    reconstructNodeToLevel<<<blocks(view.node_count), 256, 0, memory.stream()>>>(view, offsets.size());
     ++telemetry.cuda.kernel_launches;
-    check(cudaGetLastError(), "CUDA insert mixed new nodes launch");
+    check(cudaGetLastError(), "CUDA mixed node2level launch");
+    // Host upload arrays remain alive until this stream finishes consuming them.
+    memory.synchronize();
+  } catch (...) {
+    try {
+      memory.synchronize();
+    } catch (...) {
+      storage->poisoned = true;
+    }
+    throw;
   }
-  reconstructNodeToLevel<<<blocks(view.node_count), 256, 0, memory.stream()>>>(view, offsets.size());
-  ++telemetry.cuda.kernel_launches;
-  check(cudaGetLastError(), "CUDA mixed node2level launch");
-  // Host upload arrays remain alive until this stream finishes consuming them.
-  memory.synchronize();
   return oracle;
 }
 }  // namespace ista::csr

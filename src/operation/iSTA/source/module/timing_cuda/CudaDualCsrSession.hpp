@@ -9,7 +9,16 @@
 #include "MixedLevelizationTelemetry.hpp"
 #include "MixedLevelizationTypes.hpp"
 
+namespace ista {
+class Database;
+class StaCsrSessionContext;
+class StaCudaSessionState;
+namespace timing_edit { class NativeExecutionAuthority; }
+namespace buffer_trace { struct ReplayProgram; }
+}
 namespace ista::csr {
+struct CudaFullTraceResult;
+
 
 enum class CudaLevelizationMode
 {
@@ -21,11 +30,11 @@ struct CudaDualCsrTelemetry
 {
   CsrCudaTelemetry cuda;
   double update_ms{0.0};
+  double materialize_ms{0.0};
   double mixed_prepare_ms{0.0};
   timing_incremental_levelization::MixedLevelizationTelemetry mixed;
   std::optional<timing_incremental_levelization::MixedStageFailureCode> mixed_failure;
-  // Persistent buffers whose allocated element capacity grew from the origin.
-  // Per-attempt descriptor scratch is counted in cuda.allocations only.
+  // Device buffers whose capacity grew, including descriptor and undo scratch.
   std::uint64_t grown_buffers{0};
 };
 
@@ -42,7 +51,10 @@ class CudaDualCsrSession final
   CudaDualCsrSession& operator=(const CudaDualCsrSession&) = delete;
 
   [[nodiscard]] CudaDualCsrSession stage(const CudaDualCsrPatch& patch, CudaLevelizationMode mode = CudaLevelizationMode::kFull);
+  [[nodiscard]] CudaDualCsrSession stageFull(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);
   [[nodiscard]] bool publish(CudaDualCsrSession&& candidate) noexcept;
+  [[nodiscard]] bool close() noexcept;
+  void requireCommitted() const;
   [[nodiscard]] const CsrTimingValues& timingValues() const;
   [[nodiscard]] std::optional<CsrComputationCode> computationCode() const noexcept;
   [[nodiscard]] const CudaDualCsrTelemetry& telemetry() const;
@@ -54,6 +66,16 @@ class CudaDualCsrSession final
  private:
   // The implementation of this reader is linked only into the acceptance test.
   friend class CudaDualCsrTestReader;
+  friend class CsrCudaBackend;
+  friend class ista::StaCudaSessionState;
+  friend CudaFullTraceResult replayCudaFullTracePrefix(
+      StaCsrSessionContext&, Database&, const StaAnalysisContext&,
+      const timing_edit::NativeExecutionAuthority&, const buffer_trace::ReplayProgram&, std::size_t);
+  // Only the direct, validated native-export paths can use these cores.
+  [[nodiscard]] static CudaDualCsrSession fromNativeExport(
+      const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);
+  [[nodiscard]] CudaDualCsrSession stageFullNativeExport(
+      const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);
   struct Impl;
   explicit CudaDualCsrSession(std::shared_ptr<Impl> impl) noexcept;
   std::shared_ptr<Impl> _impl;

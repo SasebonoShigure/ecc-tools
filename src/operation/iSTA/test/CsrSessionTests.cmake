@@ -46,6 +46,7 @@ set(ISTA_STEP7_LIFECYCLE_LINKS
 set(ISTA_STEP7_BINDING_LINKS
     py_ista
     pybind11::embed
+    ista_timing_database_headers
 )
 
 ista_add_step7_target(
@@ -54,6 +55,7 @@ ista_add_step7_target(
     ISTA_STEP7_ADAPTER_LINKS
     60
 )
+target_sources(ista_csr_session_snapshot_adapter_contract_test PRIVATE AllocationFailureSupport.cpp)
 ista_add_step7_target(
     ista_csr_session_context_test
     StaCsrSessionContextTest.cpp

@@ -36,7 +36,7 @@ Json functional(const csr::CsrReferenceInput& input, const csr::CsrTimingResult&
       message += "\n" + error.field + ": " + error.message;
     throw std::runtime_error(message);
   }
-  timing_dual_csr::DualCsrTimingResult values{timing, std::vector<std::uint8_t>(input.arcs.size(), 1U)};
+  timing_dual_csr::DualCsrTimingResult values{timing};
   auto projected = timing_dual_csr::projectDualCsrFunctionalSemanticReceipt(*baseline.state, values);
   if (!projected.success()) {
     std::string message = "diagnostic timing projection failed";
@@ -79,9 +79,10 @@ Json telemetry(const csr::CudaTargetedTraceBatch& batch)
                  {"node_count", batch.node_count},
                  {"arc_count", batch.arc_count},
                  {"native_prepare_ms", batch.native_prepare_ms},
-                 {"native_install_ms", batch.native_install_ms},
-                 {"scatter_ms", batch.scatter_ms},
-                 {"end_to_end_ms", batch.end_to_end_ms},
+                 {"commit_ms", batch.commit_ms},
+                 {"query_materialize_ms", batch.query_materialize_ms},
+                 {"report_ms", batch.report_ms},
+                 {"consumer_end_to_end_ms", batch.consumer_end_to_end_ms},
                  {"execution",
                   {{"requested_backend", toString(record.requested_backend)},
                    {"requested_update_strategy", toString(record.requested_update_strategy)},
@@ -127,7 +128,7 @@ int main(int argc, char** argv)
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
     const bool replay_only = options.contains("--replay");
     const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
-    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/1.0.0" : "ista-cuda-targeted-trace/1.0.0"},
+    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/3.0.0" : "ista-cuda-targeted-trace/3.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
                 {"requested_backend", "cuda"},
@@ -141,48 +142,57 @@ int main(int argc, char** argv)
       timing_dual_csr::test::DualCsrTargetedArtifactSupport artifacts(program);
       const auto source_before = incregpusta_debug_checks_enabled ? artifacts.capture() : std::vector<buffer_trace::SourceArtifactFunctionalRecord>{};
       std::optional<csr::CudaTargetedTraceResult> result;
+      if (rollback) {
+        require(prefix >= 2, "rollback test requires two batches");
+        auto rejected_program = program;
+        std::visit([](auto& workload) {
+          require(workload.batches.size() >= 2 && !workload.batches[1].edits.empty(), "missing second edit");
+          workload.batches[1].edits.front().library_cell.cell_name = "CUDA_MISSING_SECOND_BATCH_CELL";
+        }, rejected_program.workload);
+        std::vector<std::uint8_t> after_failure;
+        bool rejected = false;
+        timing_edit::oracle::ProductionFreshSessionLoader::run(
+            artifacts.artifacts(), [&](const auto& view) {
+              try {
+                static_cast<void>(csr::CudaTargetedTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority,
+                                                                    rejected_program, prefix, strategy));
+              } catch (const std::exception& error) {
+                rejected = std::string(error.what()).find("CUDA_MISSING_SECOND_BATCH_CELL") != std::string::npos;
+              }
+              require(rejected, "second-batch native cell failure did not occur");
+              if constexpr (incregpusta_debug_checks_enabled) {
+                auto exported = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
+                require(std::holds_alternative<csr::CsrReferenceInput>(exported), "post-failure graph export failed");
+                after_failure = csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(exported));
+              }
+            }, StaBackend::kCuda);
+        if constexpr (incregpusta_debug_checks_enabled) {
+          timing_edit::oracle::ProductionFreshSessionLoader::run(
+              artifacts.artifacts(), [&](const auto& view) {
+                static_cast<void>(csr::CudaTargetedTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority, program, 1, strategy));
+                auto exported = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
+                require(std::holds_alternative<csr::CsrReferenceInput>(exported), "committed prefix graph export failed");
+                require(after_failure == csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(exported)),
+                        "failed second batch changed the first committed batch");
+              }, StaBackend::kCuda);
+        }
+        output["second_batch_failure_observed"] = rejected;
+      }
       timing_edit::oracle::ProductionFreshSessionLoader::run(
           artifacts.artifacts(),
           [&](const auto& view) {
             const auto physical_before
                 = incregpusta_debug_checks_enabled ? timing_dual_csr::test::captureTargetedSourcePhysical() : buffer_trace::SourcePhysicalFunctionalReceipt{};
-            if (rollback) {
-              require(prefix >= 2, "rollback test requires two batches");
-              auto rejected_program = program;
-              std::visit(
-                  [](auto& workload) {
-                    require(workload.batches.size() >= 2 && !workload.batches[1].edits.empty(), "missing second edit");
-                    workload.batches[1].edits.front().library_cell.cell_name = "CUDA_MISSING_SECOND_BATCH_CELL";
-                  },
-                  rejected_program.workload);
-              bool rejected = false;
-              try {
-                static_cast<void>(csr::CudaTargetedTraceReplayer::run(view.database, view.reference_input, view.authority, rejected_program, prefix, strategy));
-              } catch (const std::runtime_error& error) {
-                rejected = std::string(error.what()).find("CUDA_MISSING_SECOND_BATCH_CELL") != std::string::npos;
-              } catch (const std::invalid_argument& error) {
-                rejected = std::string(error.what()).find("CUDA_MISSING_SECOND_BATCH_CELL") != std::string::npos;
-              }
-              require(rejected, "second-batch native cell failure did not occur");
-              if constexpr (incregpusta_debug_checks_enabled) {
-                auto restored = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
-                require(std::holds_alternative<csr::CsrReferenceInput>(restored)
-                            && std::get<csr::CsrReferenceInput>(restored).source_identity == view.reference_input.source_identity
-                            && csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(restored))
-                                   == csr::canonicalReferenceInputBytes(view.reference_input),
-                        "failed prefix did not restore exact native baseline input");
-              }
-              output["second_batch_failure_observed"] = true;
-            }
-            result.emplace(csr::CudaTargetedTraceReplayer::run(view.database, view.reference_input, view.authority, program, prefix, strategy));
+            result.emplace(csr::CudaTargetedTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority, program, prefix, strategy));
             if constexpr (incregpusta_debug_checks_enabled)
               require(physical_before == timing_dual_csr::test::captureTargetedSourcePhysical(), "source physical state changed");
           },
           StaBackend::kCuda);
-      require(result && result->native_final_rollback_completed, "CUDA trace did not finish rollback");
+      require(result.has_value(), "CUDA trace did not complete its workload");
       if constexpr (incregpusta_debug_checks_enabled)
         require(source_before == artifacts.capture(), "source artifacts changed");
-      output["native_final_rollback_completed"] = result->native_final_rollback_completed;
+      // run() returned only after closing and destroying the fresh session.
+      output["lifecycle_cleanup_completed"] = true;
       const auto& initialization = result->initialization.cuda;
       output["initialization"] = {{"scope", "persistent_device_session_only"},
                                   {"h2d_bytes", initialization.h2d_bytes},

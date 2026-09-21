@@ -11,6 +11,8 @@
 #include "DualCsrModeRecoveryTestSupport.hpp"
 #include "DualCsrTargetedArtifactSupport.hpp"
 #include "DualCsrTraceBaselineInternal.hpp"
+#include "DualCsrTraceReplayer.hpp"
+#include "StaCsrSessionContext.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 #include "TimingResultScatterInternal.hpp"
@@ -57,6 +59,45 @@ nlohmann::json observeReal(const CommittedDualCsrAnalysisState& state)
 }
 }  // namespace
 
+void realReplayConsumer(const char* replay, const char* output, const char* mode, const char* prefix)
+{
+  require(std::filesystem::symlink_status(output).type() == std::filesystem::file_type::not_found,
+          "consumer output must be a new file");
+  const std::string mode_name(mode);
+  require(mode_name == "full" || mode_name == "mixed", "consumer mode must be full or mixed");
+  std::size_t consumed = 0;
+  const std::string prefix_text(prefix);
+  const auto prefix_batches = std::stoull(prefix_text, &consumed);
+  require(consumed == prefix_text.size() && !prefix_text.empty() && prefix_text.front() != '-',
+          "consumer prefix must be an unsigned integer");
+  const auto program = buffer_trace::test::readReplayInput(replay, true);
+  DualCsrTargetedArtifactSupport artifacts(program);
+  nlohmann::json observation;
+  timing_edit::oracle::ProductionFreshSessionLoader::run(
+      artifacts.artifacts(),
+      [&](const timing_edit::oracle::ProductionFreshSessionView& loaded) {
+        const DualCsrTraceContext context{
+            loaded.database, loaded.reference_input, loaded.authority, loaded.session_token,
+            loaded.session_context.libraryModels(loaded.database)};
+        const auto run = mode_name == "mixed"
+                             ? DualCsrTraceReplayer::replayMixedPrefix(context, program, prefix_batches)
+                             : DualCsrTraceReplayer::replayPrefix(context, program, prefix_batches);
+        require(run.result.generation == prefix_batches, "consumer observed the wrong generation");
+        require(run.result.executed_mode == (mode_name == "mixed" ? LevelizationExecutionMode::kMixedStage6
+                                                                  : LevelizationExecutionMode::kFullStage5),
+                "consumer replay switched execution mode");
+        // Do not analyze or scatter here: the production runner must publish
+        // the current results before returning to its public consumers.
+        const auto public_timing = ista::test::capturePublicTiming();
+        require(public_timing == ista::test::capturePublicTiming(), "repeated public reporting changed results");
+        observation = {{"mode", mode_name}, {"generation", run.result.generation}, {"public", public_timing}};
+      });
+  std::ofstream file(output);
+  file << observation << '\n';
+  file.close();
+  require(bool(file), "consumer output write failed");
+}
+
 void realReplayRecovery(const char* replay, const char* output)
 {
   require(std::filesystem::symlink_status(output).type() == std::filesystem::file_type::not_found,
@@ -74,14 +115,14 @@ void realReplayRecovery(const char* replay, const char* output)
         [&](const timing_edit::oracle::ProductionFreshSessionView& loaded) {
           auto baseline = ::ista::timing_dual_csr::detail::makeTraceBaseline(
               loaded.database, loaded.reference_input, timing_edit::TimingEditSessionToken{loaded.session_token});
-          recovery_support::CumulativeBatchSource source(loaded.database, loaded.authority);
+          recovery_support::CumulativeBatchSource source(loaded.authority);
           try {
             if (!recovering) {
               original_session = loaded.session_token;
               coordinator = std::make_unique<DualCsrTransactionCoordinator>(std::move(baseline));
-              auto batch = source.mint(coordinator->committed(), plans.front());
+              auto batch = source.mint(*coordinator, plans.front());
               const auto status = coordinator->publish(
-                  recovery_support::stage(coordinator->committed(), std::move(batch), LevelizationExecutionMode::kMixedStage6),
+                  recovery_support::stage(*coordinator, std::move(batch), LevelizationExecutionMode::kMixedStage6),
                   incregpusta_debug_checks_enabled ? DualCsrPublishFailpoint::kAfterSwap : DualCsrPublishFailpoint::kNone);
               require(status.published && status.poisoned == incregpusta_debug_checks_enabled
                           && (status.ok() || status.code == DualCsrTransactionCode::kPostSwapPoisoned),
@@ -97,25 +138,25 @@ void realReplayRecovery(const char* replay, const char* output)
                 const auto status = coordinator->recover(std::move(*attempt.recovery));
                 require(status.ok() && status.published && !status.poisoned, "real recovery could not clear poison");
               } else {
-                coordinator = std::make_unique<DualCsrTransactionCoordinator>(attempt.recovery->state());
+                coordinator = std::make_unique<DualCsrTransactionCoordinator>(std::move(*attempt.recovery));
               }
               observations["after_recovery"] = observeReal(coordinator->committed());
               require(observations["before_recovery"] == observations["after_recovery"], "real recovery changed functional/public state");
               auto& continued = observations["continued"];
               continued = nlohmann::json::array();
               for (std::size_t index = 1; index < plans.size(); ++index) {
-                auto batch = source.mint(coordinator->committed(), plans[index]);
+                auto batch = source.mint(*coordinator, plans[index]);
                 const auto status = coordinator->publish(
-                    recovery_support::stage(coordinator->committed(), std::move(batch), LevelizationExecutionMode::kMixedStage6));
+                    recovery_support::stage(*coordinator, std::move(batch), LevelizationExecutionMode::kMixedStage6));
                 require(status.ok() && status.published && !status.poisoned, "real recovery continuation failed");
                 require(coordinator->committed().execution_trace.back().mode() == LevelizationExecutionMode::kMixedStage6,
                         "real continuation silently switched to full");
                 continued.push_back(observeReal(coordinator->committed()));
               }
             }
-            require(source.finish(), "real recovery native rollback failed");
+            source.commitPending(coordinator->committed().generation);
           } catch (...) {
-            require(source.finish(), "real recovery failure rollback failed");
+            require(source.rollback(), "real recovery failure rollback failed");
             throw;
           }
         });

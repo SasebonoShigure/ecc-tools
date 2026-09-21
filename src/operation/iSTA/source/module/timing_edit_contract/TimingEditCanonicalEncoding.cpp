@@ -16,6 +16,11 @@
 // ***************************************************************************************
 #include "TimingEditCanonicalEncoding.hpp"
 
+#include <stdexcept>
+
+#include <bit>
+#include <tuple>
+
 #include <algorithm>
 #include <string_view>
 #include <type_traits>
@@ -399,6 +404,16 @@ std::vector<std::uint8_t> canonicalDesignEditPlanBytes(const DesignEditPlan& val
   });
 }
 
+std::vector<std::uint8_t> canonicalDesignEditPlanBytes(const BaselineSemanticIdentity& baseline, const EditBatch& value)
+{
+  return encode("timing-edit-plan", [&](CanonicalEncoder& encoder) {
+    encoder.appendString(kDesignEditPlanSchema);
+    appendBaseline(encoder, baseline);
+    encoder.appendU64(value.expected_generation.value());
+    appendSortedEncoded(encoder, value.edits, canonicalBufferInsertionMutationBytes);
+  });
+}
+
 std::vector<std::uint8_t> canonicalTimingGraphEditBytes(const TimingGraphEdit& value)
 {
   return encode("timing-graph-edit", [&](CanonicalEncoder& encoder) { appendOperation(encoder, value); });
@@ -452,8 +467,12 @@ std::vector<std::uint8_t> canonicalPreparedBatchDataBytes(const PreparedBatchDat
     encoder.appendU64(value.session_token.value());
     encoder.appendU64(value.expected_generation.value());
     encoder.appendU64(value.target_generation.value());
-    appendBaseline(encoder, value.baseline);
-    appendCommitted(encoder, value.expected_pre_committed_identity);
+    if (!value.baseline)
+      throw std::invalid_argument("prepared baseline owner is absent");
+    appendBaseline(encoder, *value.baseline);
+    if (!value.expected_pre_committed_identity)
+      throw std::invalid_argument("canonical prepared batch requires full identity evidence");
+    appendCommitted(encoder, *value.expected_pre_committed_identity);
     appendSortedEncoded(encoder, value.normalized_edits, canonicalBufferInsertionMutationBytes);
     encoder.appendBytes(canonicalTimingGraphDeltaBytes(value.normalized_forward));
     encoder.appendBytes(canonicalTimingGraphDeltaBytes(value.normalized_reverse));
@@ -470,19 +489,101 @@ std::vector<std::uint8_t> canonicalPreparedBatchDataBytes(const PreparedBatchDat
   });
 }
 
+namespace {
+// Compare the existing big-endian, length-prefixed encoding without allocating.
+// Outer domain/version bytes are identical for both operands.
+auto encodedString(std::string_view value) { return std::pair{value.size(), value}; }
+auto creationKey(const CreationToken& value)
+{
+  return std::tuple{value.schema_version, encodedString(value.case_id), encodedString(value.profile_id),
+                    value.seed, value.batch_ordinal, value.accepted_ordinal};
+}
+auto nodeKey(const csr::NodeKey& value)
+{
+  const auto kind = csr::token(value.kind);
+  const auto length = kind.size() + value.full_name.size() + value.instance_name.size() + value.pin_name.size();
+  return std::tuple{length, encodedString(kind), encodedString(value.full_name),
+                    encodedString(value.instance_name), encodedString(value.pin_name)};
+}
+std::strong_ordering compareNode(const StableNodeRef& lhs, const StableNodeRef& rhs)
+{
+  if (lhs.index() != rhs.index())
+    return rhs.index() <=> lhs.index(); // "created" precedes "existing" by encoded length.
+  if (const auto* left = std::get_if<ExistingNodeRef>(&lhs))
+    return nodeKey(left->baseline_key) <=> nodeKey(std::get<ExistingNodeRef>(rhs).baseline_key);
+  const auto& left = std::get<CreatedNodeRef>(lhs);
+  const auto& right = std::get<CreatedNodeRef>(rhs);
+  if (const auto order = creationKey(left.creation_token) <=> creationKey(right.creation_token); order != 0)
+    return order;
+  return encodedString(token(left.role)) <=> encodedString(token(right.role));
+}
+std::strong_ordering compareNet(const StableNetRef& lhs, const StableNetRef& rhs)
+{
+  if (lhs.index() != rhs.index())
+    return rhs.index() <=> lhs.index();
+  if (const auto* left = std::get_if<ExistingNetRef>(&lhs))
+    return encodedString(left->baseline_name) <=> encodedString(std::get<ExistingNetRef>(rhs).baseline_name);
+  const auto& left = std::get<CreatedNetRef>(lhs);
+  const auto& right = std::get<CreatedNetRef>(rhs);
+  if (const auto order = creationKey(left.creation_token) <=> creationKey(right.creation_token); order != 0)
+    return order;
+  return encodedString(token(left.role)) <=> encodedString(token(right.role));
+}
+auto tableKey(const csr::TimingTableSignature& value)
+{
+  return std::tuple{value.present, encodedString(csr::token(value.variable1)), encodedString(csr::token(value.variable2))};
+}
+auto signatureKey(const csr::LibraryArcSignature& value)
+{
+  const auto sense = csr::token(value.sense), trigger = csr::token(value.trigger_transition), check = csr::token(value.check_transition);
+  auto length = value.library_name.size() + sense.size() + trigger.size() + check.size() + value.sdf_condition.size();
+  for (const auto* tables : {&value.delay_tables, &value.slew_tables})
+    for (const auto& table : *tables)
+      length += csr::token(table.variable1).size() + csr::token(table.variable2).size();
+  static_assert(csr::kTransitionCount == 2);
+  return std::tuple{length, encodedString(value.library_name), std::bit_cast<std::uint32_t>(value.arc_index),
+                    encodedString(sense), encodedString(trigger), encodedString(check), encodedString(value.sdf_condition),
+                    tableKey(value.delay_tables[0]), tableKey(value.delay_tables[1]),
+                    tableKey(value.slew_tables[0]), tableKey(value.slew_tables[1])};
+}
+}  // namespace
+
 bool operator<(const CreatedCellArcRef& lhs, const CreatedCellArcRef& rhs)
 {
-  return detail::canonicalBytesLess(canonicalStableArcRefBytes(StableArcRef{lhs}), canonicalStableArcRefBytes(StableArcRef{rhs}));
+  if (const auto order = creationKey(lhs.creation_token) <=> creationKey(rhs.creation_token); order != 0)
+    return order < 0;
+  if (const auto order = encodedString(lhs.library_source_port) <=> encodedString(rhs.library_source_port); order != 0)
+    return order < 0;
+  if (const auto order = encodedString(lhs.library_sink_port) <=> encodedString(rhs.library_sink_port); order != 0)
+    return order < 0;
+  if (lhs.ordered_library_arcs.size() != rhs.ordered_library_arcs.size())
+    return lhs.ordered_library_arcs.size() < rhs.ordered_library_arcs.size();
+  for (std::size_t i = 0; i < lhs.ordered_library_arcs.size(); ++i)
+    if (const auto order = signatureKey(lhs.ordered_library_arcs[i]) <=> signatureKey(rhs.ordered_library_arcs[i]); order != 0)
+      return order < 0;
+  return lhs.stable_equivalence_ordinal < rhs.stable_equivalence_ordinal;
 }
 
 bool operator<(const CreatedOldNetArcRef& lhs, const CreatedOldNetArcRef& rhs)
 {
-  return detail::canonicalBytesLess(canonicalStableArcRefBytes(StableArcRef{lhs}), canonicalStableArcRefBytes(StableArcRef{rhs}));
+  if (const auto order = compareNet(lhs.net, rhs.net); order != 0)
+    return order < 0;
+  if (const auto order = compareNode(lhs.driver, rhs.driver); order != 0)
+    return order < 0;
+  if (const auto order = compareNode(lhs.sink, rhs.sink); order != 0)
+    return order < 0;
+  return lhs.stable_ordinal < rhs.stable_ordinal;
 }
 
 bool operator<(const CreatedNewNetArcRef& lhs, const CreatedNewNetArcRef& rhs)
 {
-  return detail::canonicalBytesLess(canonicalStableArcRefBytes(StableArcRef{lhs}), canonicalStableArcRefBytes(StableArcRef{rhs}));
+  if (const auto order = creationKey(lhs.creation_token) <=> creationKey(rhs.creation_token); order != 0)
+    return order < 0;
+  if (const auto order = compareNode(lhs.driver, rhs.driver); order != 0)
+    return order < 0;
+  if (const auto order = compareNode(lhs.sink, rhs.sink); order != 0)
+    return order < 0;
+  return lhs.stable_ordinal < rhs.stable_ordinal;
 }
 
 bool operator<(const LibraryCellRef& lhs, const LibraryCellRef& rhs)

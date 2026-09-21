@@ -123,7 +123,11 @@ Json phaseTimings(
         {"full_propagation_ms", value.full_propagation_ms},
         {"invariant_ms", value.invariant_ms},
         {"verify_ms", value.verify_ms},
-        {"publish_ms", value.publish_ms}});
+        {"publish_ms", value.publish_ms},
+        {"session_step_ms", value.session_step_ms},
+        {"query_materialization_ms", value.query_materialization_ms},
+        {"report_ms", value.report_ms},
+        {"consumer_step_ms", value.consumer_step_ms}});
   }
   return result;
 }
@@ -134,7 +138,7 @@ void fresh(const Options& options)
   const std::uint64_t prefix = parseU64(options.at("--prefix"), "prefix");
   auto receipt = timing_dual_csr::test::runProductionFreshSemanticPrefix(
       program, static_cast<std::size_t>(prefix));
-  Json envelope{{"schema_version", "ista-stage6-trace-process/3.0.0"},
+  Json envelope{{"schema_version", "ista-stage6-trace-process/5.0.0"},
                 {"role", "fresh-oracle"},
                 {"prefix_batches", prefix},
                 {"functional", timing_dual_csr::test::functionalSemanticReceiptToJson(receipt.functional)},
@@ -174,7 +178,7 @@ void targeted(const Options& options)
           timing_dual_csr::test::structuralReceiptToJson(
               observation.structural)}});
   }
-  Json envelope{{"schema_version", "ista-stage6-trace-process/3.0.0"},
+  Json envelope{{"schema_version", "ista-stage6-trace-process/5.0.0"},
                 {"role", "targeted-under-test"},
                 {"prefix_batches", prefix},
                 {"receipt_validated", true},

@@ -1,5 +1,6 @@
 #include "CsrCudaArcTransfer.cuh"
 #include "CsrCudaKernels.cuh"
+#include "CsrCudaMemory.cuh"
 #include "CsrCudaClockPropagation.cuh"
 #include "CsrCudaSequentialPropagation.cuh"
 #include "CsrCudaAdjacency.cuh"
@@ -169,10 +170,10 @@ __device__ void pathLane(DeviceView view, Index index, unsigned analysis, unsign
   if (!state.io[lane].present)
     return;
   const double delay = finiteValue(view, state.graph[lane].present ? state.graph[lane].value : state.io[lane].value);
-  const Index source_row = pathRow(arc.source, analysis, source_kind, input) * view.tag_count;
-  const Index sink_row = pathRow(arc.sink, analysis, source_kind, output) * view.tag_count;
-  for (Index tag = 0; tag < view.tag_count; ++tag) {
-    const PathState& source = view.paths[source_row + tag];
+  const Index source_row = pathRow(arc.source, analysis, source_kind, input);
+  const Index sink_row = pathRow(arc.sink, analysis, source_kind, output);
+  for (Index slot = view.path_offsets[source_row]; slot < view.path_offsets[source_row + 1]; ++slot) {
+    const PathState& source = view.paths[slot];
     if (!source.present)
       continue;
     if (!isfinite(source.arrival)) {
@@ -184,7 +185,10 @@ __device__ void pathLane(DeviceView view, Index index, unsigned analysis, unsign
     const double sum = finiteValue(view, source.arrival + delay);
     const double scaled = finiteValue(view, sum * 1e15);
     const double candidate = finiteValue(view, round(scaled) / 1e15);
-    PathState& sink = view.paths[sink_row + tag];
+    auto* target = findPath(view, sink_row, view.path_tags[slot]);
+    if (target == nullptr)
+      return;
+    PathState& sink = *target;
     if (!sink.present || epsilonBetter(view, analysis, candidate, sink.arrival)) {
       sink = source;
       sink.arrival = candidate;
@@ -306,6 +310,35 @@ __device__ void requiredPass(DeviceView view)
   }
 }
 
+__global__ void clearNodes(DeviceView view)
+{
+  for (Index node = blockIdx.x * blockDim.x + threadIdx.x; node < view.node_count; node += blockDim.x * gridDim.x) {
+    view.nodes[node] = {};
+  }
+}
+__global__ void seedNodes(DeviceView view, const NodeSeed* seeds, Index count)
+{
+  for (Index index = blockIdx.x * blockDim.x + threadIdx.x; index < count; index += blockDim.x * gridDim.x)
+    view.nodes[seeds[index].node] = seeds[index].state;
+}
+__global__ void clearPaths(DeviceView view)
+{
+  for (Index slot = blockIdx.x * blockDim.x + threadIdx.x; slot < view.path_count; slot += blockDim.x * gridDim.x) {
+    view.paths[slot] = {};
+  }
+}
+__global__ void seedPaths(DeviceView view, const PathSeed* seeds, Index count)
+{
+  // Preserve input seed order if more than one seed names a path.
+  for (Index index = 0; index < count; ++index) {
+    const auto& seed = seeds[index];
+    auto* path = findPath(view, seed.row, seed.tag);
+    if (path == nullptr)
+      return;
+    *path = seed.state;
+  }
+}
+
 __global__ void propagate(DeviceView view)
 {
   if (*view.status != Status::success)
@@ -333,6 +366,36 @@ __global__ void propagate(DeviceView view)
 }
 
 }  // namespace
+
+std::uint64_t launchSeedInitialization(DeviceView view, const NodeSeed* nodes, Index node_count,
+                                       const PathSeed* paths, Index path_count, cudaStream_t stream)
+{
+  std::uint64_t launches = 0;
+  const auto blocks = [](Index count) {
+    const Index needed = count / 256 + (count % 256 != 0);
+    return static_cast<unsigned>(needed > 65535 ? 65535 : needed);
+  };
+  if (view.node_count) {
+    // D2H returns complete records; initialize padding as well as named fields.
+    check(cudaMemsetAsync(view.nodes, 0, view.node_count * sizeof(NodeState), stream), "CUDA node storage reset");
+    clearNodes<<<blocks(view.node_count), 256, 0, stream>>>(view);
+    ++launches;
+  }
+  if (node_count) {
+    seedNodes<<<blocks(node_count), 256, 0, stream>>>(view, nodes, node_count);
+    ++launches;
+  }
+  if (view.path_count) {
+    check(cudaMemsetAsync(view.paths, 0, view.path_count * sizeof(PathState), stream), "CUDA path storage reset");
+    clearPaths<<<blocks(view.path_count), 256, 0, stream>>>(view);
+    ++launches;
+  }
+  if (path_count) {
+    seedPaths<<<1, 1, 0, stream>>>(view, paths, path_count);
+    ++launches;
+  }
+  return launches;
+}
 
 void launchLevelization(DeviceView view, cudaStream_t stream)
 {

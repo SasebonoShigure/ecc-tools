@@ -50,10 +50,9 @@ class DualCsrStageFactoryFaultAdapter final
   }
 
   [[nodiscard]] static bool corruptIntrinsicTimingInput(
-      VerifiedStructuredBatch& batch)
+      VerifiedStructuredBatch& batch, const DualCsrState& before)
   {
     auto descriptor = batch._descriptor;
-    const auto& before = batch._expected_before.graph();
     if (!before.reference_payload.clocks.empty())
       return false;
 

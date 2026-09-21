@@ -58,8 +58,6 @@ std::string_view phaseToken(DualCsrReceiptPhase value)
       return "intrinsic_verify";
     case DualCsrReceiptPhase::kPublish:
       return "publish";
-    case DualCsrReceiptPhase::kNativeFinalRollback:
-      return "native_final_rollback";
   }
   throw std::invalid_argument("unknown dual CSR receipt phase");
 }
@@ -101,19 +99,14 @@ Json base(const BaseCsrState& value)
           {"edge_extent", extent(value.edge_extent)}};
 }
 
-Json aux(const AuxOutCsrState& value)
+Json aux(const AuxOutCsrState& value, const csr::CsrBufferExtent& edges)
 {
-  return {{"row_offsets", scalarArray(value.row_offsets)},
-          {"row_sources", arrayOf(value.row_sources, [](csr::NodeId id) {
-             return Json(id.value());
-           })},
-          {"arc_ids", arrayOf(value.arc_ids, [](csr::ArcId id) {
-             return Json(id.value());
-           })},
+  return {{"row_arcs", arrayOf(value.row_arcs, [](const auto& row) { return arrayOf(row, [](csr::ArcId id) { return Json(id.value()); }); })},
+          {"row_sources", arrayOf(value.row_sources, [](csr::NodeId id) { return Json(id.value()); })},
           {"source_to_aux_row", scalarArray(value.source_to_aux_row)},
-          {"offsets_extent", extent(value.offsets_extent)},
+          {"rows_extent", extent(value.rows_extent)},
           {"source_extent", extent(value.source_extent)},
-          {"edge_extent", extent(value.edge_extent)},
+          {"edge_extent", extent(edges)},
           {"mapping_extent", extent(value.mapping_extent)}};
 }
 
@@ -279,13 +272,7 @@ Json counters(const DualCsrOperationCounters& value)
            value.native_full_reference_exports},
           {"host_snapshot_rebuilds", value.host_snapshot_rebuilds},
           {"baseline_factory_calls", value.baseline_factory_calls},
-          {"fallback_calls", value.fallback_calls},
-          {"candidate_creates", value.candidate_creates},
-          {"candidate_clones", value.candidate_clones},
-          {"candidate_applies", value.candidate_applies},
-          {"candidate_executes", value.candidate_executes},
-          {"candidate_installs", value.candidate_installs},
-          {"candidate_rollbacks", value.candidate_rollbacks}};
+          {"fallback_calls", value.fallback_calls}};
 }
 
 std::string_view executionModeToken(LevelizationExecutionMode value)
@@ -368,9 +355,7 @@ Json evidence(const DualCsrTransactionEvidence& value)
           {"operation_counters", counters(value.operation_counters)},
           {"incremental_batch_executed",
            value.incremental_batch_executed},
-          {"propagation_scope", "full_graph"},
-          {"native_final_rollback_completed",
-           value.native_final_rollback_completed}};
+          {"propagation_scope", "full_graph"}};
 }
 
 }  // namespace
@@ -388,7 +373,7 @@ nlohmann::json structuralReceiptToJson(
           {"inactive_arcs", arrayOf(receipt.inactive_arcs, inactive)},
           {"base_out", base(receipt.base_out)},
           {"base_in", base(receipt.base_in)},
-          {"aux_out", aux(receipt.aux_out)},
+          {"aux_out", aux(receipt.aux_out, receipt.aux_edge_extent)},
           {"update_telemetry", telemetry(receipt.update_telemetry)}};
 }
 

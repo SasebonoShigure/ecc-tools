@@ -1,3 +1,4 @@
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
@@ -19,7 +20,7 @@
 #include "CsrCpuReferenceBackend.hpp"
 #include "DataManager.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
-#include "DualCsrNativeCandidateCarrierInternal.hpp"
+#include "NativeCandidateExecutor.hpp"
 #include "DualCsrSemanticIdentity.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "DualCsrStructuredBatchTestSupport.hpp"
@@ -171,15 +172,6 @@ void addParallelCellCaptureGroup(Database& database)
                   : std::string{});
 }
 
-std::vector<std::uint8_t> activeMask(const DualCsrState& graph)
-{
-  std::vector<std::uint8_t> result;
-  result.reserve(graph.arc_slots.size());
-  for (const auto& slot : graph.arc_slots)
-    result.push_back(slot.active ? 1U : 0U);
-  return result;
-}
-
 DualCsrTimingResult timingFor(const DualCsrState& graph)
 {
   DualCsrEdgeViewImpl edges(graph);
@@ -190,7 +182,7 @@ DualCsrTimingResult timingFor(const DualCsrState& graph)
       &output.computation.outcome);
   require(values != nullptr,
           "active-payload microcase CPU timing failed");
-  DualCsrTimingResult timing{std::move(*values), activeMask(graph)};
+  DualCsrTimingResult timing{std::move(*values)};
   require(validateDualCsrTimingResult(graph, timing).empty(),
           "active-payload microcase CPU timing is invalid");
   return timing;
@@ -218,19 +210,20 @@ CommittedDualCsrAnalysisState initialAggregate(
       .descriptor_trace = {},
       .semantic_trace = {},
       .traversal_telemetry = fixture.graph.telemetry.traversal,
-      .execution_trace = {}};
+      .execution_trace = {},
+      .baseline = std::make_shared<const timing_edit::BaselineSemanticIdentity>(fixture.plan.baseline)};
   require(validateCommittedDualCsrAnalysisState(state).empty(),
           "active-payload generation-zero aggregate is invalid");
   return state;
 }
 
-std::vector<timing_edit::DesignEditPlan> twoPlans(
+std::vector<timing_edit::EditBatch> twoPlans(
     const StructuredFixture& fixture)
 {
   require(fixture.unmoved_fanout_arc.has_value(),
           "active-payload fixture needs an untouched fanout peer");
-  std::vector<timing_edit::DesignEditPlan> plans{fixture.plan};
-  auto continuation = fixture.plan;
+  std::vector<timing_edit::EditBatch> plans{{fixture.plan.expected_generation, fixture.plan.edits}};
+  timing_edit::EditBatch continuation{fixture.plan.expected_generation, fixture.plan.edits};
   continuation.expected_generation
       = timing_edit::TransactionGeneration{1};
   auto& edit = continuation.edits.front();
@@ -249,45 +242,26 @@ class CumulativeBatchMinter final
 {
  public:
   CumulativeBatchMinter(
-      Database& baseline,
       const timing_edit::NativeExecutionAuthority& authority)
-      : _baseline(baseline), _authority(authority)
+      : _authority(authority)
   {
   }
 
   [[nodiscard]] VerifiedStructuredBatch mint(
-      const CommittedDualCsrAnalysisState& committed,
-      timing_edit::DesignEditPlan plan,
+      DualCsrTransactionCoordinator& coordinator,
+      timing_edit::EditBatch plan,
       bool exercise_omitted_peer = false)
   {
+    const auto& committed = coordinator.committed();
+    commitPending(committed.generation);
     DualSemanticReadView committed_view(committed.graph);
     PendingStructuredBatch pending
-        = DualCsrStructuredBatchPreparer::prepare(
-            std::move(plan), committed.resolver, committed_view,
-            committed.graph, committed.identity,
-            committed.arc_group_index);
+        = coordinator.prepareBatch(std::move(plan));
 
-    timing_edit::NativeDatabaseCandidate candidate
-        = _installed
-              ? detail::DualCsrNativeCandidateCarrier::clone(
-                    *_installed)
-              : detail::DualCsrNativeCandidateCarrier::create(
-                    _baseline);
-    if (_installed) {
-      require(detail::DualCsrNativeCandidateCarrier::rollback(
-                  *_installed),
-              "active-payload prior candidate rollback failed");
-      _installed.reset();
-    }
-    const auto translated
-        = detail::DualCsrNativeCandidateCarrier::apply(
-            candidate, pending.preparedBatch(),
-            pending.stagedResolver());
-    require(translated.applied(),
-            "active-payload native apply was rejected");
-    _installed.emplace(
-        detail::DualCsrNativeCandidateCarrier::installAndExecute(
-            _authority, std::move(candidate)));
+    _installed.emplace(timing_edit::NativeEditTransaction::prepareFull(
+        _authority, pending.preparedBatch(), pending.stagedResolver()));
+    _pending_generation = pending.preparedBatch().targetGeneration();
+    timing_edit::NativeCandidateExecutor::executeFull(*_installed);
 
     if (exercise_omitted_peer) {
       auto omitted = pending.capturePlan();
@@ -309,8 +283,9 @@ class CumulativeBatchMinter final
               "continuation plan cannot omit a same-base peer");
       omitted.arcs.erase(peer);
       const auto committed_before = committed;
+      csr::detail::NativeLibraryModels models(_installed->database());
       const CandidateBoundCapture rejected
-          = NarrowTimingRecordReader{}.read(
+          = NarrowTimingRecordReader{models}.read(
               _installed->database(), committed_view,
               committed.arc_group_index, pending.stagedResolver(),
               pending.preparedBatch(), omitted);
@@ -319,7 +294,8 @@ class CumulativeBatchMinter final
                   && committed == committed_before,
               "omitted same-base peer was not rejected atomically at the typed multiplicity boundary");
     }
-    CandidateBoundCapture capture = NarrowTimingRecordReader{}.read(
+    csr::detail::NativeLibraryModels models(_installed->database());
+    CandidateBoundCapture capture = NarrowTimingRecordReader{models}.read(
         _installed->database(), committed_view,
         committed.arc_group_index, pending.stagedResolver(),
         pending.preparedBatch(), pending.capturePlan());
@@ -329,20 +305,31 @@ class CumulativeBatchMinter final
         std::move(pending), std::move(capture));
   }
 
-  [[nodiscard]] bool finish() noexcept
+  // Recovery's coordinator is local to replay; retain only the pending
+  // generation, then confirm publication through the next call or its result.
+  void commitPending(timing_edit::TransactionGeneration generation)
+  {
+    if (!_installed)
+      return;
+    require(_installed->active() && generation == _pending_generation,
+            "native batch has no matching committed CSR generation");
+    _installed->commit();
+    _installed.reset();
+  }
+
+  [[nodiscard]] bool rollback() noexcept
   {
     if (!_installed)
       return true;
-    const bool rolled_back
-        = detail::DualCsrNativeCandidateCarrier::rollback(*_installed);
+    const bool restored = _installed->rollback();
     _installed.reset();
-    return rolled_back;
+    return restored;
   }
 
  private:
-  Database& _baseline;
   const timing_edit::NativeExecutionAuthority& _authority;
-  std::optional<timing_edit::InstalledNativeDatabase> _installed;
+  std::optional<timing_edit::NativeEditTransaction> _installed;
+  timing_edit::TransactionGeneration _pending_generation;
 };
 
 struct DeletedPeerCanary
@@ -373,7 +360,7 @@ DeletedPeerCanary installDeletedPeerCanary(
   require(peer.payload.key.parallel_ordinal == 0,
           "untouched active peer is not canonical ordinal zero");
 
-  const auto identity_before = state.identity;
+  const auto identity_before = deriveDualCsrCommittedIdentity(state.graph, state.resolver);
   deleted->payload = peer.payload;
   deleted->payload.key.parallel_ordinal = inactive_ordinal;
   if (inactive_ordinal == 0)
@@ -446,27 +433,29 @@ ScenarioResult runScenario(std::uint64_t inactive_ordinal,
               const timing_edit::NativeExecutionAuthority& authority) {
             timing_edit::test::requireReleasedSnapshotForNativeMutation(
                 context, authority.sessionToken());
-            CumulativeBatchMinter source(STADM.getDatabase(), authority);
+            CumulativeBatchMinter source(authority);
 
-            auto first = source.mint(initial, plans.front(), true);
+            DualCsrTransactionCoordinator first_commit(initial);
+            auto first = source.mint(first_commit, plans.front(), true);
             auto full = makeStagedDualCsrAnalysisState(
-                initial, std::move(first));
+                first_commit, std::move(first));
             require(full.success(),
                     "generation-one public full factory was rejected");
-            CommittedDualCsrAnalysisState generation_one
-                = full.staged->state();
+            require(first_commit.publish(std::move(*full.staged)).ok(), "generation-one publication failed");
+            CommittedDualCsrAnalysisState generation_one = first_commit.committed();
             const DeletedPeerCanary canary
                 = installDeletedPeerCanary(
                     generation_one, *fixture.unmoved_fanout_arc,
                     inactive_ordinal);
 
+            DualCsrTransactionCoordinator final_commit(std::move(generation_one));
             auto second = source.mint(
-                generation_one, plans.back());
+                final_commit, plans.back());
             std::optional<DualCsrVerifiedStage> final_stage;
             if (final_mode == FinalFactoryMode::kMixed) {
               auto mixed_attempt
                   = makeMixedLevelizedDualCsrAnalysisState(
-                      generation_one, std::move(second));
+                      final_commit, std::move(second));
               auto* mixed_stage
                   = std::get_if<DualCsrVerifiedStage>(&mixed_attempt);
               require(mixed_stage != nullptr,
@@ -474,13 +463,12 @@ ScenarioResult runScenario(std::uint64_t inactive_ordinal,
               final_stage.emplace(std::move(*mixed_stage));
             } else {
               auto full_attempt = makeStagedDualCsrAnalysisState(
-                  generation_one, std::move(second));
+                  final_commit, std::move(second));
               require(full_attempt.success(),
                       "independent generation-two public full factory was rejected");
               final_stage.emplace(std::move(*full_attempt.staged));
             }
-            const auto& staged = final_stage->state();
-            const auto& execution = staged.execution_trace.back();
+            const auto& execution = final_stage->batch().execution;
             const bool correct_mode
                 = final_mode == FinalFactoryMode::kMixed
                       ? execution.mode()
@@ -495,6 +483,8 @@ ScenarioResult runScenario(std::uint64_t inactive_ordinal,
                             && !execution.mixed().has_value();
             require(correct_mode,
                     "active-payload stage lost its selected public factory boundary");
+            require(final_commit.publish(std::move(*final_stage)).ok(), "generation-two publication failed");
+            const auto& staged = final_commit.committed();
             const auto& deleted = staged.graph.arc_slots.at(
                 static_cast<std::size_t>(canary.deleted.value()));
             const auto& peer = staged.graph.arc_slots.at(
@@ -538,9 +528,8 @@ ScenarioResult runScenario(std::uint64_t inactive_ordinal,
             result = ScenarioResult{
                 incremental.functional,
                 incremental.levelization,
-                execution.mixed()};
-            require(source.finish(),
-                    "active-payload final candidate rollback failed");
+                staged.execution_trace.back().mixed()};
+            source.commitPending(final_commit.committed().generation);
             return StaStatus::success(session.session().state());
           });
   require(guarded.ok(),

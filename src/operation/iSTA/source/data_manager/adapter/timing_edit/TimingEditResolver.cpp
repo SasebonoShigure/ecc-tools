@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <variant>
+#include <type_traits>
 
 #include "Database.hpp"
 #include "TimingGraphCsrAdapter.hpp"
@@ -163,36 +164,79 @@ TimingEditResolverState TimingEditResolverState::stage(const PreparedBatch& batc
   return stageAssignments(batch.slotPlan(), batch.tokenMaterializations());
 }
 
-TimingEditResolverState TimingEditResolverState::stageAssignments(const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const
+TimingEditResolverDelta TimingEditResolverState::prepareAssignmentsDelta(
+    const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const
 {
   requireHighWater(_high_water, plan.before);
-  TimingEditResolverState staged = *this;
-
-  std::set<std::string> instance_names;
-  std::set<std::string> net_names;
-  std::set<std::string> pin_names;
+  TimingEditResolverDelta result;
+  auto& delta = result._changes;
+  auto& expected = result._expected;
+  expected._high_water = plan.before;
+  std::set<std::string> instance_names, net_names, pin_names;
   for (const auto& value : values) {
-    if (value.instance_name.empty() || value.output_net_name.empty() || value.input_pin_name.empty() || value.output_pin_name.empty()) {
+    if (value.instance_name.empty() || value.output_net_name.empty() || value.input_pin_name.empty() || value.output_pin_name.empty())
       invalid("token materialization contains an empty native name");
-    }
     if (!instance_names.insert(value.instance_name).second || !net_names.insert(value.output_net_name).second
-        || !pin_names.insert(value.input_pin_name).second || !pin_names.insert(value.output_pin_name).second) {
+        || !pin_names.insert(value.input_pin_name).second || !pin_names.insert(value.output_pin_name).second)
       invalid("token materialization collides within the staged batch");
-    }
-    const auto [position, inserted] = staged._materializations.emplace(value.creation_token, value);
-    if (!inserted && !(position->second == value)) {
+    const auto previous = _materializations.find(value.creation_token);
+    if (previous != _materializations.end() && previous->second != value)
       invalid("creation token was materialized differently in another generation");
-    }
+    if (previous != _materializations.end())
+      expected._materializations.emplace(previous->first, previous->second);
+    if (!delta._materializations.emplace(value.creation_token, value).second)
+      invalid("creation token occurs more than once in a batch");
   }
-
-  applyAssignments(staged._nodes, plan.nodes, plan.before.node_slots, plan.after.node_slots,
-                   [&staged](const StableNodeRef& ref) { return staged.materializedNodeName(ref); });
-  applyAssignments(staged._nets, plan.nets, plan.before.net_slots, plan.after.net_slots,
-                   [&staged](const StableNetRef& ref) { return staged.materializedNetName(ref); });
-  applyAssignments(staged._arcs, plan.arcs, plan.before.arc_slots, plan.after.arc_slots,
+  const auto copy_touched = [](const auto& before, const auto& assignments, auto& changed) {
+    for (const auto& assignment : assignments) {
+      const auto found = before.find(assignment.ref);
+      if (found != before.end())
+        changed.emplace(found->first, found->second);
+    }
+  };
+  copy_touched(_nodes, plan.nodes, delta._nodes);
+  copy_touched(_nets, plan.nets, delta._nets);
+  copy_touched(_arcs, plan.arcs, delta._arcs);
+  expected._nodes = delta._nodes;
+  expected._nets = delta._nets;
+  expected._arcs = delta._arcs;
+  const auto materialization_for = [&](const CreationToken& token) -> const TokenMaterialization& {
+    const auto found = delta._materializations.find(token);
+    return found == delta._materializations.end() ? materialization(token) : found->second;
+  };
+  applyAssignments(delta._nodes, plan.nodes, plan.before.node_slots, plan.after.node_slots,
+                   [&](const StableNodeRef& ref) {
+                     if (const auto* existing = std::get_if<ExistingNodeRef>(&ref))
+                       return existing->baseline_key.full_name;
+                     const auto& created = std::get<CreatedNodeRef>(ref);
+                     const auto& value = materialization_for(created.creation_token);
+                     return created.role == CreatedNodeRole::kInput ? value.input_pin_name : value.output_pin_name;
+                   });
+  applyAssignments(delta._nets, plan.nets, plan.before.net_slots, plan.after.net_slots,
+                   [&](const StableNetRef& ref) {
+                     if (const auto* existing = std::get_if<ExistingNetRef>(&ref))
+                       return existing->baseline_name;
+                     return materialization_for(std::get<CreatedNetRef>(ref).creation_token).output_net_name;
+                   });
+  applyAssignments(delta._arcs, plan.arcs, plan.before.arc_slots, plan.after.arc_slots,
                    [](const StableArcRef&) { return std::string{}; });
-  staged._high_water = plan.after;
+  delta._high_water = plan.after;
+  return result;
+}
+
+TimingEditResolverState TimingEditResolverState::stageAssignments(
+    const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const
+{
+  auto staged = *this;
+  PreparedTimingEditResolverPatch patch(staged, prepareAssignmentsDelta(plan, values));
+  patch.apply();
+  patch.commit();
   return staged;
+}
+
+TimingEditResolverDelta TimingEditResolverState::prepare(const PreparedBatch& batch) const
+{
+  return prepareAssignmentsDelta(batch.slotPlan(), batch.tokenMaterializations());
 }
 
 const std::string& TimingEditResolverState::resolveNode(const StableNodeRef& ref) const
@@ -229,22 +273,156 @@ StableNetRef TimingEditResolverState::stableNetForNativeName(const std::string& 
   return reverseResolve(_nets, native_name, "net");
 }
 
-std::string TimingEditResolverState::materializedNodeName(const StableNodeRef& ref) const
+
+namespace {
+template <class Map, class Key>
+const typename Map::mapped_type* findValue(const Map& values, const Key& key)
 {
-  if (const auto* existing = std::get_if<ExistingNodeRef>(&ref)) {
-    return existing->baseline_key.full_name;
-  }
-  const auto& created = std::get<CreatedNodeRef>(ref);
-  const auto& value = materialization(created.creation_token);
-  return created.role == CreatedNodeRole::kInput ? value.input_pin_name : value.output_pin_name;
+  const auto found = values.find(key);
+  return found == values.end() ? nullptr : &found->second;
+}
+const NativeSlotBinding& requireLive(const NativeSlotBinding* binding, const char* kind)
+{
+  if (!binding || binding->tombstone)
+    invalid(std::string(kind) + " reference is missing or tombstoned");
+  return *binding;
+}
+}  // namespace
+
+const NativeSlotBinding* TimingEditResolverView::findNodeBinding(const StableNodeRef& ref) const
+{
+  if (_delta)
+    if (const auto* value = findValue(_delta->_changes._nodes, ref))
+      return value;
+  return findValue(_base._nodes, ref);
+}
+const NativeSlotBinding* TimingEditResolverView::findNetBinding(const StableNetRef& ref) const
+{
+  if (_delta)
+    if (const auto* value = findValue(_delta->_changes._nets, ref))
+      return value;
+  return findValue(_base._nets, ref);
+}
+const NativeSlotBinding* TimingEditResolverView::findArcBinding(const StableArcRef& ref) const
+{
+  if (_delta)
+    if (const auto* value = findValue(_delta->_changes._arcs, ref))
+      return value;
+  return findValue(_base._arcs, ref);
+}
+const std::string& TimingEditResolverView::resolveNode(const StableNodeRef& ref) const
+{
+  return requireLive(findNodeBinding(ref), "node").native_name;
+}
+const std::string& TimingEditResolverView::resolveNet(const StableNetRef& ref) const
+{
+  return requireLive(findNetBinding(ref), "net").native_name;
+}
+AppendOnlySlot TimingEditResolverView::resolveArcSlot(const StableArcRef& ref) const
+{
+  return requireLive(findArcBinding(ref), "arc").slot;
+}
+const TokenMaterialization* TimingEditResolverView::findMaterialization(const CreationToken& token) const
+{
+  if (_delta)
+    if (const auto* value = findValue(_delta->_changes._materializations, token))
+      return value;
+  return findValue(_base._materializations, token);
+}
+const TokenMaterialization& TimingEditResolverView::materialization(const CreationToken& token) const
+{
+  const auto* value = findMaterialization(token);
+  if (!value)
+    invalid("creation token has no native materialization");
+  return *value;
 }
 
-std::string TimingEditResolverState::materializedNetName(const StableNetRef& ref) const
+struct PreparedTimingEditResolverPatch::Data
 {
-  if (const auto* existing = std::get_if<ExistingNetRef>(&ref)) {
-    return existing->baseline_name;
+  TimingEditResolverState& state;
+  TimingEditResolverDelta delta;
+  std::vector<std::pair<NativeSlotBinding*, NativeSlotBinding*>> bindings;
+  std::vector<std::map<StableNodeRef, NativeSlotBinding>::iterator> nodes;
+  std::vector<std::map<StableNetRef, NativeSlotBinding>::iterator> nets;
+  std::vector<std::map<StableArcRef, NativeSlotBinding>::iterator> arcs;
+  std::vector<std::map<CreationToken, TokenMaterialization>::iterator> materializations;
+  enum class Phase { kPrepared, kApplied, kFinished } phase{Phase::kPrepared};
+
+  Data(TimingEditResolverState& owner, TimingEditResolverDelta changes) : state(owner), delta(std::move(changes))
+  {
+    requireHighWater(state._high_water, delta._expected._high_water);
+    const auto collect = [&](auto& target, auto& replacement, const auto& expected, auto& added) {
+      added.reserve(replacement.size());
+      for (auto it = replacement.begin(); it != replacement.end(); ++it) {
+        const auto old = target.find(it->first);
+        const auto before = expected.find(it->first);
+        if ((old == target.end()) != (before == expected.end())
+            || (old != target.end() && old->second != before->second))
+          invalid("pending resolver delta no longer matches the local old value");
+        if (old == target.end())
+          added.push_back(it);
+        else
+          bindings.emplace_back(&old->second, &it->second);
+      }
+    };
+    collect(state._nodes, delta._changes._nodes, delta._expected._nodes, nodes);
+    collect(state._nets, delta._changes._nets, delta._expected._nets, nets);
+    collect(state._arcs, delta._changes._arcs, delta._expected._arcs, arcs);
+    materializations.reserve(delta._changes._materializations.size());
+    for (auto it = delta._changes._materializations.begin(); it != delta._changes._materializations.end(); ++it) {
+      const auto old = state._materializations.find(it->first);
+      const auto before = delta._expected._materializations.find(it->first);
+      if ((old == state._materializations.end()) != (before == delta._expected._materializations.end())
+          || (old != state._materializations.end() && old->second != before->second))
+        invalid("pending token materialization no longer matches its old value");
+      if (old == state._materializations.end())
+        materializations.push_back(it);
+    }
   }
-  return materialization(std::get<CreatedNetRef>(ref).creation_token).output_net_name;
+  void apply() noexcept
+  {
+    if (phase != Phase::kPrepared)
+      return;
+    static_assert(std::is_nothrow_swappable_v<NativeSlotBinding>);
+    for (const auto& [target, replacement] : bindings)
+      std::swap(*target, *replacement);
+    state._nodes.merge(delta._changes._nodes);
+    state._nets.merge(delta._changes._nets);
+    state._arcs.merge(delta._changes._arcs);
+    state._materializations.merge(delta._changes._materializations);
+    std::swap(state._high_water, delta._changes._high_water);
+    phase = Phase::kApplied;
+  }
+  void rollback() noexcept
+  {
+    if (phase != Phase::kApplied)
+      return;
+    const auto erase = [](auto& target, const auto& inserted) {
+      for (auto it : inserted)
+        target.erase(it);
+    };
+    erase(state._nodes, nodes);
+    erase(state._nets, nets);
+    erase(state._arcs, arcs);
+    erase(state._materializations, materializations);
+    for (const auto& [target, saved] : bindings)
+      std::swap(*target, *saved);
+    std::swap(state._high_water, delta._changes._high_water);
+    phase = Phase::kFinished;
+  }
+};
+PreparedTimingEditResolverPatch::PreparedTimingEditResolverPatch(TimingEditResolverState& state, TimingEditResolverDelta delta)
+    : _data(std::make_unique<Data>(state, std::move(delta))) {}
+PreparedTimingEditResolverPatch::PreparedTimingEditResolverPatch(PreparedTimingEditResolverPatch&&) noexcept = default;
+PreparedTimingEditResolverPatch::~PreparedTimingEditResolverPatch() { rollback(); }
+TimingEditResolverView PreparedTimingEditResolverPatch::view() const
+{
+  if (!_data || _data->phase != Data::Phase::kPrepared)
+    throw std::logic_error("resolver projection is only available before apply");
+  return {_data->state, _data->delta};
 }
+void PreparedTimingEditResolverPatch::apply() noexcept { if (_data) _data->apply(); }
+void PreparedTimingEditResolverPatch::rollback() noexcept { if (_data) _data->rollback(); }
+void PreparedTimingEditResolverPatch::commit() noexcept { if (_data) _data->phase = Data::Phase::kFinished; }
 
 }  // namespace ista::timing_edit

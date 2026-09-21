@@ -64,7 +64,8 @@ std::set<std::string> requireUniqueNames(const std::vector<std::string>& names,
 void requireRawTraceClosure(const Database& database,
                             const TimingEditResolverState& resolver,
                             const BaselineSemanticIdentity& baseline,
-                            const std::vector<DesignEditPlan>& committed_trace)
+                            std::span<const EditBatch> committed_trace,
+                            std::span<const BufferInsertionMutation> pending_edits)
 {
   std::map<CreationToken, const BufferInsertionMutation*> edits_by_token;
   std::set<std::string> expected_instances(baseline.canonical_pre_state.instances.begin(),
@@ -79,14 +80,14 @@ void requireRawTraceClosure(const Database& database,
   }
 
   std::map<std::string, std::string> expected_net_by_affected_pin;
-  for (std::size_t generation = 0; generation < committed_trace.size(); ++generation) {
-    const DesignEditPlan& plan = committed_trace[generation];
-    if (plan.schema_version != kDesignEditPlanSchema || plan.baseline != baseline
-        || plan.expected_generation
-               != TransactionGeneration(static_cast<std::uint64_t>(generation))) {
+  const auto count = committed_trace.size() + (pending_edits.empty() ? 0 : 1);
+  for (std::size_t generation = 0; generation < count; ++generation) {
+    if (generation < committed_trace.size()
+        && committed_trace[generation].expected_generation != TransactionGeneration(generation))
       invalid("committed trace envelope is inconsistent while checking raw closure");
-    }
-    for (const BufferInsertionMutation& edit : plan.edits) {
+    const std::span<const BufferInsertionMutation> edits
+        = generation < committed_trace.size() ? committed_trace[generation].edits : pending_edits;
+    for (const BufferInsertionMutation& edit : edits) {
       if (!edits_by_token.emplace(edit.creation_token, &edit).second) {
         invalid("committed trace reuses a creation token");
       }
@@ -272,9 +273,10 @@ void requireRawTraceClosure(const Database& database,
 void NativeTimingEditPreparer::requireExactCommittedTraceClosure(
     const Database& active_database, const csr::CsrReferenceInput& current_input,
     const TimingEditResolverState& resolver, const BaselineSemanticIdentity& baseline,
-    const std::vector<DesignEditPlan>& committed_trace)
+    std::span<const EditBatch> committed_trace,
+                            std::span<const BufferInsertionMutation> pending_edits)
 {
-  requireRawTraceClosure(active_database, resolver, baseline, committed_trace);
+  requireRawTraceClosure(active_database, resolver, baseline, committed_trace, pending_edits);
   NativeTimingEditPreparer::requireExactResolverCoverage(active_database, current_input,
                                                          resolver);
 }

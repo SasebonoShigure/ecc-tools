@@ -1,3 +1,4 @@
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -40,8 +41,6 @@ using timing_edit::AppendOnlyHighWater;
 using timing_edit::CommittedEditIdentity;
 using timing_edit::DesignEditPlan;
 using timing_edit::ExistingNodeRef;
-using timing_edit::NativeDatabaseCandidate;
-using timing_edit::NativeDesignEditTranslator;
 using timing_edit::TimingEditResolverState;
 using timing_edit::TimingEditSessionToken;
 using timing_edit::TransactionGeneration;
@@ -160,17 +159,15 @@ void moveArcFromBaseToAux(DualCsrState& graph, csr::ArcId arc_id)
           "Aux fixture arc is absent from BaseOut");
   physical->reset();
 
-  graph.aux_out.row_offsets = {0, 1};
   graph.aux_out.row_sources = {source};
-  graph.aux_out.arc_ids = {arc_id};
+  graph.aux_out.row_arcs = {{arc_id}};
   graph.aux_out.source_to_aux_row.assign(graph.nodes.size(), -1);
   graph.aux_out.source_to_aux_row.at(
       static_cast<std::size_t>(source.value())) = 0;
-  graph.aux_out.offsets_extent
-      = extentOf(graph.aux_out.row_offsets);
+  graph.aux_out.rows_extent
+      = extentOf(graph.aux_out.row_arcs);
   graph.aux_out.source_extent
       = extentOf(graph.aux_out.row_sources);
-  graph.aux_out.edge_extent = extentOf(graph.aux_out.arc_ids);
   graph.aux_out.mapping_extent
       = extentOf(graph.aux_out.source_to_aux_row);
 
@@ -227,19 +224,12 @@ CandidateBoundCapture captureCandidate(
               const timing_edit::NativeExecutionAuthority& authority) {
             timing_edit::test::requireReleasedSnapshotForNativeMutation(
                 context, authority.sessionToken());
-            NativeDatabaseCandidate candidate
-                = NativeDatabaseCandidate::create(STADM.getDatabase());
-            const auto translated
-                = NativeDesignEditTranslator::applyNormalizedBatch(
-                    candidate.database(), pending.preparedBatch(),
-                    pending.stagedResolver());
-            require(translated.applied() && translated.reasons.empty(),
-                    "pure prepared batch did not translate on candidate");
-            timing_edit::InstalledNativeDatabase installed
-                = timing_edit::NativeCandidateExecutor::installAndExecute(
-                    authority, std::move(candidate));
+            auto installed = timing_edit::NativeEditTransaction::prepareFull(
+                authority, pending.preparedBatch(), pending.stagedResolver());
+            timing_edit::NativeCandidateExecutor::executeFull(installed);
             const DualSemanticReadView committed(fixture.graph);
-            captured = NarrowTimingRecordReader{}.read(
+            csr::detail::NativeLibraryModels models(installed.database());
+            captured = NarrowTimingRecordReader{models}.read(
                 installed.database(), committed,
                 fixture.arc_group_index, pending.stagedResolver(),
                 pending.preparedBatch(),

@@ -6,6 +6,7 @@
 // iEDA is licensed under Mulan PSL v2.
 // You may use this software according to the terms and conditions of the Mulan PSL v2.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <limits>
@@ -74,7 +75,7 @@ void synchronizeCellOutcome(CsrReferenceInput& input)
   const auto arc = std::ranges::find(input.arcs, ArcKind::kCell, &ArcRecord::kind);
   requireCpuReference(arc != input.arcs.end(), "outcome fixture has no cell arc");
   arc->key.base.library_arcs.clear();
-  for (const auto& child : arc->transfer.children)
+  for (const auto& child : arc->transfer.children())
     arc->key.base.library_arcs.push_back(child.signature);
   input.arc_ids_by_key[arc->id.value()].key = arc->key;
   input.referenced_library_cells.front().cell_arcs.front().transfer = arc->transfer;
@@ -131,7 +132,8 @@ CsrReferenceInput presentEmptySlewOverflowInput(bool unsafe_cap)
 {
   CsrReferenceInput input = makeCpuReferenceCellFixture();
   auto& arc = input.arcs[1];
-  auto& child = arc.transfer.children.front();
+  auto children = arc.transfer.children();
+  auto& child = children.front();
   child.time_unit_scale = 2.0;
   for (std::size_t output = 0; output < kTransitionCount; ++output) {
     child.signature.delay_tables[output] = {true, TableVariable::kNone, TableVariable::kNone};
@@ -146,14 +148,17 @@ CsrReferenceInput presentEmptySlewOverflowInput(bool unsafe_cap)
     child.capacitance_unit_scale = 2.0;
     arc.output_load = outputLoad(static_cast<double>(std::numeric_limits<int>::max()));
   }
+  arc.transfer.setChildren(children);
   synchronizeCellOutcome(input);
   return input;
 }
 CsrReferenceInput interpolationOverflowInput()
 {
   CsrReferenceInput input = makeCpuReferenceCellFixture();
-  auto& table = input.arcs[1].transfer.children.front().delay_tables.front();
+  auto children = input.arcs[1].transfer.children();
+  auto& table = children.front().delay_tables.front();
   table.values = {std::numeric_limits<double>::max(), -std::numeric_limits<double>::max(), 0.0};
+  input.arcs[1].transfer.setChildren(children);
   synchronizeCellOutcome(input);
   return input;
 }
@@ -161,11 +166,13 @@ CsrReferenceInput interpolationOverflowInput()
 CsrReferenceInput negativeComputedSlewInput()
 {
   CsrReferenceInput input = makeCpuReferenceCellFixture();
-  auto& child = input.arcs[1].transfer.children.front();
+  ista::csr::test::mutateChildren(input.arcs[1].transfer, [&](auto& children) {
+      auto& child = children.front();
   for (std::size_t output = 0; output < kTransitionCount; ++output) {
     child.signature.slew_tables[output] = {true, TableVariable::kNone, TableVariable::kNone};
     child.slew_tables[output] = {true, TableVariable::kNone, TableVariable::kNone, {}, {-1.0}};
   }
+    });
   synchronizeCellOutcome(input);
   return input;
 }
@@ -187,7 +194,7 @@ CsrReferenceInput arrivalAdditionOverflowInput()
   const double maximum = std::numeric_limits<double>::max();
   const double arrival = maximum / 2.0;
   auto& transfer = input.arcs[1].transfer;
-  transfer.children.clear();
+  transfer.setChildren({});
   transfer.delay = maximum;
   transfer.delay_min = maximum;
   transfer.delay_max = maximum;

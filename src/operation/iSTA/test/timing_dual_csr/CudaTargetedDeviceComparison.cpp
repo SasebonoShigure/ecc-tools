@@ -48,9 +48,10 @@ void requireCudaDeviceMatchesCanonical(const CudaTargetedTraceObservation& obser
 {
   const auto& input = observation.canonical_input;
   const auto& device = observation.device;
-  const auto expected = cuda_detail::pack(input);  // Mechanical encoding, no CPU timing or update.
+  ModelStorage models;
+  const auto expected = cuda_detail::pack(input, models);  // Mechanical encoding, no CPU timing or update.
   require(device.out_offsets.size() == input.nodes.size() + 1 && device.in_offsets.size() == input.nodes.size() + 1
-              && device.source_to_aux_row.size() == input.nodes.size() && device.arcs.size() == observation.arc_native_ranks.size(),
+              && device.aux_rows.size() == input.nodes.size() && device.arcs.size() == observation.arc_native_ranks.size(),
           "device graph extents differ");
   std::map<std::string, Index> stable_nodes;
   for (Index node = 0; node < observation.node_names.size(); ++node)
@@ -70,9 +71,11 @@ void requireCudaDeviceMatchesCanonical(const CudaTargetedTraceObservation& obser
     const auto stable = stable_nodes.at(node.key.full_name);
     std::vector<Index> actual_out, actual_in, wanted_out, wanted_in;
     appendRow(actual_out, device.out_offsets, device.out_arcs, stable, true);
-    const auto aux = device.source_to_aux_row.at(stable);
-    if (aux != absent)
-      appendRow(actual_out, device.aux_offsets, device.aux_arcs, aux, false);
+    const auto& aux = device.aux_rows.at(stable);
+    for (auto arc : aux) {
+      require(arc != absent, "device Aux row contains a tombstone");
+      actual_out.push_back(arc);
+    }
     appendRow(actual_in, device.in_offsets, device.in_arcs, stable, false);
     for (auto slot = input.out_row_offsets.at(node.id.value()); slot < input.out_row_offsets.at(node.id.value() + 1); ++slot)
       wanted_out.push_back(canonical_to_stable.at(input.out_arc_ids.at(slot).value()));
@@ -95,14 +98,14 @@ void requireCudaDeviceMatchesCanonical(const CudaTargetedTraceObservation& obser
             "device child range outside buffer");
     for (Index index = 0; index < actual.child_count; ++index) {
       const auto& child = device.children.at(actual.child_begin + index);
-      const auto& wanted_child = expected.children.at(wanted.child_begin + index);
+      const auto& wanted_child = models.children.at(wanted.child_begin + index);
       require(std::tie(child.time_scale, child.capacitance_scale, child.arc_index, child.sense, child.trigger)
                   == std::tie(wanted_child.time_scale, wanted_child.capacitance_scale, wanted_child.arc_index, wanted_child.sense, wanted_child.trigger),
               "device child identity/units differ");
       for (std::size_t transition = 0; transition < 2; ++transition) {
-        sameTable(child.check[transition], wanted_child.check[transition], device.table_data, expected.table_data);
-        sameTable(child.delay[transition], wanted_child.delay[transition], device.table_data, expected.table_data);
-        sameTable(child.slew[transition], wanted_child.slew[transition], device.table_data, expected.table_data);
+        sameTable(child.check[transition], wanted_child.check[transition], device.table_data, models.tables);
+        sameTable(child.delay[transition], wanted_child.delay[transition], device.table_data, models.tables);
+        sameTable(child.slew[transition], wanted_child.slew[transition], device.table_data, models.tables);
       }
     }
   }

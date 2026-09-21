@@ -17,6 +17,7 @@
 #include "CsrReferenceInputStorageOracle.hpp"
 
 #include <cstddef>
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -111,11 +112,6 @@ Bytes ownedChild(const ChildTimingArcModel& value)
   return result;
 }
 
-Bytes ownedTransfer(const CellTransferModel& value)
-{
-  return vectorOwned(value.children, [](const auto& child) { return ownedChild(child); });
-}
-
 Bytes ownedTimingEndpoint(const TimingCheckEndpointModel& value)
 {
   Bytes result = combine(ownedString(value.instance_name), ownedString(value.clock_pin_raw_name));
@@ -132,13 +128,13 @@ Bytes ownedLibraryPort(const LibraryPortModel& value)
 Bytes ownedLibraryCellArc(const LibraryCellArcModel& value)
 {
   Bytes result = combine(ownedString(value.source_port), ownedString(value.sink_port));
-  return combine(result, ownedTransfer(value.transfer));
+  return result;
 }
 
 Bytes ownedLibraryCheck(const LibraryTimingCheckArcModel& value)
 {
   Bytes result = combine(ownedString(value.clock_port), ownedString(value.data_port));
-  return combine(result, vectorOwned(value.children, [](const auto& child) { return ownedChild(child); }));
+  return result;
 }
 
 Bytes ownedLibraryCell(const ReferencedLibraryCellModel& value)
@@ -169,13 +165,28 @@ Bytes ownedParasiticNet(const ParasiticNetModel& value)
   return combine(result, vectorOwned(value.resistors, [](const auto& resistor) { return ownedParasiticResistor(resistor); }));
 }
 
-Bytes existingArcCheckTableDelta(const CsrReferenceInput& input)
+Bytes uniqueModelBytes(const CsrReferenceInput& input)
 {
-  Bytes result;
+  std::vector<const std::vector<ChildTimingArcModel>*> owners;
+  const auto append = [&](const auto& model) {
+    if (model.childrenOwner())
+      owners.push_back(model.childrenOwner().get());
+  };
   for (const auto& arc : input.arcs)
-    for (const auto& child : arc.transfer.children)
-      for (const auto& table : child.check_tables)
-        result = combine(result, ownedTable(table));
+    append(arc.transfer);
+  for (const auto& cell : input.referenced_library_cells) {
+    for (const auto& arc : cell.cell_arcs)
+      append(arc.transfer);
+    for (const auto& check : cell.timing_checks)
+      append(check);
+  }
+  std::sort(owners.begin(), owners.end(), std::less<>{});
+  owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+  Bytes result;
+  for (const auto* owner : owners) {
+    result = combine(result, {sizeof(*owner), sizeof(*owner)});
+    result = combine(result, vectorOwned(*owner, [](const auto& child) { return ownedChild(child); }));
+  }
   return result;
 }
 
@@ -210,7 +221,7 @@ Bytes caseConstraintDelta(const CsrReferenceInput& input)
 
 Bytes step4OwnedBytes(const CsrReferenceInput& input)
 {
-  Bytes result = existingArcCheckTableDelta(input);
+  Bytes result = uniqueModelBytes(input);
   result = combine(result, clockConstraintDelta(input));
   result = combine(result, portConstraintDelta(input));
   result = combine(result, caseConstraintDelta(input));

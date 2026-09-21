@@ -31,18 +31,20 @@ bool validateMixed(const MixedLevelizationDeterministicTrace& trace) noexcept
 }  // namespace
 
 LevelizationExecutionTrace::LevelizationExecutionTrace(timing_edit::TransactionGeneration generation_value, LevelizationExecutionMode mode_value,
-                                                       const csr::CsrFifoLevelization& levels_value, csr::CsrTraversalTelemetry traversal_value,
+                                                       const csr::CsrTimingValues& levels_value, csr::CsrTraversalTelemetry traversal_value,
                                                        csr::CsrFullLevelizerEntryDelta&& entry_delta, std::uint64_t fallback_count_value,
                                                        bool supplied_levels_validated_value, std::optional<MixedLevelizationDeterministicTrace> mixed_value)
     : _generation(generation_value),
       _mode(mode_value),
-      _levels(incregpusta_debug_checks_enabled ? levels_value : csr::CsrFifoLevelization{}),
+      _levels{},
       _traversal(traversal_value),
       _full_levelizer_entry_delta(entry_delta.value()),
       _fallback_count(fallback_count_value),
       _supplied_levels_validated(supplied_levels_validated_value),
       _mixed(incregpusta_debug_checks_enabled ? std::move(mixed_value) : std::nullopt)
 {
+  if constexpr (incregpusta_debug_checks_enabled)
+    _levels = {true, levels_value.level_offsets, levels_value.level_nodes, levels_value.node_to_level};
 }
 
 MixedLevelizationDeterministicTrace projectDeterministicMixedTrace(

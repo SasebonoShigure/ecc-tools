@@ -163,7 +163,7 @@ PreparedBatchData preparedData(const Fixture& fixture)
   data.session_token = TimingEditSessionToken{7};
   data.expected_generation = TransactionGeneration{0};
   data.target_generation = TransactionGeneration{1};
-  data.baseline = fixture.baseline;
+  data.baseline = std::make_shared<const BaselineSemanticIdentity>(fixture.baseline);
   data.expected_pre_committed_identity = CommittedEditIdentity{TransactionGeneration{0}, fixture.baseline.fingerprints,
                                                                fixture.baseline.canonical_pre_state};
   data.normalized_edits = {fixture.edit_value};
@@ -283,8 +283,22 @@ void testTaggedPlacementAndRcEncoding()
 void testReverseRestoresBaselineArcAndSealIsPrivate()
 {
   Fixture fixture;
-  PreparedBatch batch = PreparedBatch::create(preparedData(fixture));
-  require(!batch.sealed() && !batch.targetPostCommittedIdentity(), "new prepared batch is unexpectedly sealed");
+  auto mutable_baseline = std::make_shared<BaselineSemanticIdentity>(fixture.baseline);
+  auto data = preparedData(fixture);
+  data.baseline = mutable_baseline;
+  PreparedBatch batch = PreparedBatch::create(std::move(data));
+  mutable_baseline->canonical_pre_state.nodes.clear();
+  mutable_baseline->fingerprints.topology += "-mutated";
+  require(batch.baseline() == fixture.baseline, "public prepared batch retained a mutable baseline alias");
+  auto missing_baseline = preparedData(fixture);
+  missing_baseline.baseline.reset();
+  requireInvalid([&] { static_cast<void>(PreparedBatch::create(std::move(missing_baseline))); },
+                 "public prepared batch accepted absent baseline");
+  auto missing_identity = preparedData(fixture);
+  missing_identity.expected_pre_committed_identity.reset();
+  requireInvalid([&] { static_cast<void>(PreparedBatch::create(std::move(missing_identity))); },
+                 "public prepared batch accepted absent identity evidence");
+
   require(std::holds_alternative<ExistingArcRef>(std::get<AddNetArc>(
               *std::find_if(batch.reverseDelta().operations.begin(), batch.reverseDelta().operations.end(),
                             [](const TimingGraphEdit& op) { return std::holds_alternative<AddNetArc>(op); }))

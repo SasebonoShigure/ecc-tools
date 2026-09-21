@@ -16,7 +16,7 @@
 
 #include "BufferTraceTypes.hpp"
 #include "CsrReferenceTypes.hpp"
-#include "TimingEditCoordinator.hpp"
+#include "TimingEditResolver.hpp"
 #include "TimingEditResolver.hpp"
 
 namespace ista::buffer_trace {
@@ -117,7 +117,6 @@ struct ReplayReceipt
   std::size_t prefix_batches{0};
   std::vector<FunctionalBatchReceipt> batches;
   timing_edit::CommittedEditIdentity committed_identity;
-  timing_edit::CumulativeEditTrace cumulative_trace;
   timing_edit::TimingEditResolverState resolver_state;
   NativeDatabaseFunctionalReceipt final_database;
   csr::CsrReferenceInput final_csr_input;

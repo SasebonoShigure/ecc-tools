@@ -22,7 +22,10 @@
 
 #include "DataManager.hpp"
 #include "DualCsrStructuredBatchTestSupport.hpp"
-#include "DualCsrUpdater.hpp"
+#include "DualCsrDescriptorValidation.hpp"
+#include "DualCsrUpdaterInternal.hpp"
+#include "DualCsrArcGroupIndexValidation.hpp"
+#include "../AllocationFailureSupport.hpp"
 #include "NarrowTimingRecordReader.hpp"
 #include "TimingEditDualCsrDescriptorBuilder.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
@@ -111,18 +114,33 @@ void purePrepareRejectsForeignBefore(const StructuredFixture& fixture)
         static_cast<void>(unexpected);
       },
       "view boundary", "foreign exact-before view");
+  foreign = fixture.graph;
+  foreign.session_token = timing_edit::TimingEditSessionToken{0};
+  foreign.reference_payload.source_identity.session_token = 0;
+  auto zero_index = fixture.arc_group_index;
+  zero_index.session_token = foreign.session_token;
+  requireInvalid([&] {
+    static_cast<void>(DualCsrStructuredBatchPreparer::prepare(
+        fixture.plan, fixture.resolver, DualSemanticReadView(foreign),
+        foreign, fixture.identity, zero_index));
+  }, "view boundary", "zero session exact-before");
+}
+
+const NativeSlotBinding& bindingValue(const NativeSlotBinding* binding)
+{
+  require(binding != nullptr, "fixture resolver binding is missing");
+  return *binding;
 }
 
 void requireCapturePlan(const PendingStructuredBatch& pending)
 {
-  require(!pending.preparedBatch().sealed(),
-          "structured preparer sealed the Stage-3 batch");
+
   const auto& plan = pending.capturePlan();
   const auto& staged = pending.stagedResolver();
   std::uint64_t deactivations = 0;
   for (const auto& request : plan.arcs) {
     const NativeSlotBinding& binding
-        = staged.arcBindings().at(request.ref);
+        = bindingValue(staged.findArcBinding(request.ref));
     const bool active = request.expected_post_multiplicity != 0;
     require(binding.tombstone != active,
             "capture multiplicity disagrees with resolver lifecycle");
@@ -287,10 +305,10 @@ std::vector<StableArcRef> matchingArcs(
   return result;
 }
 
-void requireReversePairs(const VerifiedStructuredBatch& verified)
+void requireReversePairs(const StructuredFixture& fixture, const VerifiedStructuredBatch& verified)
 {
   const auto& batch = verified.preparedBatch();
-  const auto& staged = verified.stagedResolver();
+  const timing_edit::TimingEditResolverView staged{fixture.resolver, verified.resolverDelta()};
   const auto& descriptor = verified.descriptor();
   std::uint64_t reconnects = 0;
   for (const auto& operation : batch.forwardDelta().operations) {
@@ -305,9 +323,9 @@ void requireReversePairs(const VerifiedStructuredBatch& verified)
         batch.forwardDelta(), reconnect->sink, reconnect->new_net);
     require(removed.size() == 1 && added.size() == 1,
             "reconnect does not have one exact remove/add StableArcRef");
-    const auto& old_binding = staged.arcBindings().at(removed.front());
-    const auto& new_binding = staged.arcBindings().at(added.front());
-    const auto& sink_binding = staged.nodeBindings().at(reconnect->sink);
+    const auto& old_binding = bindingValue(staged.findArcBinding(removed.front()));
+    const auto& new_binding = bindingValue(staged.findArcBinding(added.front()));
+    const auto& sink_binding = bindingValue(staged.findNodeBinding(reconnect->sink));
     require(old_binding.tombstone && !new_binding.tombstone
                 && !sink_binding.tombstone,
             "reconnect resolver lifecycles are malformed");
@@ -327,48 +345,40 @@ void requireReversePairs(const VerifiedStructuredBatch& verified)
           "reverse pairing did not cover both moved sinks");
 }
 
-csr::ArcId createdOldNetArcId(const TimingEditResolverState& staged)
+csr::ArcId createdOldNetArcId(const timing_edit::PreparedBatch& batch)
 {
   std::optional<csr::ArcId> result;
-  for (const auto& [ref, binding] : staged.arcBindings())
-    if (!binding.tombstone
-        && std::holds_alternative<timing_edit::CreatedOldNetArcRef>(ref)) {
+  for (const auto& binding : batch.slotPlan().arcs)
+    if (!binding.tombstone && std::holds_alternative<timing_edit::CreatedOldNetArcRef>(binding.ref)) {
       require(!result, "fixture has multiple driver-to-buffer arcs");
       result = csr::ArcId{binding.slot.value()};
     }
-  require(result.has_value(),
-          "fixture has no driver-to-buffer StableArcRef");
+  require(result.has_value(), "fixture has no driver-to-buffer StableArcRef");
   return *result;
 }
 
-csr::ArcId createdNewNetArcId(const TimingEditResolverState& staged,
-                              std::string_view sink_name)
+csr::ArcId createdNewNetArcId(const timing_edit::PreparedBatch& batch, std::string_view sink_name)
 {
   std::optional<csr::ArcId> result;
-  for (const auto& [ref, binding] : staged.arcBindings()) {
-    const auto* created
-        = std::get_if<timing_edit::CreatedNewNetArcRef>(&ref);
+  for (const auto& binding : batch.slotPlan().arcs) {
+    const auto* created = std::get_if<timing_edit::CreatedNewNetArcRef>(&binding.ref);
     if (created == nullptr || binding.tombstone)
       continue;
-    const auto* sink
-        = std::get_if<timing_edit::ExistingNodeRef>(&created->sink);
+    const auto* sink = std::get_if<timing_edit::ExistingNodeRef>(&created->sink);
     if (sink == nullptr || sink->baseline_key.full_name != sink_name)
       continue;
     require(!result, "created fanout StableArcRef is not unique");
     result = csr::ArcId{binding.slot.value()};
   }
-  require(result.has_value(),
-          "fixture is missing created fanout arc to "
-              + std::string{sink_name});
+  require(result.has_value(), "fixture is missing created fanout arc to " + std::string{sink_name});
   return *result;
 }
 
-csr::NodeId createdNodeId(const TimingEditResolverState& staged,
-                          timing_edit::CreatedNodeRole role)
+csr::NodeId createdNodeId(const timing_edit::PreparedBatch& batch, timing_edit::CreatedNodeRole role)
 {
   std::optional<csr::NodeId> result;
-  for (const auto& [ref, binding] : staged.nodeBindings()) {
-    const auto* created = std::get_if<timing_edit::CreatedNodeRef>(&ref);
+  for (const auto& binding : batch.slotPlan().nodes) {
+    const auto* created = std::get_if<timing_edit::CreatedNodeRef>(&binding.ref);
     if (created == nullptr || created->role != role || binding.tombstone)
       continue;
     require(!result, "created node role is not unique");
@@ -392,7 +402,7 @@ void requireCandidatePhysicalOrder(const StructuredFixture& fixture,
                                    const VerifiedStructuredBatch& verified)
 {
   const auto& descriptor = verified.descriptor();
-  const auto& staged = verified.stagedResolver();
+  const auto& staged = verified.preparedBatch();
   const csr::ArcId out = createdNewNetArcId(staged, "out");
   const csr::ArcId z = createdNewNetArcId(staged, "z");
   const csr::NodeId source = createdNodeId(
@@ -421,13 +431,27 @@ void requireVerifiedDescriptor(const StructuredFixture& fixture,
 {
   const auto& descriptor = verified.descriptor();
   const auto& before = fixture.graph;
-  require(!verified.preparedBatch().sealed()
-              && verified.expectedBefore().graph() == before
-              && verified.expectedBefore().arcGroupIndex()
-                     == fixture.arc_group_index,
-          "verified capability lost its exact-before binding");
-  if constexpr (incregpusta_debug_checks_enabled)
-    require(verified.expectedBefore().resolver() == fixture.resolver, "verified capability lost its diagnostic resolver binding");
+  require(descriptor.reference_payload.instances && descriptor.reference_payload.cell_pin_capacitances,
+          "new buffer descriptor lacks instance/capacitance records");
+  for (unsigned mutation = 0; mutation != 6; ++mutation) {
+    auto malformed = descriptor;
+    auto& delta = malformed.reference_payload;
+    switch (mutation) {
+      case 0: delta.instances.reset(); break;
+      case 1: delta.instances->values.front().ordered_pins.pop_back(); break;
+      case 2: std::ranges::reverse(delta.instances->values.front().ordered_pins); break;
+      case 3: delta.cell_pin_capacitances.reset(); break;
+      case 4: delta.cell_pin_capacitances->values.pop_back(); break;
+      case 5: delta.cell_pin_capacitances->values.front().default_capacitance += 1.0; break;
+    }
+    const auto errors = validateDualCsrDescriptor(before, malformed);
+    require(std::ranges::any_of(errors, [](const auto& error) {
+              return error.field == "reference_payload.instances" || error.field == "reference_payload.cell_pin_capacitances";
+            }), "malformed appended pin closure passed the public descriptor boundary");
+  }
+  require(verified.preparedBatch().sessionToken() == before.session_token
+              && verified.preparedBatch().expectedGeneration() == before.generation,
+          "verified batch lost its session/generation binding");
   require(descriptor.node_appends.size() == 2
               && descriptor.arc_appends.size() == 4
               && descriptor.node_payload_changes.size() == 2
@@ -452,7 +476,7 @@ void requireVerifiedDescriptor(const StructuredFixture& fixture,
           "descriptor lost its typed source-identity replacement");
 
   const csr::ArcId driver_arc
-      = createdOldNetArcId(verified.stagedResolver());
+      = createdOldNetArcId(verified.preparedBatch());
   const auto& change = descriptor.changes.front();
   require(change.expected_arc
                   == std::optional<csr::ArcId>{fixture.base_arc}
@@ -470,24 +494,70 @@ void requireVerifiedDescriptor(const StructuredFixture& fixture,
                        == LogicalArcDeactivateReason::kReplaced;
               }),
           "reconnected arcs did not use typed kReplaced deactivation");
-  requireReversePairs(verified);
+  requireReversePairs(fixture, verified);
   requireCandidatePhysicalOrder(fixture, verified);
 
-  auto staged = DualCsrUpdater::stage(before, descriptor);
-  require(staged.success(),
-          "verified descriptor failed canonical detached staging"
-              + (staged.violations.empty()
-                     ? std::string{}
-                     : ": " + staged.violations.front().field + " "
-                           + staged.violations.front().message));
-  require(staged.state->generation == descriptor.target_generation
-              && !staged.state->arc_slots.at(
-                      static_cast<std::size_t>(fixture.base_arc.value()))
-                      .active
-              && !staged.state->arc_slots.at(
-                      static_cast<std::size_t>(fixture.aux_arc.value()))
-                      .active,
-          "verified descriptor did not stage the expected successor");
+  {
+    auto graph = before;
+    auto index = fixture.arc_group_index;
+    const auto saved_index = index;
+    detail::PreparedDualCsrIndexPatch index_patch(graph, index, descriptor);
+    detail::PreparedDualCsrGraphPatch graph_patch(graph, descriptor);
+    ista_test_allocation::armFailure(1);
+    graph_patch.apply();
+    index_patch.apply();
+    const auto allocations = ista_test_allocation::disable();
+    require(allocations == 0, "prepared graph/index apply allocated");
+    require(validateDualCsrArcGroupIndex(graph, index).empty(), "local index patch produced an invalid index");
+    ista_test_allocation::armFailure(1);
+    index_patch.rollback();
+    graph_patch.rollback();
+    const auto undo_allocations = ista_test_allocation::disable();
+    require(undo_allocations == 0 && index == saved_index && graph.nodes == before.nodes
+                && graph.arc_slots == before.arc_slots && graph.reference_payload == before.reference_payload
+                && validateDualCsrArcGroupIndex(graph, index).empty(),
+            "local graph/index rollback failed to restore actual old values");
+  }
+  if constexpr (incregpusta_debug_checks_enabled) {
+    auto graph = before;
+    auto index = fixture.arc_group_index;
+    const auto saved_index = index;
+    std::size_t allocations;
+    {
+      ista_test_allocation::armCountOnly();
+      detail::PreparedDualCsrIndexPatch patch(graph, index, descriptor);
+      allocations = ista_test_allocation::disable();
+    }
+    for (std::size_t ordinal = 1; ordinal <= allocations; ++ordinal) {
+      try {
+        ista_test_allocation::armFailure(ordinal);
+        detail::PreparedDualCsrIndexPatch patch(graph, index, descriptor);
+        static_cast<void>(ista_test_allocation::disable());
+      } catch (const std::bad_alloc&) {
+        static_cast<void>(ista_test_allocation::disable());
+      }
+      require(index == saved_index && validateDualCsrArcGroupIndex(graph, index).empty(),
+              "index preparation allocation failure changed the committed state");
+    }
+    // A successfully prepared patch still works after every interrupted preparation.
+    detail::PreparedDualCsrIndexPatch index_patch(graph, index, descriptor);
+    detail::PreparedDualCsrGraphPatch graph_patch(graph, descriptor);
+    graph_patch.apply();
+    index_patch.apply();
+    require(validateDualCsrArcGroupIndex(graph, index).empty(), "index could not retry after allocation failure");
+    index_patch.rollback();
+    graph_patch.rollback();
+    require(index == saved_index, "index retry rollback lost its original state");
+  }
+  auto staged = before;
+  require(validateDualCsrDescriptor(staged, descriptor).empty(), "verified descriptor was invalid");
+  detail::PreparedDualCsrGraphPatch patch(staged, descriptor);
+  patch.apply();
+  require(staged.generation == descriptor.target_generation
+              && !staged.arc_slots.at(static_cast<std::size_t>(fixture.base_arc.value())).active
+              && !staged.arc_slots.at(static_cast<std::size_t>(fixture.aux_arc.value())).active,
+          "verified descriptor did not apply the expected successor");
+  patch.commit();
 }
 
 void fullSinkNetFanoutLoadContracts()
@@ -544,7 +614,7 @@ void fullSinkNetFanoutLoadContracts()
           "unmoved fanout arc did not receive the candidate net load");
 
   const csr::ArcId driver
-      = createdOldNetArcId(verified.stagedResolver());
+      = createdOldNetArcId(verified.preparedBatch());
   const auto old_source_row = std::ranges::find_if(
       descriptor.affected_base_out_rows, [&](const auto& row) {
         return std::ranges::find(row.expected_arc_ids, fanout)

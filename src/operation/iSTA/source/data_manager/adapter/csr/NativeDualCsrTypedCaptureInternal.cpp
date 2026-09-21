@@ -18,7 +18,7 @@ namespace {
 std::variant<const AffectedNodeModelCapture*, NarrowCaptureError>
 matchRequest(
     const std::vector<AffectedNodeModelCapture>& requests,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const timing_edit::AppendOnlyHighWater& after,
     const csr::NodeRecord& node)
 {
@@ -32,12 +32,12 @@ matchRequest(
   }
   if (result == nullptr)
     return result;
-  const auto binding = staged.nodeBindings().find(result->ref);
-  if (binding == staged.nodeBindings().end()
-      || binding->second.tombstone
-      || binding->second.native_name != result->expected_key.full_name
-      || binding->second.slot.value() >= after.node_slots
-      || csr::NodeId{binding->second.slot.value()} != node.id
+  const auto* binding = staged.findNodeBinding(result->ref);
+  if (binding == nullptr
+      || binding->tombstone
+      || binding->native_name != result->expected_key.full_name
+      || binding->slot.value() >= after.node_slots
+      || csr::NodeId{binding->slot.value()} != node.id
       || result->expected_cell != node.instance_cell
       || result->expected_port != node.key.pin_name)
     return NarrowCaptureError::kUnplannedDependency;
@@ -48,7 +48,7 @@ matchRequest(
 
 PlannedNodeId resolvePlannedNodeId(
     const DualSemanticReadView& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan,
     const csr::NodeKey& key)
 {
@@ -91,22 +91,22 @@ PlannedNodeId resolvePlannedNodeId(
 
     const timing_edit::StableNodeRef existing_ref{
         timing_edit::ExistingNodeRef{key}};
-    const auto binding = staged.nodeBindings().find(existing_ref);
-    if (binding == staged.nodeBindings().end()
-        || binding->second.tombstone
-        || binding->second.native_name != key.full_name
-        || binding->second.slot.value() != committed_id->value()
-        || binding->second.slot.value() >= plan.after.node_slots)
+    const auto* binding = staged.findNodeBinding(existing_ref);
+    if (binding == nullptr
+        || binding->tombstone
+        || binding->native_name != key.full_name
+        || binding->slot.value() != committed_id->value()
+        || binding->slot.value() >= plan.after.node_slots)
       return NarrowCaptureError::kBatchBindingMismatch;
     return *committed_id;
   }
-  const auto binding = staged.nodeBindings().find(*matched);
-  if (binding == staged.nodeBindings().end()
-      || binding->second.tombstone
-      || binding->second.native_name != key.full_name
-      || binding->second.slot.value() >= plan.after.node_slots)
+  const auto* binding = staged.findNodeBinding(*matched);
+  if (binding == nullptr
+      || binding->tombstone
+      || binding->native_name != key.full_name
+      || binding->slot.value() >= plan.after.node_slots)
     return NarrowCaptureError::kBatchBindingMismatch;
-  const csr::NodeId id{binding->second.slot.value()};
+  const csr::NodeId id{binding->slot.value()};
   if (id.value() < plan.before.node_slots) {
     const auto node = committed.nodeById(id);
     if (!node || node.value().key != key)
@@ -141,12 +141,12 @@ std::optional<NarrowCaptureError> validateCapturedLibraryCell(
       model.cell_arcs, [&](const auto& arc) {
         if (arc.source_port != requested.input_port
             || arc.sink_port != requested.output_port
-            || arc.transfer.children.size()
+            || arc.transfer.children().size()
                    != requested.ordered_arc_signatures.size())
           return false;
         for (std::size_t index = 0;
-             index < arc.transfer.children.size(); ++index)
-          if (arc.transfer.children[index].signature
+             index < arc.transfer.children().size(); ++index)
+          if (arc.transfer.children()[index].signature
               != requested.ordered_arc_signatures[index])
             return false;
         return true;
@@ -159,9 +159,9 @@ std::optional<NarrowCaptureError> validateCapturedLibraryCell(
 
 NodeRoleProjection projectPlannedNodeRole(
     const std::vector<AffectedNodeModelCapture>& requests,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const timing_edit::AppendOnlyHighWater& after,
-    const std::map<std::string, csr::ReferencedLibraryCellModel>& cells,
+    const std::map<std::string, const csr::ReferencedLibraryCellModel*>& cells,
     csr::NodeRecord& node)
 {
   const auto matched = matchRequest(requests, staged, after, node);
@@ -174,7 +174,7 @@ NodeRoleProjection projectPlannedNodeRole(
   const auto cell = cells.find(request->expected_cell);
   if (cell == cells.end())
     return NarrowCaptureError::kUnplannedDependency;
-  csr::detail::applyCanonicalNodeLibraryRoles(cell->second, node);
+  csr::detail::applyCanonicalNodeLibraryRoles(*cell->second, node);
   return std::optional<CapturedNodeRole>{
       CapturedNodeRole{*request, node.id, node}};
 }
@@ -182,7 +182,7 @@ NodeRoleProjection projectPlannedNodeRole(
 CapacitanceProjection projectPlannedCapacitance(
     const ista::Database& database,
     const std::vector<AffectedNodeModelCapture>& requests,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const timing_edit::AppendOnlyHighWater& after,
     const csr::NodeRecord& node)
 {

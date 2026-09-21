@@ -53,7 +53,7 @@ struct PreviousLevels
   return true;
 }
 
-[[nodiscard]] inline bool validatePreviousLevelizationDimensions(const PreviousLevels& previous, std::uint64_t n_last_nodes, std::string& detail)
+[[nodiscard]] inline bool validatePreviousLevelMappingDimensions(const PreviousLevels& previous, std::uint64_t n_last_nodes, std::string& detail)
 {
   if (previous.view_error.has_value()) {
     detail = "previous levelization carries a view error";
@@ -73,9 +73,8 @@ struct PreviousLevels
     detail = "previous level offsets do not cover the old-node domain";
     return false;
   }
-  if (previous.level_nodes.size() != node_count
-      || previous.node_to_level.size() != node_count) {
-    detail = "previous permutation or inverse has the wrong size";
+  if (previous.node_to_level.size() != node_count) {
+    detail = "previous inverse has the wrong size";
     return false;
   }
   if (node_count == 0 && previous.level_offsets.size() != 1) {
@@ -83,6 +82,19 @@ struct PreviousLevels
     return false;
   }
 
+  return true;
+}
+
+// A host reconstruction also needs the permutation. Owned CUDA topology
+// construction consumes only the inverse/offsets; its permutation stays on device.
+[[nodiscard]] inline bool validatePreviousLevelizationDimensions(const PreviousLevels& previous, std::uint64_t n_last_nodes, std::string& detail)
+{
+  if (!validatePreviousLevelMappingDimensions(previous, n_last_nodes, detail))
+    return false;
+  if (previous.level_nodes.size() != n_last_nodes) {
+    detail = "previous permutation has the wrong size";
+    return false;
+  }
   return true;
 }
 

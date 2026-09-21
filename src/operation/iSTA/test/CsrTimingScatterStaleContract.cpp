@@ -180,7 +180,7 @@ void testResultPriority()
     result.data_slews.values[std::distance(result.data_slews.presence.begin(), found)] = -1.0;
   });
   resultFailure(0x6234U, CsrScatterCode::kShapeMismatch, "timing-order FIFO",
-                [](CsrTimingResult& result) { result.timing_order.front() = NodeId{result.node_to_level.size()}; });
+                [](CsrTimingResult& result) { result.level_nodes.front() = NodeId{result.node_to_level.size()}; });
   resultFailure(0x6235U, CsrScatterCode::kPredecessorMismatch, "scalar predecessor endpoint", [](CsrTimingResult& result) {
     result.nodes.predecessor_nodes.presence.front() = 1;
     result.nodes.predecessor_nodes.values.front() = NodeId{0};

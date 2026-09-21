@@ -50,9 +50,9 @@ struct DualCsrModeRecoveryReplayEvidence
 struct DualCsrModeRecoveryBatchRequest
 {
   std::size_t batch_index{0};
-  const CommittedDualCsrAnalysisState& exact_recovered_before;
-  const DualCsrBatchDescriptor& persisted_descriptor;
-  const timing_edit::DesignEditPlan& persisted_semantic_batch;
+  DualCsrTransactionCoordinator& coordinator;
+  const DualCsrBatchDescriptor* diagnostic_descriptor{nullptr};
+  const timing_edit::EditBatch& persisted_semantic_batch;
   const LevelizationExecutionTrace& persisted_execution;
 };
 

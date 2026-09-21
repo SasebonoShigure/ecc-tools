@@ -22,7 +22,7 @@ namespace ista::timing_dual_csr::detail {
 using PlannedNodeId = std::variant<csr::NodeId, NarrowCaptureError>;
 [[nodiscard]] PlannedNodeId resolvePlannedNodeId(
     const DualSemanticReadView& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan,
     const csr::NodeKey& key);
 
@@ -35,9 +35,9 @@ using NodeRoleProjection = std::variant<
     std::optional<CapturedNodeRole>, NarrowCaptureError>;
 [[nodiscard]] NodeRoleProjection projectPlannedNodeRole(
     const std::vector<AffectedNodeModelCapture>& requests,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const timing_edit::AppendOnlyHighWater& after,
-    const std::map<std::string, csr::ReferencedLibraryCellModel>& cells,
+    const std::map<std::string, const csr::ReferencedLibraryCellModel*>& cells,
     csr::NodeRecord& node);
 
 using CapacitanceProjection = std::variant<
@@ -45,7 +45,7 @@ using CapacitanceProjection = std::variant<
 [[nodiscard]] CapacitanceProjection projectPlannedCapacitance(
     const ista::Database& database,
     const std::vector<AffectedNodeModelCapture>& requests,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const timing_edit::AppendOnlyHighWater& after,
     const csr::NodeRecord& node);
 

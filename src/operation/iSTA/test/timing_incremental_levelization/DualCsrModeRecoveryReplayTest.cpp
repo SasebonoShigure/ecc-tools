@@ -21,11 +21,10 @@
 #include "DualCsrFunctionalReceiptJson.hpp"
 #include "DualCsrModeRecoveryReplay.hpp"
 #include "DualCsrModeRecoveryTestSupport.hpp"
-#include "DualCsrNativeCandidateCarrierInternal.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "DualCsrStructuredBatchTestSupport.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
-#include "DualCsrUpdater.hpp"
+#include "DualCsrDescriptorValidation.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowTimingRecordReader.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
@@ -34,7 +33,6 @@
 namespace ista::timing_dual_csr::test {
 namespace {
 
-using ::ista::timing_dual_csr::detail::DualCsrNativeCandidateCarrier;
 using structured_support::StructuredFixture;
 using recovery_support::CumulativeBatchSource;
 using recovery_support::stage;
@@ -52,15 +50,6 @@ void require(bool condition, const std::string& message)
     throw std::runtime_error(message);
 }
 
-std::vector<std::uint8_t> activeMask(const DualCsrState& graph)
-{
-  std::vector<std::uint8_t> result;
-  result.reserve(graph.arc_slots.size());
-  for (const auto& slot : graph.arc_slots)
-    result.push_back(slot.active ? 1U : 0U);
-  return result;
-}
-
 DualCsrTimingResult timingFor(const DualCsrState& graph)
 {
   DualCsrEdgeViewImpl edges(graph);
@@ -70,7 +59,7 @@ DualCsrTimingResult timingFor(const DualCsrState& graph)
   auto* values = std::get_if<csr::CsrTimingResult>(
       &output.computation.outcome);
   require(values != nullptr, "focused baseline timing failed");
-  DualCsrTimingResult timing{std::move(*values), activeMask(graph)};
+  DualCsrTimingResult timing{std::move(*values)};
   require(validateDualCsrTimingResult(graph, timing).empty(),
           "focused baseline timing is invalid");
   return timing;
@@ -89,7 +78,8 @@ CommittedDualCsrAnalysisState initialAggregate(
       .descriptor_trace = {},
       .semantic_trace = {},
       .traversal_telemetry = fixture.graph.telemetry.traversal,
-      .execution_trace = {}};
+      .execution_trace = {},
+      .baseline = std::make_shared<const timing_edit::BaselineSemanticIdentity>(fixture.plan.baseline)};
   require(validateCommittedDualCsrAnalysisState(state).empty(),
           "focused generation-zero aggregate is invalid");
   return state;
@@ -136,16 +126,16 @@ std::size_t fullLevelCount(const DualCsrState& graph)
   return values->level_offsets.size() - 1;
 }
 
-std::vector<timing_edit::DesignEditPlan> chainedPlans(
+std::vector<timing_edit::EditBatch> chainedPlans(
     const StructuredFixture& fixture, std::size_t count)
 {
   require(count > 0, "focused replay needs at least one plan");
   require(count <= 3, "focused replay fixture supports three plans");
   require(fixture.unmoved_fanout_arc.has_value(),
           "focused replay fixture needs an untouched fanout sink");
-  std::vector<timing_edit::DesignEditPlan> plans;
+  std::vector<timing_edit::EditBatch> plans;
   plans.reserve(count);
-  plans.push_back(fixture.plan);
+  plans.push_back({fixture.plan.expected_generation, fixture.plan.edits});
   const timing_edit::StableNodeRef second_sink
       = plans.front().edits.front().moved_sinks.back();
   const timing_edit::StableNodeRef untouched_sink
@@ -156,7 +146,7 @@ std::vector<timing_edit::DesignEditPlan> chainedPlans(
   timing_edit::CreationToken prior
       = plans.front().edits.front().creation_token;
   for (std::size_t index = 1; index < count; ++index) {
-    auto plan = fixture.plan;
+    timing_edit::EditBatch plan{fixture.plan.expected_generation, fixture.plan.edits};
     plan.expected_generation
         = timing_edit::TransactionGeneration{index};
     auto& edit = plan.edits.front();
@@ -181,10 +171,10 @@ struct PoisonedScenario
 {
   std::unique_ptr<DualCsrTransactionCoordinator> coordinator;
   CommittedDualCsrAnalysisState poisoned_snapshot;
-  std::vector<timing_edit::DesignEditPlan> plans;
+  std::vector<timing_edit::EditBatch> plans;
 };
 
-PoisonedScenario produceCommittedScenario(const std::vector<LevelizationExecutionMode>& modes, bool noncompact_generation_zero, bool poison_after_commit = true)
+PoisonedScenario produceCommittedScenario(const std::vector<LevelizationExecutionMode>& modes, bool noncompact_generation_zero, bool poison_after_commit = true, bool retry_before_first = false)
 {
   timing_edit::test::installNativeTransactionBaseline();
   timing_edit::test::GuardedTestSession session;
@@ -205,24 +195,46 @@ PoisonedScenario produceCommittedScenario(const std::vector<LevelizationExecutio
               const timing_edit::NativeExecutionAuthority& authority) {
             timing_edit::test::requireReleasedSnapshotForNativeMutation(
                 context, authority.sessionToken());
-            CumulativeBatchSource source(STADM.getDatabase(), authority);
+            CumulativeBatchSource source(authority);
             auto wrong_generation = plans.front();
             wrong_generation.expected_generation = timing_edit::TransactionGeneration{1};
             const auto* before_nodes = coordinator->committed().graph.nodes.data();
             bool rejected = false;
             try {
-              static_cast<void>(source.mint(coordinator->committed(), std::move(wrong_generation)));
+              static_cast<void>(source.mint(*coordinator, std::move(wrong_generation)));
             } catch (const std::invalid_argument&) {
               rejected = true;
             }
             require(rejected && coordinator->committed().generation.value() == 0 && coordinator->committed().graph.nodes.data() == before_nodes,
                     "structured prepare accepted a foreign generation or changed committed state");
             for (std::size_t index = 0; index < modes.size(); ++index) {
+              if (retry_before_first && index == 0) {
+                const auto prior_capacity = coordinator->committed().graph.nodes.capacity();
+                auto abandoned = source.mint(*coordinator, plans[index]);
+                require(coordinator->publish(stage(*coordinator, std::move(abandoned), modes[index]),
+                                             DualCsrPublishFailpoint::kBeforeSwap).code == DualCsrTransactionCode::kPreSwapFault
+                            && coordinator->committed().generation.value() == 0
+                            && coordinator->committed().graph.nodes.capacity() > prior_capacity,
+                        "rejected transaction did not undo before returning or retain its reserved capacity");
+                require(source.rollback(), "failed source could not restore its native baseline");
+              }
               auto verified = source.mint(
-                  coordinator->committed(), plans[index]);
+                  *coordinator, plans[index]);
+              const auto* prior_edits = index ? coordinator->committed().semantic_trace.front().edits.data() : nullptr;
+              const auto* prior_baseline = index ? coordinator->committed().baseline->canonical_pre_state.nodes.data() : nullptr;
+              const auto* prior_levels = index && incregpusta_debug_checks_enabled
+                                             ? coordinator->committed().execution_trace.front().levels().level_nodes.data() : nullptr;
               const auto status = coordinator->publish(
-                  stage(coordinator->committed(), std::move(verified), modes[index]),
+                  stage(*coordinator, std::move(verified), modes[index]),
                   poison_after_commit && index + 1 == modes.size() ? DualCsrPublishFailpoint::kAfterSwap : DualCsrPublishFailpoint::kNone);
+              if (index) {
+                require(coordinator->committed().semantic_trace.front().edits.data() == prior_edits
+                            && coordinator->committed().baseline->canonical_pre_state.nodes.data() == prior_baseline,
+                        "successful append copied the prior edits or immutable baseline");
+                if constexpr (incregpusta_debug_checks_enabled)
+                  require(coordinator->committed().execution_trace.front().levels().level_nodes.data() == prior_levels,
+                          "successful append copied prior diagnostic levels");
+              }
               if (poison_after_commit && index + 1 == modes.size())
                 require(status.code
                             == DualCsrTransactionCode::kPostSwapPoisoned
@@ -233,8 +245,7 @@ PoisonedScenario produceCommittedScenario(const std::vector<LevelizationExecutio
                             && !status.poisoned,
                         "focused prefix publish failed");
             }
-            require(source.finish(),
-                    "focused original candidate rollback failed");
+            source.commitPending(coordinator->committed().generation);
             return StaStatus::success(session.session().state());
           });
   require(guarded.ok(), "focused original guarded replay failed: "
@@ -275,6 +286,17 @@ std::optional<DualCsrModeRecoveryReplayEvidence> recoverAndContinueMixed(Poisone
               != scenario.poisoned_snapshot.graph.session_token,
           "fresh recovery session token did not change");
 
+  {
+    auto malformed = baseline;
+    auto wrong = std::make_shared<timing_edit::BaselineSemanticIdentity>(*malformed.baseline);
+    wrong->fingerprints.topology += "-wrong";
+    malformed.baseline = wrong;
+    RejectingRecoveryBatchSource unused;
+    auto rejected = replayDualCsrModesForRecovery(scenario.poisoned_snapshot, std::move(malformed), unused);
+    require(!rejected.success() && rejected.failure
+                && rejected.failure->code == DualCsrModeRecoveryReplayCode::kInvalidGenerationZero,
+            "foreign generation-zero baseline did not return its typed recovery failure");
+  }
   std::optional<DualCsrModeRecoveryReplayEvidence> evidence;
   const StaStatus guarded
       = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
@@ -283,7 +305,7 @@ std::optional<DualCsrModeRecoveryReplayEvidence> recoverAndContinueMixed(Poisone
               const timing_edit::NativeExecutionAuthority& authority) {
             timing_edit::test::requireReleasedSnapshotForNativeMutation(
                 context, authority.sessionToken());
-            CumulativeBatchSource source(STADM.getDatabase(), authority);
+            CumulativeBatchSource source(authority);
             RejectingRecoveryBatchSource rejecting_source;
             const auto* original_nodes = scenario.coordinator->committed().graph.nodes.data();
             const auto original_generation = scenario.coordinator->committed().generation;
@@ -297,7 +319,7 @@ std::optional<DualCsrModeRecoveryReplayEvidence> recoverAndContinueMixed(Poisone
                         && scenario.coordinator->committed().generation == original_generation && scenario.coordinator->poisoned() == originally_poisoned,
                     "failed recovery changed the committed state");
             auto attempt = replayDualCsrModesForRecovery(
-                scenario.poisoned_snapshot, std::move(baseline), source);
+                scenario.coordinator->committed(), std::move(baseline), source);
             require(attempt.success(),
                     "real mode-dispatched recovery replay failed"
                         + (attempt.failure
@@ -314,7 +336,7 @@ std::optional<DualCsrModeRecoveryReplayEvidence> recoverAndContinueMixed(Poisone
               require(scenario.coordinator->committed().graph.nodes.data() == recovered_nodes, "recovery publication copied the recovered graph");
             } else {
               // Restore persisted work after closing its session; no fault injection.
-              scenario.coordinator = std::make_unique<DualCsrTransactionCoordinator>(attempt.recovery->state());
+              scenario.coordinator = std::make_unique<DualCsrTransactionCoordinator>(std::move(*attempt.recovery));
             }
 
             if (continue_with_next_mixed) {
@@ -324,18 +346,17 @@ std::optional<DualCsrModeRecoveryReplayEvidence> recoverAndContinueMixed(Poisone
             require(next < continuation_plans.size(),
                     "focused continuation plan is missing");
             auto verified = source.mint(
-                scenario.coordinator->committed(),
+                *scenario.coordinator,
                 continuation_plans[next]);
             const auto continued = scenario.coordinator->publish(
-                stage(scenario.coordinator->committed(),
+                stage(*scenario.coordinator,
                       std::move(verified),
                       LevelizationExecutionMode::kMixedStage6));
             require(continued.ok() && continued.published
                         && !continued.poisoned,
                     "mixed continuation after recovery failed");
             }
-            require(source.finish(),
-                    "focused recovery candidate rollback failed");
+            source.commitPending(scenario.coordinator->committed().generation);
             return StaStatus::success(session.session().state());
           });
   require(guarded.ok(), "focused recovery guarded replay failed: "
@@ -412,6 +433,15 @@ void fullThenMixedModeDispatchContract()
           "g1 full -> g2 mixed recovery did not preserve exact mode dispatch");
 }
 
+void retainedCapacityRecoveryContract()
+{
+  auto scenario = produceCommittedScenario({LevelizationExecutionMode::kMixedStage6}, false, true, true);
+  finalizePoisonedSnapshot(scenario);
+  recoverAndContinueMixed(scenario, false, true);
+  require(scenario.coordinator->committed().generation.value() == 2 && !scenario.coordinator->poisoned(),
+          "retained capacity prevented recovery and continuation");
+}
+
 void runtimeRecoveryContract(const char* output)
 {
   auto scenario = produceCommittedScenario({LevelizationExecutionMode::kFullStage5, LevelizationExecutionMode::kMixedStage6}, false, false);
@@ -428,17 +458,17 @@ void runtimeRecoveryContract(const char* output)
   require(recovered_trace.size() == 2 && recovered_trace[0].mode() == LevelizationExecutionMode::kFullStage5
               && recovered_trace[1].mode() == LevelizationExecutionMode::kMixedStage6,
           "ordinary recovery did not execute the persisted modes");
-  const auto stale = DualCsrUpdater::stage(initial.graph, initial.descriptor_trace.front());
-  require(!stale.success(), "default path accepted a stale descriptor");
-  if constexpr (!incregpusta_debug_checks_enabled) {
-    bool rejected = false;
-    try {
-      static_cast<void>(DualCsrUpdater::stage(initial.graph, initial.descriptor_trace.front(), {DualCsrUpdateFailpoint::kAfterDetachedClone}));
-    } catch (const std::invalid_argument&) {
-      rejected = true;
-    }
-    require(rejected, "default path silently accepted fault injection");
-  }
+  require(initial.descriptor_trace.empty() == !incregpusta_debug_checks_enabled,
+          "descriptor diagnostic history does not match build mode");
+  DualCsrBatchDescriptor stale_descriptor;
+  stale_descriptor.session_token = initial.graph.session_token;
+  stale_descriptor.expected_generation = timing_edit::TransactionGeneration{0};
+  stale_descriptor.target_generation = timing_edit::TransactionGeneration{1};
+  stale_descriptor.before = stale_descriptor.after = initial.graph.high_water;
+  const auto stale = validateDualCsrDescriptor(initial.graph, stale_descriptor);
+  require(std::ranges::any_of(stale, [](const auto& violation) {
+    return violation.code == DualCsrViolationCode::kGeneration;
+  }), "default path accepted a stale descriptor");
   // The frozen fixture supports one recovery followed by its second batch.
   auto continuation = produceCommittedScenario({LevelizationExecutionMode::kMixedStage6}, false, false);
   finalizePoisonedSnapshot(continuation);
@@ -469,6 +499,11 @@ void runtimeRecoveryContract(const char* output)
 int main(int argc, char* argv[])
 {
   try {
+    if (argc == 9 && std::string(argv[1]) == "--replay" && std::string(argv[3]) == "--consumer-output"
+        && std::string(argv[5]) == "--mode" && std::string(argv[7]) == "--prefix") {
+      ista::timing_dual_csr::test::realReplayConsumer(argv[2], argv[4], argv[6], argv[8]);
+      return 0;
+    }
     if (argc == 5 && std::string(argv[1]) == "--replay" && std::string(argv[3]) == "--runtime-output") {
       ista::timing_dual_csr::test::realReplayRecovery(argv[2], argv[4]);
       return 0;
@@ -481,6 +516,7 @@ int main(int argc, char* argv[])
     } else if constexpr (ista::incregpusta_debug_checks_enabled) {
       ista::timing_dual_csr::test::mixedNoncompactRecoveryContract();
       ista::timing_dual_csr::test::fullThenMixedModeDispatchContract();
+      ista::timing_dual_csr::test::retainedCapacityRecoveryContract();
     } else {
       ista::timing_dual_csr::test::runtimeRecoveryContract(nullptr);
     }

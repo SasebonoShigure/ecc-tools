@@ -6,6 +6,8 @@
 #include <iostream>
 
 #include "IncrementalLevelizationTestSupport.hpp"
+#include "MixedLevelizationInternal.hpp"
+#include "../AllocationFailureSupport.hpp"
 
 namespace ista::timing_incremental_levelization::test {
 namespace {
@@ -61,6 +63,28 @@ void successDomains()
   require(one_level.telemetry.n_old_levels == 1
               && one_level.telemetry.mixed_vertex_count == 2,
           "single-old-level domain was not handled");
+}
+
+void ownedLevelsAvoidRepeatedAllocation()
+{
+  const auto previous = makeLevels(3, {{0, 1}, {2}});
+  const auto before = previous;
+  TestEdgeView edges(4);
+  edges.addArc({0, 2});
+  edges.addArc({1, 3});
+  const MixedLevelizationRequest request{3, 0, 1};
+  ista_test_allocation::armCountOnly();
+  const auto owned = detail::runOwnedCpuIncrementalLevelization(edges, detail::PreviousLevels(previous), request);
+  const auto owned_allocations = ista_test_allocation::disable();
+  ista_test_allocation::armCountOnly();
+  const auto external = runCpuIncrementalLevelization(edges, previous, request);
+  const auto external_allocations = ista_test_allocation::disable();
+  const auto* own = std::get_if<MixedLevelizationSuccess>(&owned);
+  const auto* checked = std::get_if<MixedLevelizationSuccess>(&external);
+  require(own && checked && own->levels == checked->levels && previous == before
+              && owned_allocations < external_allocations,
+          "owned levels changed the result/old state or retained repeated shape allocations");
+  std::cout << "mixed allocation calls: owned=" << owned_allocations << " external=" << external_allocations << '\n';
 }
 
 void previousNewNodeBecomesOldInNextBatch()
@@ -162,6 +186,7 @@ int main()
 {
   try {
     ista::timing_incremental_levelization::test::successDomains();
+    ista::timing_incremental_levelization::test::ownedLevelsAvoidRepeatedAllocation();
     ista::timing_incremental_levelization::test::previousNewNodeBecomesOldInNextBatch();
     ista::timing_incremental_levelization::test::distinguishesTypedFailureDomains();
   } catch (const std::exception& error) {

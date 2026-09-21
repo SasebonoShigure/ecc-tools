@@ -44,7 +44,7 @@ CsrCpuReferenceStageStatus applyCheck(const TimingPayloadView& payloads, std::si
   Transition transition = Transition::kRise;
   const auto* path = worstEndpointPath(node, work, transition);
   const auto output = csrTransitionIndex(transition);
-  if (!check.children.empty() && std::ranges::none_of(check.children, [&](const ChildTimingArcModel& child) { return child.check_tables[output].present; }))
+  if (!check.children().empty() && std::ranges::none_of(check.children(), [&](const ChildTimingArcModel& child) { return child.check_tables[output].present; }))
     return CsrCpuReferenceStageStatus::kSuccess;
   const double data_slew = path == nullptr ? 0.0 : path->slew;
   double clock_arrival = 0.0;
@@ -70,7 +70,7 @@ CsrCpuReferenceStageStatus applyCheck(const TimingPayloadView& payloads, std::si
   }
   double check_time = check.check_time;
   bool seen = false;
-  for (const auto& child : check.children) {
+  for (const auto& child : check.children()) {
     if (!child.check_tables[output].present)
       continue;
     const auto value = lookupCsrTimingCheckTable(child.check_tables[output], clock_slew, data_slew, child.time_unit_scale);

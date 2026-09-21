@@ -121,7 +121,7 @@ BufferElectricalClosure bufferClosure(
 
   std::array<std::optional<double>, csr::kTransitionCount> delays;
   std::size_t matched_children = 0;
-  for (const csr::ChildTimingArcModel& child : arc->transfer.children) {
+  for (const csr::ChildTimingArcModel& child : arc->transfer.children()) {
     if (std::find(buffer.ordered_arc_signatures.begin(),
                   buffer.ordered_arc_signatures.end(), child.signature)
         == buffer.ordered_arc_signatures.end()) {

@@ -165,7 +165,6 @@ void testWholeResultLiteral()
   expected.level_offsets = {0, 2, 3, 4};
   expected.level_nodes = {NodeId{0}, NodeId{3}, NodeId{1}, NodeId{2}};
   expected.node_to_level = {1, 2, 3, 1};
-  expected.timing_order = expected.level_nodes;
 
   expected.nodes.is_clock_point = {{1, 1, 1, 1}, {0, 0, 0, 1}};
   expected.nodes.arrivals = {{1, 1, 1, 1}, {1.0, 1.0, 2.0, -std::numeric_limits<double>::infinity()}};

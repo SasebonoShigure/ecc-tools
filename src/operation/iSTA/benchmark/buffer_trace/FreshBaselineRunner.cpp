@@ -62,7 +62,6 @@ bool functionallyEqual(const ReplayReceipt& lhs, const ReplayReceipt& rhs)
       || lhs.prefix_batches != rhs.prefix_batches
       || lhs.batches.size() != rhs.batches.size()
       || lhs.committed_identity != rhs.committed_identity
-      || lhs.cumulative_trace != rhs.cumulative_trace
       || lhs.resolver_state != rhs.resolver_state
       || lhs.final_database != rhs.final_database
       || lhs.final_csr_input.source_identity

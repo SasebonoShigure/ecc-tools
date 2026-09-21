@@ -12,10 +12,10 @@
 #include <utility>
 
 #include "DataManager.hpp"
+#include "../AllocationFailureSupport.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "NativeTimingEditPreparer.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
-#include "TimingEditCoordinator.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
 
 namespace {
@@ -29,17 +29,6 @@ void require(bool condition, const std::string& message)
   if (!condition) {
     throw std::runtime_error(message);
   }
-}
-
-struct RollbackRecorder
-{
-  std::uint64_t calls{0};
-};
-
-bool failRollback(void* context) noexcept
-{
-  ++static_cast<RollbackRecorder*>(context)->calls;
-  return false;
 }
 
 void testUnknownExecutionFailpointRejectedBeforeSwap(NativeExecutionFailpoint failpoint = static_cast<NativeExecutionFailpoint>(255))
@@ -57,11 +46,9 @@ void testUnknownExecutionFailpointRejectedBeforeSwap(NativeExecutionFailpoint fa
           session.session(),
           [&](std::uint64_t, StaCsrSessionContext&,
               const NativeExecutionAuthority& authority) {
-            NativeDatabaseCandidate candidate
-                = NativeDatabaseCandidate::create(STADM.getDatabase());
+            auto candidate = NativeEditTransaction::prepareFull(authority);
             try {
-              InstalledNativeDatabase unexpected = NativeCandidateExecutor::installAndExecute(authority, std::move(candidate), failpoint);
-              (void) unexpected;
+              NativeCandidateExecutor::executeFull(candidate, failpoint);
             } catch (const std::invalid_argument& error) {
               rejected = std::string(error.what()).find(incregpusta_debug_checks_enabled ? "unknown execution failpoint" : "ECC_INCREGPUSTA_DEBUG_CHECKS=ON")
                          != std::string::npos;
@@ -78,26 +65,13 @@ void testUnknownExecutionFailpointRejectedBeforeSwap(NativeExecutionFailpoint fa
   require(session.closeAndRelease().ok(), "unknown-failpoint close failed");
 }
 
-void testRollbackErrorImmediatelyPoisonsCoordinatorAndSession()
+void testRollbackErrorImmediatelyPoisonsSession()
 {
   installNativeTransactionBaseline();
   GuardedTestSession session;
   PreparedNativeTransaction transaction
       = prepareNativeTransaction(session.token());
-  auto initial_host
-      = buildNativeHostSnapshot(STADM.getDatabase(), session.token());
-  TimingEditCoordinator coordinator(
-      session.token(),
-      StaTimingEditSessionProbeAccess::stateSignal(session.session()),
-      transaction.baseline, transaction.initial_identity, CumulativeEditTrace{},
-      transaction.resolver, std::move(initial_host));
-  require(coordinator.beginPrepare(transaction.prepared).ok()
-              && coordinator.markStaged().ok()
-              && coordinator.markExecuting().ok(),
-          "rollback-error fixture did not reach Executing");
-
   bool typed_error_seen = false;
-  TransactionStatus rollback_status;
   const StaStatus guarded
       = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
           session.session(),
@@ -108,16 +82,10 @@ void testRollbackErrorImmediatelyPoisonsCoordinatorAndSession()
                                                      authority.sessionToken());
             TimingEditResolverState staged
                 = transaction.resolver.stage(transaction.prepared);
-            NativeDatabaseCandidate candidate
-                = translateNativeCandidate(transaction, staged);
+            auto pending = NativeEditTransaction::prepareFull(authority, transaction.prepared, staged);
             try {
-              InstalledNativeDatabase unexpected
-                  = NativeCandidateExecutor::installAndExecute(
-                      authority, std::move(candidate),
-                      NativeExecutionFailpoint::kAfterInstall,
-                      NativeRollbackFailpoint::
-                          kDelayRuntimeCleanupAfterDatabaseRestore);
-              (void) unexpected;
+              NativeCandidateExecutor::executeFull(pending, NativeExecutionFailpoint::kAfterInstall,
+                                                   NativeRollbackFailpoint::kDelayRuntimeCleanupAfterDatabaseRestore);
             } catch (const NativeExecutionRollbackError& error) {
               const std::string message = error.what();
               require(error.executionFailpoint()
@@ -142,21 +110,99 @@ void testRollbackErrorImmediatelyPoisonsCoordinatorAndSession()
                       "typed rollback error lost original exception");
               typed_error_seen = true;
             }
-            RollbackRecorder recorder;
-            rollback_status = coordinator.rollbackPrecommit(
-                PrecommitRollbackSignal{&recorder, &failRollback});
-            require(recorder.calls == 1,
-                    "coordinator did not consume rollback signal once");
+            require(!authority.active(), "poisoned scope still authorizes native execution");
+            bool blocked = false;
+            try {
+              auto next = NativeEditTransaction::prepareFull(authority, transaction.prepared, staged);
+              static_cast<void>(next);
+            } catch (const std::invalid_argument&) {
+              blocked = true;
+            }
+            require(blocked && !STADM.getDatabase().get_instance_map().contains(
+                        staged.materialization(transaction.plan.edits.front().creation_token).instance_name),
+                    "poisoned scope accepted another transaction or changed raw state");
             return StaStatus::success(session.session().state());
           });
   require(guarded.ok() && typed_error_seen
-              && rollback_status.code
-                     == TransactionStatusCode::kRollbackFailed
-              && coordinator.state() == TimingEditCoordinatorState::kPoisoned
-              && coordinator.committedIdentity() == transaction.initial_identity
               && session.session().state() == StaSessionState::kPoisoned,
-          "rollback failure did not poison coordinator/session at exact g0");
+          "rollback failure did not poison session");
   require(session.closeAndRelease().ok(), "rollback-error close failed");
+}
+
+void testCanonicalFullTransactionRollbackAndAbandon()
+{
+  installNativeTransactionBaseline();
+  GuardedTestSession session;
+  auto prepared = prepareNativeTransaction(session.token());
+  const auto staged = prepared.resolver.stage(prepared.prepared);
+  auto* const database = &STADM.getDatabase();
+  auto* const library = &database->get_timing_library();
+  const auto* const arcs = database->get_arc_list().data();
+  const auto old_driver = database->get_net_map().at("n0").get_driver_pin();
+  const auto old_loads = database->get_net_map().at("n0").get_load_pin_list();
+  const auto old_direction = database->get_pin_map().at("out").get_direction();
+  const auto guarded = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
+      session.session(), [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority& authority) {
+        requireReleasedSnapshotForNativeMutation(context, authority.sessionToken());
+        {
+          auto transaction = NativeEditTransaction::prepareFull(authority, prepared.prepared, staged);
+          require(&transaction.database() == database && &database->get_timing_library() == library,
+                  "full transaction replaced canonical Database or immutable Liberty");
+          bool conflict = false;
+          try {
+            auto second = NativeEditTransaction::prepareFull(authority);
+            static_cast<void>(second);
+          } catch (const std::exception&) {
+            conflict = true;
+          }
+          require(conflict && transaction.active(), "second pending transaction was accepted");
+          NativeCandidateExecutor::executeFull(transaction);
+          ista_test_allocation::armFailure(0);
+          const bool restored = transaction.rollback();
+          const auto allocations = ista_test_allocation::disable();
+          require(restored && allocations == 0, "full rollback allocated or failed to restore");
+        }
+        require(database->get_arc_list().data() == arcs && database->get_net_map().at("n0").get_driver_pin() == old_driver
+                    && database->get_pin_map().at("out").get_direction() == old_direction,
+                "rollback lost moved graph storage, net cache or pin direction");
+        {
+          auto abandoned = NativeEditTransaction::prepareFull(authority, prepared.prepared, staged);
+          NativeCandidateExecutor::prepareFullGraph(abandoned);
+        }
+        require(database->get_arc_list().data() == arcs && authority.active(), "abandoned transaction did not restore/release ownership");
+        const auto identity = NativeTimingEditPreparer::captureCurrentIdentity(
+            *database, TransactionGeneration{0}, editTestAnalysisContext(), session.token());
+        require(identity == prepared.initial_identity, "local rollback did not restore canonical raw state");
+        if constexpr (incregpusta_debug_checks_enabled) {
+          for (const auto failpoint : {NativeExecutionFailpoint::kBeforeGraphBuilderDestroy,
+                                       NativeExecutionFailpoint::kBeforeTimingAnalyzerWork}) {
+            auto interrupted = NativeEditTransaction::prepareFull(authority, prepared.prepared, staged);
+            bool failed = false;
+            try {
+              NativeCandidateExecutor::executeFull(interrupted, failpoint);
+            } catch (const std::runtime_error& error) {
+              failed = std::string(error.what()).find("injected native candidate execution failure at ") == 0;
+            }
+            require(failed && !interrupted.active() && authority.active()
+                        && database->get_arc_list().data() == arcs
+                        && database->get_net_map().at("n0").get_driver_pin() == old_driver
+                        && database->get_net_map().at("n0").get_load_pin_list() == old_loads
+                        && database->get_pin_map().at("out").get_direction() == old_direction
+                        && NativeTimingEditPreparer::captureCurrentIdentity(
+                               *database, TransactionGeneration{0}, editTestAnalysisContext(), session.token()) == identity,
+                    "interrupted full computation failed to restore graph, caches, raw state or ownership");
+          }
+          auto retry = NativeEditTransaction::prepareFull(authority, prepared.prepared, staged);
+          NativeCandidateExecutor::executeFull(retry);
+          retry.commit();
+          require(!retry.active() && database->get_instance_map().contains(
+                      staged.materialization(prepared.plan.edits.front().creation_token).instance_name),
+                  "full retry after interrupted build did not commit");
+        }
+        return StaStatus::success(session.session().state());
+      });
+  require(guarded.ok(), "canonical transaction guard failed");
+  require(session.closeAndRelease().ok(), "canonical transaction cleanup failed");
 }
 
 }  // namespace
@@ -164,9 +210,10 @@ void testRollbackErrorImmediatelyPoisonsCoordinatorAndSession()
 int main()
 {
   NativeTransactionRuntime runtime;
+  testCanonicalFullTransactionRollbackAndAbandon();
   testUnknownExecutionFailpointRejectedBeforeSwap();
   if constexpr (ista::incregpusta_debug_checks_enabled) {
-    testRollbackErrorImmediatelyPoisonsCoordinatorAndSession();
+    testRollbackErrorImmediatelyPoisonsSession();
   } else {
     testUnknownExecutionFailpointRejectedBeforeSwap(NativeExecutionFailpoint::kAfterInstall);
   }

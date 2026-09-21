@@ -204,7 +204,8 @@ struct SourceArtifactRefs
 struct SyntheticReplayPayload
 {
   SyntheticArtifactRecipe source_recipe;
-  std::vector<timing_edit::DesignEditPlan> batches;
+  timing_edit::BaselineSemanticIdentity baseline;
+  std::vector<timing_edit::EditBatch> batches;
 
   friend bool operator==(const SyntheticReplayPayload&, const SyntheticReplayPayload&) = default;
 };
@@ -213,7 +214,7 @@ struct RealReplayPayload
 {
   SourceArtifactRefs artifacts;
   timing_edit::BaselineSemanticIdentity baseline;
-  std::vector<timing_edit::DesignEditPlan> batches;
+  std::vector<timing_edit::EditBatch> batches;
 
   friend bool operator==(const RealReplayPayload&, const RealReplayPayload&) = default;
 };
@@ -224,6 +225,11 @@ struct ReplayProgram
 {
   ReplayHeader header;
   ReplayPayload workload;
+
+  [[nodiscard]] const timing_edit::BaselineSemanticIdentity& baseline() const
+  {
+    return std::visit([](const auto& payload) -> const timing_edit::BaselineSemanticIdentity& { return payload.baseline; }, workload);
+  }
 
   friend bool operator==(const ReplayProgram&, const ReplayProgram&) = default;
 };

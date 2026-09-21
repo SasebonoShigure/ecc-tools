@@ -19,41 +19,27 @@
 namespace ista::timing_dual_csr {
 
 class TimingEditDualCsrDescriptorBuilder;
+class DualCsrTransactionCoordinator;
 
-// Own the graph and index needed to build the detached candidate descriptor.
-// Resolver and identity copies serve only the diagnostic exact-before proof.
+// Borrow only during exclusive descriptor preparation. The builder consumes
+// this binding before graph/index mutation or capacity growth.
 class ExpectedBeforeBinding final
 {
  public:
-  [[nodiscard]] const DualCsrState& graph() const noexcept
-  {
-    return _graph;
-  }
-  [[nodiscard]] const timing_edit::TimingEditResolverState& resolver() const { return _resolver.value(); }
-  [[nodiscard]] const timing_edit::CommittedEditIdentity& identity() const { return _identity.value(); }
-  [[nodiscard]] const DualCsrArcGroupIndex& arcGroupIndex()
-      const noexcept
-  {
-    return _arc_group_index;
-  }
-  friend bool operator==(const ExpectedBeforeBinding&,
-                         const ExpectedBeforeBinding&) = default;
+  [[nodiscard]] const DualCsrState& graph() const noexcept { return *_graph; }
+  [[nodiscard]] const timing_edit::TimingEditResolverState& resolver() const noexcept { return *_resolver; }
+  [[nodiscard]] const DualCsrArcGroupIndex& arcGroupIndex() const noexcept { return *_arc_group_index; }
 
  private:
-  ExpectedBeforeBinding(DualCsrState graph, const timing_edit::TimingEditResolverState& resolver, const timing_edit::CommittedEditIdentity& identity,
-                        DualCsrArcGroupIndex arc_group_index)
-      : _graph(std::move(graph)), _arc_group_index(std::move(arc_group_index))
+  ExpectedBeforeBinding(const DualCsrState& graph, const timing_edit::TimingEditResolverState& resolver,
+                        const DualCsrArcGroupIndex& arc_group_index) noexcept
+      : _graph(&graph), _resolver(&resolver), _arc_group_index(&arc_group_index)
   {
-    if constexpr (incregpusta_debug_checks_enabled) {
-      _resolver.emplace(resolver);
-      _identity.emplace(identity);
-    }
   }
 
-  DualCsrState _graph;
-  std::optional<timing_edit::TimingEditResolverState> _resolver;
-  std::optional<timing_edit::CommittedEditIdentity> _identity;
-  DualCsrArcGroupIndex _arc_group_index;
+  const DualCsrState* _graph;
+  const timing_edit::TimingEditResolverState* _resolver;
+  const DualCsrArcGroupIndex* _arc_group_index;
 
   friend class DualCsrStructuredBatchPreparer;
 };
@@ -72,10 +58,10 @@ class PendingStructuredBatch final
   {
     return _prepared_batch;
   }
-  [[nodiscard]] const timing_edit::TimingEditResolverState& stagedResolver()
+  [[nodiscard]] timing_edit::TimingEditResolverView stagedResolver()
       const noexcept
   {
-    return _staged_resolver;
+    return {_expected_before.resolver(), _resolver_delta};
   }
   [[nodiscard]] const AffectedCapturePlan& capturePlan() const noexcept
   {
@@ -90,18 +76,18 @@ class PendingStructuredBatch final
  private:
   PendingStructuredBatch(
       timing_edit::PreparedBatch prepared_batch,
-      timing_edit::TimingEditResolverState staged_resolver,
+      timing_edit::TimingEditResolverDelta resolver_delta,
       AffectedCapturePlan capture_plan,
       ExpectedBeforeBinding expected_before)
       : _prepared_batch(std::move(prepared_batch)),
-        _staged_resolver(std::move(staged_resolver)),
+        _resolver_delta(std::move(resolver_delta)),
         _capture_plan(std::move(capture_plan)),
         _expected_before(std::move(expected_before))
   {
   }
 
   timing_edit::PreparedBatch _prepared_batch;
-  timing_edit::TimingEditResolverState _staged_resolver;
+  timing_edit::TimingEditResolverDelta _resolver_delta;
   AffectedCapturePlan _capture_plan;
   ExpectedBeforeBinding _expected_before;
 
@@ -115,12 +101,24 @@ class DualCsrStructuredBatchPreparer final
   // Pure pre-candidate expansion. Native membership, collision, and Liberty
   // checks remain authoritative in the isolated candidate apply path.
   [[nodiscard]] static PendingStructuredBatch prepare(
-      timing_edit::DesignEditPlan plan,
+      const timing_edit::DesignEditPlan& plan,
       const timing_edit::TimingEditResolverState& committed_resolver,
       const DualSemanticReadView& committed_view,
       const DualCsrState& exact_committed_graph,
-      const timing_edit::CommittedEditIdentity& exact_committed_identity,
+      const std::optional<timing_edit::CommittedEditIdentity>& exact_committed_identity,
       const DualCsrArcGroupIndex& committed_arc_group_index);
+
+ private:
+  [[nodiscard]] static PendingStructuredBatch prepareBound(
+      timing_edit::EditBatch edits,
+      std::shared_ptr<const timing_edit::BaselineSemanticIdentity> baseline,
+      const timing_edit::TimingEditResolverState& committed_resolver,
+      const DualSemanticReadView& committed_view,
+      const DualCsrState& exact_committed_graph,
+      const std::optional<timing_edit::CommittedEditIdentity>& exact_committed_identity,
+      const DualCsrArcGroupIndex& committed_arc_group_index);
+
+  friend class DualCsrTransactionCoordinator;
 };
 
 }  // namespace ista::timing_dual_csr

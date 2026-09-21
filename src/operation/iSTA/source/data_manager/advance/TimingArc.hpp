@@ -28,6 +28,7 @@ class TimingArc
  public:
   TimingArc() = default;
   ~TimingArc() = default;
+  friend bool operator==(const TimingArc&, const TimingArc&) = default;
   // getter
   TimingArcSense get_sense() const { return _sense; }
   int32_t get_arc_idx() const { return _arc_idx; }

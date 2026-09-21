@@ -495,12 +495,9 @@ TimingEditContractViolations validateCommittedEditIdentity(const CommittedEditId
   return errors;
 }
 
-TimingEditContractViolations validateDesignEditPlan(const DesignEditPlan& value)
+TimingEditContractViolations validateEditBatch(const EditBatch& value)
 {
   Violations errors;
-  if (value.schema_version != kDesignEditPlanSchema)
-    reject(errors, TimingEditContractCode::kSchemaMismatch, "plan.schema_version", "expected timing-edit-plan/1.0.0");
-  append(errors, validateBaselineSemanticIdentity(value.baseline, "plan.baseline"));
   if (value.edits.empty())
     reject(errors, TimingEditContractCode::kInvalidValue, "plan.edits", "at least one edit is required");
   if (value.expected_generation.value() == std::numeric_limits<std::uint64_t>::max())
@@ -522,6 +519,26 @@ TimingEditContractViolations validateDesignEditPlan(const DesignEditPlan& value)
       if (!moved_sinks.insert(canonicalStableNodeRefBytes(sink)).second)
         reject(errors, TimingEditContractCode::kConflict, prefix + ".moved_sinks", "sink is moved by more than one edit");
   }
+  return errors;
+}
+
+EditBatchNormalization normalizeEditBatch(EditBatch value)
+{
+  for (auto& edit : value.edits)
+    canonicalSort(edit.moved_sinks, canonicalStableNodeRefBytes);
+  canonicalSort(value.edits, canonicalBufferInsertionMutationBytes);
+  if (auto errors = validateEditBatch(value); !errors.empty())
+    return errors;
+  return value;
+}
+
+TimingEditContractViolations validateDesignEditPlan(const DesignEditPlan& value)
+{
+  Violations errors;
+  if (value.schema_version != kDesignEditPlanSchema)
+    reject(errors, TimingEditContractCode::kSchemaMismatch, "plan.schema_version", "expected timing-edit-plan/1.0.0");
+  append(errors, validateBaselineSemanticIdentity(value.baseline, "plan.baseline"));
+  append(errors, validateEditBatch({value.expected_generation, value.edits}));
   return errors;
 }
 
@@ -595,15 +612,19 @@ TimingEditContractViolations validatePreparedBatchData(const PreparedBatchData& 
   if (value.expected_generation.value() == std::numeric_limits<std::uint64_t>::max()
       || value.target_generation.value() != value.expected_generation.value() + 1)
     reject(errors, TimingEditContractCode::kGenerationMismatch, "prepared.target_generation", "must equal expected generation plus one");
-  if (value.expected_pre_committed_identity.generation != value.expected_generation)
+  if (!value.expected_pre_committed_identity || value.expected_pre_committed_identity->generation != value.expected_generation)
     reject(errors, TimingEditContractCode::kGenerationMismatch, "prepared.expected_pre_committed_identity.generation", "must equal expected generation");
-  append(errors, validateBaselineSemanticIdentity(value.baseline, "prepared.baseline"));
-  append(errors, validateCommittedEditIdentity(value.expected_pre_committed_identity, "prepared.expected_pre_committed_identity"));
-  DesignEditPlan plan{.baseline = value.baseline, .expected_generation = value.expected_generation, .edits = value.normalized_edits};
-  auto normalized_plan = normalizeDesignEditPlan(plan);
+  if (!value.baseline)
+    reject(errors, TimingEditContractCode::kIdentityMismatch, "prepared.baseline", "baseline owner is absent");
+  else
+    append(errors, validateBaselineSemanticIdentity(*value.baseline, "prepared.baseline"));
+  if (value.expected_pre_committed_identity)
+    append(errors, validateCommittedEditIdentity(*value.expected_pre_committed_identity, "prepared.expected_pre_committed_identity"));
+  EditBatch plan{value.expected_generation, value.normalized_edits};
+  auto normalized_plan = normalizeEditBatch(plan);
   if (const auto* plan_errors = std::get_if<Violations>(&normalized_plan))
     append(errors, *plan_errors);
-  else if (std::get<DesignEditPlan>(normalized_plan) != plan)
+  else if (std::get<EditBatch>(normalized_plan) != plan)
     reject(errors, TimingEditContractCode::kNotCanonical, "prepared.normalized_edits", "edits are not normalized");
   auto normalized_forward = normalizeTimingGraphDelta(value.normalized_forward, "prepared.normalized_forward");
   if (const auto* delta_errors = std::get_if<Violations>(&normalized_forward))
@@ -681,20 +702,14 @@ TimingEditContractViolations validatePreparedBatchData(const PreparedBatchData& 
 }
 PreparedBatch PreparedBatch::create(PreparedBatchData data)
 {
+  // Public input may retain mutable aliases even when passed as const.
+  if (data.baseline)
+    data.baseline = std::make_shared<const BaselineSemanticIdentity>(*data.baseline);
   if (auto errors = validatePreparedBatchData(data); !errors.empty())
     throw std::invalid_argument(errors.front().field + ": " + errors.front().message);
   return PreparedBatch(std::move(data));
 }
 
-void PreparedBatch::seal(CommittedEditIdentity target_post_identity)
-{
-  if (_target_post_committed_identity)
-    throw std::logic_error("prepared batch is already sealed");
-  if (target_post_identity.generation != _data.target_generation)
-    throw std::invalid_argument("target post identity generation does not match prepared batch");
-  if (auto errors = validateCommittedEditIdentity(target_post_identity, "target_post_committed_identity"); !errors.empty())
-    throw std::invalid_argument(errors.front().field + ": " + errors.front().message);
-  _target_post_committed_identity = std::move(target_post_identity);
-}
+
 
 }  // namespace ista::timing_edit

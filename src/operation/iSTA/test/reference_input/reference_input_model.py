@@ -148,6 +148,8 @@ class RawNode:
     is_port: bool
     direction: Direction
     instance_name: str
+    outgoing_arc_ranks: tuple[int, ...]
+    incoming_arc_ranks: tuple[int, ...]
 
 
 @dataclass(frozen=True)

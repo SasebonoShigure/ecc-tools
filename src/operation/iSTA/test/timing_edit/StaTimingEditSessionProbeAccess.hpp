@@ -15,7 +15,6 @@
 #include "IncrementalStaSession.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "TimingEditTypes.hpp"
-#include "TimingEditTransactionTypes.hpp"
 
 namespace ista {
 
@@ -28,7 +27,6 @@ struct CsrTimingResult;
 }  // namespace csr
 
 namespace timing_edit {
-class CsrExecutionAuthorization;
 class NativeExecutionAuthority;
 }  // namespace timing_edit
 
@@ -52,7 +50,6 @@ class StaTimingEditSessionProbeAccess final
   [[nodiscard]] static bool snapshotReleasedForTesting(const StaCsrSessionContext& context) noexcept;
   static void releaseSnapshotForMutation(StaCsrSessionContext& context,
                                          std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) noexcept;
-  [[nodiscard]] static timing_edit::SessionStateSignal stateSignal(IncrementalStaSession& session) noexcept;
   [[nodiscard]] static StaCsrCaptureAttempt captureSnapshotForTesting(
       StaCsrSessionContext& context, const Database& database);
   [[nodiscard]] static bool copyObservationForTesting(
@@ -62,12 +59,11 @@ class StaTimingEditSessionProbeAccess final
       StaCsrSessionContext& context);
   [[nodiscard]] static StaCsrScatterAttempt scatterForTesting(
       StaCsrSessionContext& context, Database& database, const csr::CsrTimingResult& result);
-  [[nodiscard]] static timing_edit::CsrExecutionAuthorization proveCsrFullExact(const timing_edit::NativeExecutionAuthority& authority,
-                                                                                csr::CsrCommittedSessionSnapshot& snapshot, const Database& database,
-                                                                                timing_edit::TransactionGeneration target_generation);
+  static void requireCsrFullExact(csr::CsrCommittedSessionSnapshot& snapshot, const Database& database);
+  static void requireNativeTimingEqual(const csr::CsrReferenceInput& input,
+                                      const csr::CsrTimingResult& reference, const Database& database);
 
  private:
-  static void writeSessionState(void* opaque_session, timing_edit::SessionTransactionState state) noexcept;
   static void poisonSessionOnScopeViolation(void* opaque_session) noexcept;
 };
 

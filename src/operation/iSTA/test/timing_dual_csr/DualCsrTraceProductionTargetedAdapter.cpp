@@ -1,3 +1,4 @@
+#include "StaCsrSessionContext.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -145,7 +146,8 @@ ProductionTargetedSemanticPrefix runProductionTargetedSemanticPrefix(
                 {.baseline_database = view.database,
                  .baseline_reference_input = view.reference_input,
                  .authority = view.authority,
-                 .session_token = view.session_token},
+                 .session_token = view.session_token,
+                 .models = view.session_context.libraryModels(view.database)},
                 program, prefix_batches));
           } catch (...) {
             requirePhysicalUnchanged(source);
@@ -164,6 +166,7 @@ ProductionTargetedSemanticPrefix runProductionTargetedSemanticPrefix(
       || targetedGuardedWorkInvocationCount() != 1
       || targetedOneShotState() != OneShotProcessState::kEntered)
     targetedFail("one-shot targeted loader evidence differs");
+  replay->result.lifecycle_cleanup_completed = true;
   return {.replay = std::move(*replay),
           .source_isolation = std::move(source),
           .loader_invocation_count = targetedLoaderInvocationCount(),

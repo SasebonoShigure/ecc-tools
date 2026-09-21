@@ -170,7 +170,6 @@ CsrTimingResult validResult(const CsrReferenceInput& input)
   result.level_offsets = {0, 1, 2};
   result.level_nodes = {NodeId{0}, NodeId{1}};
   result.node_to_level = {1, 2};
-  result.timing_order = result.level_nodes;
   result.nodes.is_clock_point = makeSoa<std::uint8_t>(nodes, 1, 0);
   result.nodes.arrivals = makeSoa<double>(nodes, 1, -std::numeric_limits<double>::infinity());
   result.nodes.requireds = makeSoa<double>(nodes, 1, std::numeric_limits<double>::infinity());

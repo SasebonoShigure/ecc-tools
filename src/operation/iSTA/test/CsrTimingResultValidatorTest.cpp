@@ -122,7 +122,6 @@ CsrTimingResult singletonClockResult(const CsrReferenceInput& input)
   result.level_offsets = {0, 1};
   result.level_nodes = {NodeId{0}};
   result.node_to_level = {1};
-  result.timing_order = result.level_nodes;
   result.nodes.is_clock_point = soa<std::uint8_t>(1, 1, 1);
   result.nodes.arrivals = soa<double>(1, 1, startpoint ? 1.25 : -std::numeric_limits<double>::infinity());
   result.nodes.requireds = soa<double>(1, 1, std::numeric_limits<double>::infinity());
@@ -240,7 +239,6 @@ void testIdentityLevelsAndNodeState()
   rejectMutation(input, result, "level offsets", [](auto& value) { value.level_offsets.pop_back(); });
   rejectMutation(input, result, "level FIFO order", [](auto& value) { std::ranges::reverse(value.level_nodes); });
   rejectMutation(input, result, "node level", [](auto& value) { value.node_to_level[1] = 1; });
-  rejectMutation(input, result, "timing order", [](auto& value) { std::ranges::reverse(value.timing_order); });
 
   rejectMutation(input, result, "clock-point required presence", [](auto& value) { value.nodes.is_clock_point.presence[0] = 0; });
   rejectMutation(input, result, "clock-point domain", [](auto& value) { value.nodes.is_clock_point.values[0] = 2; });

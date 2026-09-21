@@ -634,7 +634,7 @@ detail::TimingResultViolations detail::validateTimingResultClassified(const CsrR
   const CsrFifoLevelization expected = replayFifoLevelization(input);
   if (!expected.complete)
     reject(errors, ResultClass::kShape, "result.levels", "eligible graph contains an active cycle");
-  if (result.level_offsets != expected.level_offsets || result.level_nodes != expected.level_nodes || result.timing_order != expected.level_nodes
+  if (result.level_offsets != expected.level_offsets || result.level_nodes != expected.level_nodes
       || result.node_to_level != expected.node_to_level)
     reject(errors, ResultClass::kShape, "result.levels", "levels and timing order must exactly match FIFO Kahn replay");
   for (NodeId root : input.ordered_root_ids)

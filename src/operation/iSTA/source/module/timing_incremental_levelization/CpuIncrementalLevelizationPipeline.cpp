@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <string>
+#include <type_traits>
 
 #include "CorrectedMixedKahnLevelizer.hpp"
 #include "CsrFifoLevelizationValidation.hpp"
@@ -63,16 +64,18 @@ MixedLevelizationFailure classifyMixedFailure(
                  "actual graph is acyclic but violates the preserved old-level order");
 }
 
-}  // namespace
-
-MixedLevelizationAttempt runCpuIncrementalLevelization(
+template <typename Previous>
+MixedLevelizationAttempt runPipeline(
     const csr::ActiveCsrEdgeView& edges,
-    const csr::CsrFifoLevelization& previous,
+    const Previous& previous,
     const MixedLevelizationRequest& request)
 {
   const Clock::time_point build_begin = Clock::now();
-  MixedGraphBuildAttempt build =
-      buildMixedLevelizationGraph(edges, previous, request);
+  MixedGraphBuildAttempt build;
+  if constexpr (std::is_same_v<Previous, csr::CsrFifoLevelization>)
+    build = buildMixedLevelizationGraph(edges, previous, request);
+  else
+    build = detail::buildOwnedMixedGraph(detail::topologyTraversal(edges), previous, request);
   const Clock::time_point build_end = Clock::now();
   if (auto* build_failure = std::get_if<MixedGraphBuildFailure>(&build)) {
     build_failure->telemetry.mixed_build_ms =
@@ -126,7 +129,7 @@ MixedLevelizationAttempt runCpuIncrementalLevelization(
   graph.telemetry.max_frontier = mixed.max_frontier;
   const Clock::time_point reconstruct_begin = Clock::now();
   MixedReconstructionAttempt reconstruction =
-      reconstructMixedLevelization(graph.domain, previous, mixed);
+      detail::reconstructOwnedMixedLevelization(graph.domain, previous, mixed);
   const Clock::time_point reconstruct_end = Clock::now();
   graph.telemetry.reconstruct_ms =
       elapsedMilliseconds(reconstruct_begin, reconstruct_end);
@@ -164,6 +167,20 @@ MixedLevelizationAttempt runCpuIncrementalLevelization(
                    request,
                    "final mixed telemetry identities are inconsistent");
   return MixedLevelizationSuccess{std::move(levels), graph.telemetry};
+}
+
+}  // namespace
+
+MixedLevelizationAttempt detail::runOwnedCpuIncrementalLevelization(
+    const csr::ActiveCsrEdgeView& edges, const detail::PreviousLevels& previous, const MixedLevelizationRequest& request)
+{
+  return runPipeline(edges, previous, request);
+}
+
+MixedLevelizationAttempt runCpuIncrementalLevelization(
+    const csr::ActiveCsrEdgeView& edges, const csr::CsrFifoLevelization& previous, const MixedLevelizationRequest& request)
+{
+  return runPipeline(edges, previous, request);
 }
 
 }  // namespace ista::timing_incremental_levelization

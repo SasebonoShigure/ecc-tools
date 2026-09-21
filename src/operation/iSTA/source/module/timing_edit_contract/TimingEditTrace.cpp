@@ -142,14 +142,14 @@ TimingEditContractViolations validateTimingEditTrace(const TimingEditTrace& valu
     }
     prior_post = batch.expected_post_identity;
 
-    DesignEditPlan plan{.baseline = value.baseline, .expected_generation = batch.expected_pre_identity.generation, .edits = batch.edits};
-    auto normalized = normalizeDesignEditPlan(plan);
+    EditBatch plan{batch.expected_pre_identity.generation, batch.edits};
+    auto normalized = normalizeEditBatch(plan);
     if (const auto* plan_errors = std::get_if<Violations>(&normalized)) {
       for (auto error : *plan_errors) {
         error.field = field + "." + error.field;
         errors.push_back(std::move(error));
       }
-    } else if (std::get<DesignEditPlan>(normalized) != plan) {
+    } else if (std::get<EditBatch>(normalized) != plan) {
       reject(errors, TimingEditContractCode::kNotCanonical, field + ".edits", "edits and moved sinks must be canonical ordered");
     }
     for (std::size_t edit_index = 0; edit_index < batch.edits.size(); ++edit_index) {

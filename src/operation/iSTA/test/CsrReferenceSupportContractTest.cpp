@@ -192,7 +192,7 @@ CsrReferenceInput cellInput()
   arc.sink = sink.id;
   arc.kind = ArcKind::kCell;
   arc.eligibility = {true, true, true, false};
-  arc.transfer.children = {child};
+  arc.transfer.setChildren({child});
   arc.output_load = outputLoad(0.0);
   input.arcs = {arc};
   input.arc_ids_by_key = {{arc.key, arc.id}};

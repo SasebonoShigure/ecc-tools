@@ -1,6 +1,6 @@
 add_library(ista_timing_edit_native
     NativeBufferCellValidation.cpp
-    NativeDatabaseCandidate.cpp
+    NativeEditTransaction.cpp
     NativeDatabaseValidation.cpp
     NativeCandidateExecutor.cpp
     TimingEditResolver.cpp

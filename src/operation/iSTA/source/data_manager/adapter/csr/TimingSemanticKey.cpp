@@ -476,6 +476,11 @@ bool nodeKeyLess(const NodeKey& lhs, const NodeKey& rhs)
   return compareNodeKey(lhs, rhs) < 0;
 }
 
+bool arcKeyBaseLess(const ArcKeyBase& lhs, const ArcKeyBase& rhs)
+{
+  return compareArcBase(lhs, rhs) < 0;
+}
+
 bool arcKeyLess(const ArcKey& lhs, const ArcKey& rhs)
 {
   if (auto order = compareArcBase(lhs.base, rhs.base); order != 0)

@@ -178,8 +178,8 @@ void validateTransfer(const csr::CellTransferModel& transfer,
     reject(violations, DualCsrViolationCode::kExpectedValue, field,
            "fallback delay is non-finite");
   std::vector<std::int32_t> child_indices;
-  child_indices.reserve(transfer.children.size());
-  for (const auto& child : transfer.children) {
+  child_indices.reserve(transfer.children().size());
+  for (const auto& child : transfer.children()) {
     validateChild(child, field + ".children", violations);
     child_indices.push_back(child.signature.arc_index);
   }
@@ -255,16 +255,16 @@ void validateArcPayload(const DualCsrState& state,
       reject(violations, DualCsrViolationCode::kExpectedValue,
              field + ".transfer",
              "cell transfer and arc flags differ");
-    if (payload.transfer.children.size()
+    if (payload.transfer.children().size()
         != payload.key.base.library_arcs.size())
       reject(violations, DualCsrViolationCode::kShape,
              field + ".transfer.children",
              "child count differs from ArcKey signature");
     const std::size_t child_count = std::min(
-        payload.transfer.children.size(),
+        payload.transfer.children().size(),
         payload.key.base.library_arcs.size());
     for (std::size_t child = 0; child < child_count; ++child)
-      if (!(payload.transfer.children[child].signature
+      if (!(payload.transfer.children()[child].signature
             == payload.key.base.library_arcs[child]))
         reject(violations, DualCsrViolationCode::kExpectedValue,
                field + ".transfer.children.signature",
@@ -424,24 +424,12 @@ DualCsrViolations validateDualCsrState(const DualCsrState& state)
 
   validateBaseShape(state.base_out, node_count, "base_out", violations);
   validateBaseShape(state.base_in, node_count, "base_in", violations);
-  const bool aux_offsets_ok = detail::validateOffsets(
-      state.aux_out.row_offsets, state.aux_out.row_sources.size(),
-      state.aux_out.arc_ids.size(), "aux_out.row_offsets", violations);
-  if (state.aux_out.source_to_aux_row.size() != node_count)
-    reject(violations, DualCsrViolationCode::kShape,
-           "aux_out.source_to_aux_row",
-           "mapping must contain one entry per NodeId");
-  if (!detail::validExtent(state.aux_out.offsets_extent,
-                           state.aux_out.row_offsets.size())
-      || !detail::validExtent(state.aux_out.source_extent,
-                              state.aux_out.row_sources.size())
-      || !detail::validExtent(state.aux_out.edge_extent,
-                              state.aux_out.arc_ids.size())
-      || !detail::validExtent(state.aux_out.mapping_extent,
-                              state.aux_out.source_to_aux_row.size())) {
-    reject(violations, DualCsrViolationCode::kCapacity, "aux_out.extents",
-           "Aux extents must cover all logical elements");
-  }
+  if (state.aux_out.source_to_aux_row.size() != node_count || state.aux_out.row_arcs.size() != state.aux_out.row_sources.size())
+    reject(violations, DualCsrViolationCode::kShape, "aux_out", "Aux row/source/mapping shapes differ");
+  if (!detail::validExtent(state.aux_out.rows_extent, state.aux_out.row_arcs.size())
+      || !detail::validExtent(state.aux_out.source_extent, state.aux_out.row_sources.size())
+      || !detail::validExtent(state.aux_out.mapping_extent, state.aux_out.source_to_aux_row.size()))
+    reject(violations, DualCsrViolationCode::kCapacity, "aux_out.extents", "Aux extents must cover logical storage");
 
   std::vector<std::uint64_t> out_seen(arc_count, 0);
   std::vector<std::uint64_t> in_seen(arc_count, 0);
@@ -488,30 +476,23 @@ DualCsrViolations validateDualCsrState(const DualCsrState& state)
                   "base_in.physical_slots");
   }
 
-  if (aux_offsets_ok) {
+  {
     std::vector<std::int64_t> expected_map(node_count, -1);
     for (std::size_t row = 0; row < state.aux_out.row_sources.size(); ++row) {
-      const csr::NodeId source = state.aux_out.row_sources[row];
+      const auto source = state.aux_out.row_sources[row];
       if (source.value() >= node_count) {
-        reject(violations, DualCsrViolationCode::kId,
-               "aux_out.row_sources", "source NodeId is out of range");
+        reject(violations, DualCsrViolationCode::kId, "aux_out.row_sources", "source NodeId is out of range");
         continue;
       }
-      if (row > 0
-          && state.aux_out.row_sources[row - 1].value() >= source.value())
-        reject(violations, DualCsrViolationCode::kShape,
-               "aux_out.row_sources",
-               "Aux rows must be strictly ordered by source NodeId");
+      if (expected_map[source.value()] != -1)
+        reject(violations, DualCsrViolationCode::kAdjacency, "aux_out.row_sources", "Aux source occurs more than once");
       expected_map[source.value()] = static_cast<std::int64_t>(row);
-      for (std::uint64_t offset = state.aux_out.row_offsets[row];
-           offset < state.aux_out.row_offsets[row + 1]; ++offset)
-        count_arc(state.aux_out.arc_ids[offset], source, true,
-                  "aux_out.arc_ids");
+      if (row < state.aux_out.row_arcs.size())
+        for (const auto arc : state.aux_out.row_arcs[row])
+          count_arc(arc, source, true, "aux_out.row_arcs");
     }
     if (state.aux_out.source_to_aux_row != expected_map)
-      reject(violations, DualCsrViolationCode::kAdjacency,
-             "aux_out.source_to_aux_row",
-             "mapping must be the exact inverse of row_sources");
+      reject(violations, DualCsrViolationCode::kAdjacency, "aux_out.source_to_aux_row", "mapping is not the inverse of row sources");
   }
 
   for (std::size_t id = 0; id < arc_count; ++id) {
@@ -534,7 +515,9 @@ DualCsrViolations validateDualCsrState(const DualCsrState& state)
     const std::uint64_t base_active = static_cast<std::uint64_t>(
         std::ranges::count_if(state.base_out.physical_slots, [](const std::optional<csr::ArcId>& arc) { return arc.has_value(); }));
     const std::uint64_t aux_rows = static_cast<std::uint64_t>(state.aux_out.row_sources.size());
-    const std::uint64_t aux_edges = static_cast<std::uint64_t>(state.aux_out.arc_ids.size());
+    std::uint64_t aux_edges = 0;
+    for (const auto& row : state.aux_out.row_arcs)
+      aux_edges += row.size();
     const auto& telemetry = state.telemetry;
     const std::uint64_t expected_before_generation = state.generation.value() == 0 ? 0 : state.generation.value() - 1;
     if (telemetry.generation_before != expected_before_generation || telemetry.generation_after != state.generation.value())

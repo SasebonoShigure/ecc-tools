@@ -2,7 +2,8 @@
 """Semantic row and tombstone validation for Stage 5 structural receipts."""
 
 import copy
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from dual_csr_typed_json_validator import validate_arc_payload
 
@@ -61,7 +62,7 @@ def validate_structural_semantics(structural: dict[str, Any],
                     f"{label}.base_in row {row} exposes a foreign sink")
 
     aux = structural["aux_out"]
-    for aux_row, arc_ids in _rows(aux["row_offsets"], aux["arc_ids"]):
+    for aux_row, arc_ids in enumerate(aux["row_arcs"]):
         source = aux["row_sources"][aux_row]
         for arc_id in arc_ids:
             key = slots[arc_id]["current_active_key"]
@@ -125,7 +126,7 @@ def run_structural_semantics_self_test(require: Require) -> None:
             {"arc_id": 1, "current_active_key": None}]},
         "base_out": {"row_offsets": [0, 1, 1], "physical_slots": [0]},
         "base_in": {"row_offsets": [0, 0, 1], "physical_slots": [0]},
-        "aux_out": {"row_offsets": [0], "row_sources": [], "arc_ids": [],
+        "aux_out": {"row_arcs": [], "row_sources": [],
                     "source_to_aux_row": [-1, -1]},
         "inactive_arcs": [{"id": 1, "historical_payload": payload}]}
     resolver = {"node_bindings": [

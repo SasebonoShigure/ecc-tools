@@ -63,8 +63,34 @@ void TimingAnalyzer::analyzePropagatedTiming()
 {
   TAModel ta_model = initTAModel();
   analyzeEndPointList(ta_model);
-  uploadTimingPathGroupList(ta_model);
-  updateSummary(ta_model);
+  // Allocate every report object before publishing either paths or summary.
+  // A failed preparation leaves the last complete result intact for a retry.
+  TASummary summary;
+  summary.timing_path_num = getTimingPathNum(ta_model.get_timing_path_group_map());
+  summary.checked_end_point_num = ta_model.get_checked_end_point_num();
+  summary.unconstrained_end_point_num = ta_model.get_unconstrained_end_point_num();
+  summary.violating_end_point_num = ta_model.get_violating_end_point_num();
+  summary.worst_slack = ta_model.get_worst_slack();
+  summary.total_negative_slack = ta_model.get_total_negative_slack();
+  summary.worst_end_point = ta_model.get_worst_end_point();
+  std::vector<TimingPathGroup> paths;
+  paths.reserve(ta_model.get_timing_path_group_map().size());
+  for (auto& [name, group] : ta_model.get_timing_path_group_map()) {
+    static_cast<void>(name);
+    paths.emplace_back();
+    paths.back().get_group_name().swap(group.get_group_name());
+    paths.back().get_timing_path_end_map().swap(group.get_timing_path_end_map());
+  }
+  auto& database = STADM.getDatabase();
+  auto& current = database.get_summary().ta_summary;
+  database.get_timing_path_group_list().swap(paths);
+  current.worst_end_point.swap(summary.worst_end_point);
+  current.timing_path_num = summary.timing_path_num;
+  current.checked_end_point_num = summary.checked_end_point_num;
+  current.unconstrained_end_point_num = summary.unconstrained_end_point_num;
+  current.violating_end_point_num = summary.violating_end_point_num;
+  current.worst_slack = summary.worst_slack;
+  current.total_negative_slack = summary.total_negative_slack;
 }
 
 // private
@@ -955,14 +981,6 @@ void TimingAnalyzer::analyzeEndPointList(TAModel& ta_model)
   }
 }
 
-void TimingAnalyzer::uploadTimingPathGroupList(TAModel& ta_model)
-{
-  Database& database = STADM.getDatabase();
-  for (std::pair<const std::string, TimingPathGroup>& timing_path_group_pair : ta_model.get_timing_path_group_map()) {
-    database.get_timing_path_group_list().push_back(timing_path_group_pair.second);
-  }
-}
-
 TimingPathGroup& TimingAnalyzer::getTimingPathGroup(TAModel& ta_model, TimingPath& timing_path)
 {
   std::map<std::string, TimingPathGroup>& timing_path_group_map = ta_model.get_timing_path_group_map();
@@ -1466,19 +1484,6 @@ std::size_t TimingAnalyzer::getTimingPathNum(TimingPathGroup& timing_path_group)
     timing_path_num += timing_path_end.get_timing_path_list().size();
   }
   return timing_path_num;
-}
-
-void TimingAnalyzer::updateSummary(TAModel& ta_model)
-{
-  Database& database = STADM.getDatabase();
-  TASummary& ta_summary = database.get_summary().ta_summary;
-  ta_summary.timing_path_num = getTimingPathNum(ta_model.get_timing_path_group_map());
-  ta_summary.checked_end_point_num = ta_model.get_checked_end_point_num();
-  ta_summary.unconstrained_end_point_num = ta_model.get_unconstrained_end_point_num();
-  ta_summary.violating_end_point_num = ta_model.get_violating_end_point_num();
-  ta_summary.worst_slack = ta_model.get_worst_slack();
-  ta_summary.total_negative_slack = ta_model.get_total_negative_slack();
-  ta_summary.worst_end_point = ta_model.get_worst_end_point();
 }
 
 }  // namespace ista

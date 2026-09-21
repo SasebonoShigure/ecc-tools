@@ -10,6 +10,23 @@ __device__ inline Index pathRow(Index node, unsigned analysis, unsigned source, 
   return ((node * 2 + analysis) * 2 + source) * 2 + transition;
 }
 
+__device__ inline PathState* findPath(DeviceView view, Index row, Index tag)
+{
+  Index first = view.path_offsets[row], last = view.path_offsets[row + 1];
+  while (first < last) {
+    const Index middle = first + (last - first) / 2;
+    if (view.path_tags[middle] < tag)
+      first = middle + 1;
+    else
+      last = middle;
+  }
+  if (first == view.path_offsets[row + 1] || view.path_tags[first] != tag) {
+    *view.status = Status::invariant;
+    return nullptr;
+  }
+  return view.paths + first;
+}
+
 __device__ inline DynamicValue clockToQ(DeviceView view, const SequentialSeed& seed, unsigned analysis, unsigned output, double clock_slew, double load)
 {
   DynamicValue value;
@@ -97,7 +114,10 @@ __device__ inline void sequentialPass(DeviceView view)
           node.launch = launch;
         }
         if (seed.path_tag != absent) {
-          auto& path = view.paths[pathRow(id, analysis, 1, transition) * view.tag_count + seed.path_tag];
+          auto* slot = findPath(view, pathRow(id, analysis, 1, transition), seed.path_tag);
+          if (slot == nullptr)
+            return;
+          auto& path = *slot;
           path = {};
           path.present = true;
           path.arrival = arrival;
@@ -118,9 +138,9 @@ __device__ inline const PathState* worstEndpointPath(DeviceView view, Index node
     const PathState* best = nullptr;
     for (unsigned transition = 0; transition < 2; ++transition) {
       const PathState* lane_best = nullptr;
-      const auto row = pathRow(node, 0, source, transition) * view.tag_count;
-      for (Index tag = 0; tag < view.tag_count; ++tag) {
-        const auto& path = view.paths[row + tag];
+      const auto row = pathRow(node, 0, source, transition);
+      for (Index slot = view.path_offsets[row]; slot < view.path_offsets[row + 1]; ++slot) {
+        const auto& path = view.paths[slot];
         if (path.present && isfinite(path.arrival) && (lane_best == nullptr || epsilonBetter(view, 0, path.arrival, lane_best->arrival)))
           lane_best = &path;
       }

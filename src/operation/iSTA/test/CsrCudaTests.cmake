@@ -12,6 +12,8 @@ if(ISTA_ENABLE_CUDA)
   target_compile_options(ista_csr_cuda_contract_test PRIVATE
       -Wall -Wextra -Werror -pedantic -ffp-contract=off)
   add_test(NAME ista_csr_cuda_contract_test COMMAND ista_csr_cuda_contract_test)
+  add_test(NAME ista_csr_cuda_packing_test COMMAND ista_csr_cuda_contract_test --packing-only)
+  set_tests_properties(ista_csr_cuda_packing_test PROPERTIES LABELS "ista_cuda_host" TIMEOUT 180)
   set_tests_properties(ista_csr_cuda_contract_test PROPERTIES LABELS "ista_cuda" TIMEOUT 180)
 endif()
 
@@ -39,8 +41,9 @@ if(ISTA_ENABLE_CUDA AND ECC_INCREGPUSTA_DEBUG_CHECKS)
 endif()
 
 if(ISTA_ENABLE_CUDA)
-  add_executable(ista_cuda_dual_csr_session_test CudaDualCsrSessionTest.cpp CsrCpuReferenceTestFixture.cpp
+  add_executable(ista_cuda_dual_csr_session_test CudaDualCsrSessionTest.cpp CudaDualCsrStorageContract.cpp CsrCpuReferenceTestFixture.cpp
       CudaDualCsrTestReader.cu CsrCudaSequentialContract.cu timing_edit/BufferTraceCsrJson.cpp)
+  target_sources(ista_cuda_dual_csr_session_test PRIVATE AllocationFailureSupport.cpp)
   target_include_directories(ista_cuda_dual_csr_session_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(ista_cuda_dual_csr_session_test PRIVATE ista_cuda CUDA::cudart)
   set_target_properties(ista_cuda_dual_csr_session_test PROPERTIES

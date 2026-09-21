@@ -122,7 +122,6 @@ if(BUILD_TESTING)
   target_link_libraries(ista_timing_dual_csr_structured_batch_test
       PRIVATE
       ista_timing_dual_csr_native
-      ista_timing_edit_transaction
       ista_timing_edit_native
       ista_timing_graph_csr_adapter
       ista_timing_database_headers
@@ -168,4 +167,9 @@ if(BUILD_TESTING)
       ista_timing_narrow_record_reader_test
       ista_timing_dual_csr_structured_batch_test
   )
+endif()
+
+if(BUILD_TESTING)
+  target_sources(ista_timing_dual_csr_structured_batch_test PRIVATE
+      ${ISTA_TEST}/AllocationFailureSupport.cpp)
 endif()

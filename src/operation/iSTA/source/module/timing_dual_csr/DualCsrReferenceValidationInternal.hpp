@@ -6,9 +6,13 @@
 // ***************************************************************************************
 #pragma once
 
-#include "DualCsrState.hpp"
+#include "DualCsrDescriptors.hpp"
 
 namespace ista::timing_dual_csr::detail {
+
+void validateReferenceDelta(const DualCsrState& committed,
+                            const DualCsrBatchDescriptor& descriptor,
+                            DualCsrViolations& violations);
 
 // Validates the stable-ID Dual payload through the canonical DB-free Stage 2
 // intrinsic validator. The projection exists only for validation and never

@@ -43,9 +43,9 @@ from stage6_winner_equivalence import (  # noqa: E402
     compare_timing_with_admissible_winners,
 )
 
-WIRE_SCHEMA = "ista-stage6-trace-process/3.0.0"
+WIRE_SCHEMA = "ista-stage6-trace-process/5.0.0"
 LEVEL_FIELDS = {
-    "level_offsets", "level_nodes", "node_to_level", "timing_order",
+    "level_offsets", "level_nodes", "node_to_level",
 }
 TIMING_VALUE_FIELDS = {
     "schema_version", "nodes", "effective_clock", "physical_clock",
@@ -140,8 +140,6 @@ def validate_levelization(graph: dict[str, Any], timing: dict[str, Any],
         item["level_offsets"], len(graph_nodes), f"{label}.level_offsets")
     level_nodes = complete_key_permutation(
         item["level_nodes"], graph_nodes, f"{label}.level_nodes")
-    timing_order = complete_key_permutation(
-        item["timing_order"], graph_nodes, f"{label}.timing_order")
 
     inverse_raw = item["node_to_level"]
     require(isinstance(inverse_raw, list)
@@ -155,18 +153,6 @@ def validate_levelization(graph: dict[str, Any], timing: dict[str, Any],
         for position in range(begin, end):
             require(inverse[canonical(level_nodes[position])] == level,
                     f"{label}.node_to_level is not the exact inverse")
-
-    order_levels = [inverse[canonical(node)] for node in timing_order]
-    require(all(left <= right for left, right
-                in pairwise(order_levels)),
-            f"{label}.timing_order moves backwards across levels")
-    order_counts = [0] * (len(offsets) - 1)
-    for level in order_levels:
-        order_counts[level - 1] += 1
-    expected_counts = [right - left for left, right
-                       in pairwise(offsets)]
-    require(order_counts == expected_counts,
-            f"{label}.timing_order level cardinalities differ")
 
     arcs = graph.get("active_arcs")
     require(isinstance(arcs, list), f"{label}.graph.active_arcs is malformed")
@@ -185,8 +171,7 @@ def validate_levelization(graph: dict[str, Any], timing: dict[str, Any],
                 f"{label}.graph.active_arcs[{index}] violates forward levels")
     return {"level_count": len(offsets) - 1,
             "node_count": len(graph_nodes),
-            "eligible_arc_count": eligible_count,
-            "timing_order_levels": order_levels}
+            "eligible_arc_count": eligible_count}
 
 
 def validate_functional(value: object, label: str
@@ -241,7 +226,7 @@ def semantic_aux_keys(structural: dict[str, Any], graph: dict[str, Any],
                       label: str) -> list[object]:
     eligible = {canonical(arc["key"]) for arc in graph["active_arcs"]
                 if arc["eligibility"]["levelization"] is True}
-    aux_ids = set(structural["aux_out"]["arc_ids"])
+    aux_ids = {arc for row in structural["aux_out"]["row_arcs"] for arc in row}
     result: list[object] = []
     for slot in structural["arc_group_index"]["slots"]:
         key = slot["current_active_key"]
@@ -467,7 +452,7 @@ def replay(args: argparse.Namespace) -> None:
         del targeted, fresh, targeted_functional, fresh_functional
         del targeted_levels, fresh_levels, target_source, fresh_source
     write_json(root / "controller-summary.json", {
-        "schema_version": "ista-stage6-differential-verdict/2.0.0",
+        "schema_version": "ista-stage6-differential-verdict/4.0.0",
         "trace": str(trace),
         "controller_pid": os.getpid(),
         "all_process_ids_distinct": True,
@@ -480,7 +465,7 @@ def replay(args: argparse.Namespace) -> None:
 
 
 def canary_receipt(level_offsets: list[int], level_nodes: list[dict[str, str]],
-                   inverse: list[int], timing_order: list[dict[str, str]]
+                   inverse: list[int]
                    ) -> dict[str, Any]:
     keys = [{"kind": "port", "full_name": name,
              "instance_name": "", "pin_name": ""}
@@ -494,7 +479,7 @@ def canary_receipt(level_offsets: list[int], level_nodes: list[dict[str, str]],
     timing["schema_version"] = "canary"
     timing.update({
         "level_offsets": level_offsets, "level_nodes": level_nodes,
-        "node_to_level": inverse, "timing_order": timing_order})
+        "node_to_level": inverse})
     return {"graph": graph, "timing": timing}
 
 
@@ -510,8 +495,8 @@ def self_test() -> None:
     keys = [{"kind": "port", "full_name": name,
              "instance_name": "", "pin_name": ""}
             for name in ("a", "b", "c")]
-    compact = canary_receipt([0, 2, 3], keys, [1, 1, 2], keys)
-    noncompact = canary_receipt([0, 1, 2, 3], keys, [1, 2, 3], keys)
+    compact = canary_receipt([0, 2, 3], keys, [1, 1, 2])
+    noncompact = canary_receipt([0, 1, 2, 3], keys, [1, 2, 3])
     left, _ = validate_functional(compact, "compact")
     right, _ = validate_functional(noncompact, "noncompact")
     require(first_exact_difference(left, right) is None,
@@ -522,7 +507,7 @@ def self_test() -> None:
                                              compact["timing"]),
             "legal_noncompact report-only comparison differs")
     same_level_order = copy.deepcopy(compact)
-    same_level_order["timing"]["timing_order"] = [keys[1], keys[0], keys[2]]
+    same_level_order["timing"]["level_nodes"] = [keys[1], keys[0], keys[2]]
     validate_functional(same_level_order, "same-level-order")
     missing = copy.deepcopy(compact)
     missing["timing"]["level_nodes"].pop()
@@ -531,13 +516,13 @@ def self_test() -> None:
     inverse["timing"]["node_to_level"][2] = 1
     expect_rejected(inverse, "inverse")
     order = copy.deepcopy(compact)
-    order["timing"]["timing_order"][2] = {"unknown": "node"}
-    expect_rejected(order, "timing-order")
+    order["timing"]["level_nodes"][2] = {"unknown": "node"}
+    expect_rejected(order, "level-order")
     reverse = copy.deepcopy(compact)
-    reverse["timing"]["timing_order"] = [keys[2], keys[0], keys[1]]
-    expect_rejected(reverse, "timing-order-reverse")
+    reverse["timing"]["level_nodes"] = [keys[2], keys[0], keys[1]]
+    expect_rejected(reverse, "level-order-reverse")
     edge = canary_receipt([0, 1, 2, 3], [keys[2], keys[1], keys[0]],
-                          [3, 2, 1], keys)
+                          [3, 2, 1])
     expect_rejected(edge, "eligible-edge")
     run_equal_cost_canary(
         compare_timing_with_admissible_winners, first_difference,

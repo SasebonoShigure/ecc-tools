@@ -17,7 +17,7 @@
 
 namespace ista::timing_dual_csr {
 
-inline constexpr auto kDualCsrDescriptorSchema = "ista-dual-csr-update/1.2.0";
+inline constexpr auto kDualCsrDescriptorSchema = "ista-dual-csr-update/2.0.0";
 
 enum class DualCsrViolationCode : std::uint8_t
 {
@@ -88,6 +88,14 @@ struct DualCsrReferencePayload
                          const DualCsrReferencePayload&) = default;
 };
 
+template <typename T>
+struct RecordAppend
+{
+  std::uint64_t expected_size{0};
+  std::vector<T> values;
+  friend bool operator==(const RecordAppend&, const RecordAppend&) = default;
+};
+
 struct DualCsrReferencePayloadDelta
 {
   std::optional<ValueReplacement<std::string>> schema_version;
@@ -99,13 +107,13 @@ struct DualCsrReferencePayloadDelta
       path_source_order;
   std::optional<ValueReplacement<decltype(DualCsrReferencePayload::transition_order)>>
       transition_order;
-  std::optional<ValueReplacement<std::vector<csr::InstanceRecord>>> instances;
+  std::optional<RecordAppend<csr::InstanceRecord>> instances;
   std::optional<ValueReplacement<std::vector<csr::NodeId>>> ordered_root_ids;
   std::optional<ValueReplacement<std::vector<csr::NodeId>>> ordered_start_ids;
   std::optional<ValueReplacement<std::vector<csr::NodeId>>> ordered_end_ids;
   std::optional<ValueReplacement<std::vector<std::string>>> clock_tags;
   std::optional<ValueReplacement<std::vector<csr::ClockConstraintModel>>> clocks;
-  std::optional<ValueReplacement<std::vector<std::optional<std::string>>>>
+  std::optional<RecordAppend<std::optional<std::string>>>
       clock_owner_by_node;
   std::optional<ValueReplacement<std::vector<csr::PortConstraintModel>>>
       port_constraints;
@@ -113,13 +121,13 @@ struct DualCsrReferencePayloadDelta
       case_analysis_constraints;
   std::optional<ValueReplacement<std::vector<csr::TimingCheckEndpointModel>>>
       timing_check_endpoints;
-  std::optional<ValueReplacement<std::vector<csr::ReferencedLibraryCellModel>>>
+  std::optional<RecordAppend<csr::ReferencedLibraryCellModel>>
       referenced_library_cells;
   std::optional<ValueReplacement<csr::ParasiticModel>> parasitics;
   std::optional<ValueReplacement<std::vector<csr::StartSeedModel>>> start_seeds;
   std::optional<ValueReplacement<std::vector<csr::EndpointRequiredModel>>>
       endpoint_required;
-  std::optional<ValueReplacement<std::vector<csr::CellPinCapacitanceModel>>>
+  std::optional<RecordAppend<csr::CellPinCapacitanceModel>>
       cell_pin_capacitances;
   std::optional<ValueReplacement<std::vector<csr::CsrReferenceUnsupportedReason>>>
       unsupported_reasons;

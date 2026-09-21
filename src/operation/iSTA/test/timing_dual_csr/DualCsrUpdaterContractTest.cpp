@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "DualCsrEdgeViewImpl.hpp"
+#include "DualCsrUpdaterInternal.hpp"
+#include "AllocationFailureSupport.hpp"
 #include "DualCsrResourceObservation.hpp"
 #include "DualCsrTestSupport.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
@@ -82,6 +84,37 @@ DualCsrBatchDescriptor reuseBatch(const DualCsrState& state)
                  LogicalArcDeactivateReason::kReplaced)};
   completeReferencePayload(descriptor, state);
   return descriptor;
+}
+
+void referenceAppendContracts()
+{
+  const auto baseline = tombstoneBaselineState();
+  const auto check = [&](DualCsrReferencePayloadDelta delta) {
+    auto descriptor = tombstoneBatch(baseline);
+    descriptor.reference_payload = std::move(delta);
+    require(!validateDualCsrDescriptor(baseline, descriptor).empty(), "malformed reference append was accepted");
+  };
+  auto delta = tombstoneBatch(baseline).reference_payload;
+  delta.clock_owner_by_node = RecordAppend<std::optional<std::string>>{baseline.nodes.size() + 1, {std::nullopt}};
+  check(delta);
+  delta = tombstoneBatch(baseline).reference_payload;
+  delta.clock_owner_by_node = RecordAppend<std::optional<std::string>>{baseline.nodes.size(), {"missing-clock"}};
+  check(delta);
+  delta = tombstoneBatch(baseline).reference_payload;
+  csr::CellPinCapacitanceModel cap;
+  cap.node = csr::NodeId{std::numeric_limits<std::uint64_t>::max()};
+  delta.cell_pin_capacitances = RecordAppend<csr::CellPinCapacitanceModel>{0, {cap}};
+  check(delta);
+  cap.node = csr::NodeId{2};
+  cap.default_capacitance = std::numeric_limits<double>::quiet_NaN();
+  delta.cell_pin_capacitances = RecordAppend<csr::CellPinCapacitanceModel>{0, {cap}};
+  check(delta);
+  delta = tombstoneBatch(baseline).reference_payload;
+  csr::ReferencedLibraryCellModel cell;
+  cell.cell_name = "new-model";
+  cell.present = true;
+  delta.referenced_library_cells = RecordAppend<csr::ReferencedLibraryCellModel>{0, {cell, cell}};
+  check(delta);
 }
 
 void tombstoneAndReuseContracts()
@@ -182,16 +215,23 @@ void resourceObservationContracts()
       sizeAndCapacity(state.base_out.physical_slots),
       sizeAndCapacity(state.base_in.row_offsets),
       sizeAndCapacity(state.base_in.physical_slots),
-      sizeAndCapacity(state.aux_out.row_offsets),
+      sizeAndCapacity(state.aux_out.row_arcs),
       sizeAndCapacity(state.aux_out.row_sources),
-      sizeAndCapacity(state.aux_out.arc_ids),
+      [&] {
+        std::pair<std::uint64_t, std::uint64_t> total{};
+        for (const auto& row : state.aux_out.row_arcs) {
+          total.first += row.size();
+          total.second += row.capacity();
+        }
+        return total;
+      }(),
       sizeAndCapacity(state.aux_out.source_to_aux_row)};
   const std::array<std::uint64_t, kDualCsrObservedVectorCount>
       element_sizes{
           sizeof(csr::NodeRecord), sizeof(DualCsrArcSlot),
           sizeof(std::uint64_t), sizeof(std::optional<csr::ArcId>),
           sizeof(std::uint64_t), sizeof(std::optional<csr::ArcId>),
-          sizeof(std::uint64_t), sizeof(csr::NodeId), sizeof(csr::ArcId),
+          sizeof(std::vector<csr::ArcId>), sizeof(csr::NodeId), sizeof(csr::ArcId),
           sizeof(std::int64_t)};
   for (std::size_t index = 0;
        index < kDualCsrObservedBufferOrder.size(); ++index) {
@@ -223,9 +263,8 @@ void payloadAndDescriptorContracts()
   invalid_reason.logical_deactivations[0].reason
       = static_cast<LogicalArcDeactivateReason>(255);
   const auto invalid_reason_attempt
-      = DualCsrUpdater::stage(baseline, invalid_reason);
-  require(!invalid_reason_attempt.success()
-              && hasCode(invalid_reason_attempt.violations,
+      = validateDualCsrDescriptor(baseline, invalid_reason);
+  require(hasCode(invalid_reason_attempt,
                          DualCsrViolationCode::kSchema),
           "descriptor accepted an out-of-domain deactivation reason");
 
@@ -265,9 +304,8 @@ void payloadAndDescriptorContracts()
   auto missing_identity = descriptorFor(second, 0, 0);
   missing_identity.reference_payload.source_identity.reset();
   const auto missing_attempt
-      = DualCsrUpdater::stage(second, missing_identity);
-  require(!missing_attempt.success()
-              && hasCode(missing_attempt.violations,
+      = validateDualCsrDescriptor(second, missing_identity);
+  require(hasCode(missing_attempt,
                          DualCsrViolationCode::kGeneration),
           "descriptor accepted an undeclared generation identity change");
 
@@ -278,32 +316,71 @@ void payloadAndDescriptorContracts()
   conflict.logical_deactivations = {
       deactivate(second, csr::ArcId{2},
                  LogicalArcDeactivateReason::kReplaced)};
-  const auto conflict_attempt = DualCsrUpdater::stage(second, conflict);
-  require(!conflict_attempt.success()
-              && hasCode(conflict_attempt.violations,
+  const auto conflict_attempt = validateDualCsrDescriptor(second, conflict);
+  require(hasCode(conflict_attempt,
                          DualCsrViolationCode::kConflict),
           "descriptor accepted payload-change/deactivate overlap");
 }
 
-void detachedFailureIsAtomic()
+void localPatchAtomicity()
 {
-  const DualCsrState baseline = tombstoneBaselineState();
-  const DualCsrState committed = apply(baseline,
-                                       tombstoneBatch(baseline));
-  const DualCsrState snapshot = committed;
-  bool threw = false;
-  try {
-    static_cast<void>(DualCsrUpdater::stage(
-        committed, reuseBatch(committed),
-        {DualCsrUpdateFailpoint::kAfterCapacityGrow}));
-  } catch (const std::invalid_argument&) {
-    threw = !incregpusta_debug_checks_enabled;
-  } catch (const std::bad_alloc&) {
-    threw = incregpusta_debug_checks_enabled;
+  auto state = tombstoneBaselineState();
+  const auto before = state;
+  const auto descriptor = tombstoneBatch(state);
+  const auto restored = [&] {
+    require(state.generation == before.generation && state.high_water == before.high_water
+                && state.nodes == before.nodes && state.arc_slots == before.arc_slots
+                && state.base_out.row_offsets == before.base_out.row_offsets
+                && state.base_out.physical_slots == before.base_out.physical_slots
+                && state.base_in.row_offsets == before.base_in.row_offsets
+                && state.base_in.physical_slots == before.base_in.physical_slots
+                && state.aux_out.row_arcs == before.aux_out.row_arcs
+                && state.aux_out.row_sources == before.aux_out.row_sources
+                && state.aux_out.source_to_aux_row == before.aux_out.source_to_aux_row
+                && state.reference_payload == before.reference_payload
+                && state.telemetry == before.telemetry && validateDualCsrState(state).empty(),
+            "local patch did not restore the actual old graph");
+  };
+  std::size_t prepare_allocations = 0;
+  {
+    ista_test_allocation::armCountOnly();
+    detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+    prepare_allocations = ista_test_allocation::disable();
+    const auto* nodes = state.nodes.data();
+    const auto* arcs = state.arc_slots.data();
+    ista_test_allocation::armFailure(1);
+    patch.apply();
+    const auto apply_allocations = ista_test_allocation::disable();
+    require(apply_allocations == 0 && state.nodes.data() == nodes && state.arc_slots.data() == arcs,
+            "prepared apply allocated or replaced canonical buffers");
+    require(validateDualCsrState(state).empty(), "local patch produced an invalid graph");
+    ista_test_allocation::armFailure(1);
+    patch.rollback();
+    const auto undo_allocations = ista_test_allocation::disable();
+    require(undo_allocations == 0, "local graph rollback allocated");
   }
-  require(threw, "failpoint did not honor its build mode");
-  require(committed == snapshot,
-          "detached allocation failure mutated committed state");
+  restored();
+  // Enumerate actual allocation failures in preparation, before any logical
+  // modification. Grown capacities may remain available after failure.
+  for (std::size_t ordinal = 1; ordinal <= prepare_allocations; ++ordinal) {
+    try {
+      ista_test_allocation::armFailure(ordinal);
+      detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+      static_cast<void>(ista_test_allocation::disable());
+      patch.apply();
+      // Abandoning the patch must roll it back.
+    } catch (const std::bad_alloc&) {
+      static_cast<void>(ista_test_allocation::disable());
+    }
+    restored();
+  }
+  {
+    detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+    patch.apply();
+    patch.commit();
+  }
+  require(state.generation == descriptor.target_generation && validateDualCsrState(state).empty(),
+          "committed local patch was undone on destruction");
 }
 
 }  // namespace
@@ -312,11 +389,12 @@ void detachedFailureIsAtomic()
 int main()
 {
   try {
+    ista::timing_dual_csr::test::referenceAppendContracts();
     ista::timing_dual_csr::test::tombstoneAndReuseContracts();
     if constexpr (ista::incregpusta_debug_checks_enabled)
       ista::timing_dual_csr::test::resourceObservationContracts();
     ista::timing_dual_csr::test::payloadAndDescriptorContracts();
-    ista::timing_dual_csr::test::detachedFailureIsAtomic();
+    ista::timing_dual_csr::test::localPatchAtomicity();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

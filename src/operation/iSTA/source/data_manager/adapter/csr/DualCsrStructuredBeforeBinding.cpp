@@ -29,16 +29,17 @@ namespace {
 void requireStructuredExactBefore(
     const DualCsrState& graph,
     const timing_edit::TimingEditResolverState& resolver,
-    const timing_edit::CommittedEditIdentity& identity,
+    const std::optional<timing_edit::CommittedEditIdentity>& identity,
     const DualCsrArcGroupIndex& arc_group_index,
     const DualSemanticReadView& view)
 {
-  if (graph.session_token != view.sessionToken()
+  if (graph.session_token.value() == 0 || graph.session_token != view.sessionToken()
       || graph.generation != view.generation()
       || graph.high_water != view.highWater()
-      || graph.reference_payload != view.referencePayload()
+      || &graph.reference_payload != &view.referencePayload()
       || resolver.highWater() != graph.high_water
-      || identity.generation != graph.generation
+      || (identity && identity->generation != graph.generation)
+      || ((incregpusta_debug_checks_enabled || graph.generation.value() == 0) && !identity)
       || arc_group_index.session_token != graph.session_token
       || arc_group_index.generation != graph.generation
       || arc_group_index.arc_high_water != graph.high_water.arc_slots

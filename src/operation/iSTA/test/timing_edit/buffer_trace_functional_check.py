@@ -10,7 +10,7 @@ class FunctionalEvidenceError(RuntimeError):
     pass
 
 
-def require(condition: bool, message: str) -> None:
+def require(condition: bool, message: str) -> None:  # noqa: FBT001 - assertion predicate
     if not condition:
         raise FunctionalEvidenceError(message)
 
@@ -321,8 +321,6 @@ def validate_prefix(trace: dict[str, Any], functional: dict[str, Any],
             f"prefix {prefix} receipt prefix differs")
     require(len(functional["batches"]) == prefix,
             f"prefix {prefix} receipt batch count differs")
-    require_equal(functional["cumulative_trace"], trace_batches[:prefix],
-                  f"prefix {prefix} cumulative trace")
     require(functional["committed_identity"]["generation"] == prefix,
             f"prefix {prefix} committed generation differs")
     for index, batch in enumerate(functional["batches"]):

@@ -158,10 +158,11 @@ CsrFifoLevelization slowFifoOracle(const CsrReferenceInput& input)
     const NodeId node = ready[head];
     replay.level_nodes.push_back(node);
     std::vector<const ArcRecord*> outgoing;
-    for (const auto& arc : input.arcs)
+    for (const auto id : input.out_arc_ids) {
+      const auto& arc = input.arcs[id.value()];
       if (arc.source == node && arc.eligibility.levelization)
         outgoing.push_back(&arc);
-    std::ranges::sort(outgoing, {}, [](const ArcRecord* arc) { return arc->native_traversal_rank; });
+    }
     for (const ArcRecord* arc : outgoing) {
       const std::uint64_t candidate = replay.node_to_level[node.value()] + 1;
       replay.node_to_level[arc->sink.value()] = std::max(replay.node_to_level[arc->sink.value()], candidate);

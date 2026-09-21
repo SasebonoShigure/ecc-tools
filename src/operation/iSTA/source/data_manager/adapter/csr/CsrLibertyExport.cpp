@@ -87,8 +87,7 @@ void exportReferencedCells(ReferenceBuildState& state)
   state.input.referenced_library_cells.reserve(names.size());
   for (const auto& cell_name : names) {
     ReferencedLibraryCellModel cell
-        = projectCanonicalReferencedLibraryCell(
-            state.database, cell_name);
+        = state.models.cell(cell_name);
 
     const std::size_t index = state.input.referenced_library_cells.size();
     if (!state.referenced_cell_indices_by_name.emplace(cell.cell_name, index).second)
@@ -122,16 +121,16 @@ void exportGraphTransfers(ReferenceBuildState& state)
 {
   for (auto& arc : state.input.arcs) {
     const ista::Arc& native_arc = requireNativeArc(state, arc);
-    arc.transfer = projectCanonicalArcTransfer(arc, native_arc);
+    arc.transfer = projectCanonicalArcTransfer(state.database, state.models, arc, native_arc);
 
     if (arc.kind == ArcKind::kNet)
       continue;
 
     if (arc.transfer.is_clock_arc != arc.is_clock_arc || arc.transfer.is_disabled != arc.is_disabled
-        || arc.transfer.children.size() != arc.key.base.library_arcs.size())
+        || arc.transfer.children().size() != arc.key.base.library_arcs.size())
       malformedReferenceInput();
-    for (std::size_t child = 0; child < arc.transfer.children.size(); ++child)
-      if (!(arc.transfer.children[child].signature == arc.key.base.library_arcs[child]))
+    for (std::size_t child = 0; child < arc.transfer.children().size(); ++child)
+      if (!(arc.transfer.children()[child].signature == arc.key.base.library_arcs[child]))
         malformedReferenceInput();
   }
 }
@@ -338,14 +337,16 @@ CellTransferModel exportReferenceCellTransfer(const ista::TimingCellArc& cell_ar
   requireFiniteReference(transfer.delay);
   requireFiniteReference(transfer.delay_min);
   requireFiniteReference(transfer.delay_max);
-  transfer.children.reserve(cell_arc.get_timing_arc_list().size());
+  std::vector<ChildTimingArcModel> children;
+  children.reserve(cell_arc.get_timing_arc_list().size());
   std::set<std::int32_t> child_indices;
   for (const auto& child : cell_arc.get_timing_arc_list()) {
     ChildTimingArcModel exported = exportReferenceChildTimingArc(child);
     if (!child_indices.insert(exported.signature.arc_index).second)
       malformedReferenceInput();
-    transfer.children.push_back(std::move(exported));
+    children.push_back(std::move(exported));
   }
+  transfer.setChildren(children);
   return transfer;
 }
 

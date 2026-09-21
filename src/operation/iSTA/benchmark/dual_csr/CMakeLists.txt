@@ -1,7 +1,6 @@
 set(ISTA_DUAL_CSR_TRACE_RUNTIME_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/CpuIncrementalLevelizationRunner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTraceBaseline.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrNativeCandidateCarrier.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTraceReplayer.cpp
 )
 set(ISTA_DUAL_CSR_TRACE_RUNTIME_LINKS
@@ -11,7 +10,10 @@ set(ISTA_DUAL_CSR_TRACE_RUNTIME_LINKS
     ista_buffer_trace_contract
 )
 set(ISTA_DUAL_CSR_TRACE_RUNTIME_PRIVATE_LINKS
-    ista_timing_edit_transaction
+    ista_interface
+    ista_timing_analyzer
+    ista_delay_calculator
+    ista_timing_edit_native
     ista_timing_database_headers
 )
 set(ISTA_DUAL_CSR_TRACE_RUNTIME_OPTIONS

@@ -1,3 +1,4 @@
+#include "CsrModelTestMutation.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -213,7 +214,7 @@ inline CsrReferenceInput cellInput()
   arc.sink = NodeId{1};
   arc.kind = ArcKind::kCell;
   arc.eligibility = {true, true, true, false};
-  arc.transfer.children = {child};
+  arc.transfer.setChildren({child});
   arc.output_load = outputLoad(0.0);
   input.arcs = {arc};
   input.arc_ids_by_key = {{arc.key, arc.id}};
@@ -282,12 +283,14 @@ inline CsrReferenceInput cycleInput()
 inline CsrReferenceInput tableInput()
 {
   CsrReferenceInput input = cellInput();
-  auto signature = input.arcs[0].transfer.children[0].signature;
+  auto signature = input.arcs[0].transfer.children()[0].signature;
   signature.delay_tables[0] = {true, TableVariable::kInputTransition, TableVariable::kNone};
   input.arcs[0].key.base.library_arcs[0] = signature;
-  auto& child = input.arcs[0].transfer.children[0];
+  ista::csr::test::mutateChildren(input.arcs[0].transfer, [&](auto& children) {
+    auto& child = children[0];
   child.signature = signature;
   child.delay_tables[0] = {true, TableVariable::kInputTransition, TableVariable::kNone, {{0.1, 0.2}}, {0.3, 0.4}};
+  });
   input.referenced_library_cells[0].cell_arcs[0].transfer = input.arcs[0].transfer;
   input.arc_ids_by_key[0].key = input.arcs[0].key;
   refreshIdentity(input);
@@ -329,7 +332,6 @@ inline CsrTimingResult timingResult(const CsrReferenceInput& input)
   result.level_offsets = {0, 1, 2};
   result.level_nodes = {NodeId{0}, NodeId{1}};
   result.node_to_level = {1, 2};
-  result.timing_order = result.level_nodes;
   result.nodes.is_clock_point = soa<std::uint8_t>(2, 1, 0);
   result.nodes.arrivals = OptionalSoa<double>{{1, 1}, {1.0, 1.0}};
   result.nodes.requireds = OptionalSoa<double>{{1, 1}, {1.0, 1.0}};
@@ -383,9 +385,9 @@ inline CsrTimingResult timingResult(const CsrReferenceInput& input)
   }
   result.arcs.transition_types = transitionSoa(2, 1, Transition::kRise);
   result.arcs.transition_types.values[1] = Transition::kFall;
-  const std::size_t children = input.arcs[0].transfer.children.size();
+  const std::size_t children = input.arcs[0].transfer.children().size();
   result.arcs.timing_arc_row_offsets = {0, children};
-  for (const auto& child : input.arcs[0].transfer.children)
+  for (const auto& child : input.arcs[0].transfer.children())
     result.arcs.timing_arc_indices.push_back(child.signature.arc_index);
   result.arcs.timing_arc_delays = soa<double>(children * 8);
   result.arcs.timing_arc_fallbacks = soa<std::uint8_t>(children * 8);
@@ -399,7 +401,6 @@ inline CsrTimingResult cellTimingResult(const CsrReferenceInput& input)
   result.level_offsets = {0, 1, 2};
   result.level_nodes = {NodeId{0}, NodeId{1}};
   result.node_to_level = {1, 2};
-  result.timing_order = result.level_nodes;
   result.nodes.is_clock_point = soa<std::uint8_t>(2, 1, 0);
   result.nodes.arrivals = soa<double>(2, 1, 0.0);
   result.nodes.requireds = soa<double>(2, 1, 0.0);
@@ -426,7 +427,7 @@ inline CsrTimingResult cellTimingResult(const CsrReferenceInput& input)
   result.arcs.transition_types = transitionSoa(2, 1, Transition::kRise);
   result.arcs.transition_types.values[1] = Transition::kFall;
   result.arcs.timing_arc_row_offsets = {0, 1};
-  result.arcs.timing_arc_indices = {input.arcs[0].transfer.children[0].signature.arc_index};
+  result.arcs.timing_arc_indices = {input.arcs[0].transfer.children()[0].signature.arc_index};
   result.arcs.timing_arc_delays = soa<double>(8);
   result.arcs.timing_arc_fallbacks = soa<std::uint8_t>(8);
   result.arcs.timing_arc_delays.presence[0] = 1;

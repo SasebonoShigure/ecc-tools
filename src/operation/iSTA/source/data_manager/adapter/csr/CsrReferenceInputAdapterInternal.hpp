@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "CsrGraphTypes.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "CsrReferenceTypes.hpp"
 #include "Database.hpp"
 #include "TimingGraphCsrAdapter.hpp"
@@ -74,9 +75,10 @@ void requireNonnegativeReference(double value);
 
 struct ReferenceBuildState
 {
-  ReferenceBuildState(const ista::Database& native_database, CsrGraphSnapshot graph, StaAnalysisContext context);
+  ReferenceBuildState(const ista::Database& native_database, CsrGraphSnapshot graph, StaAnalysisContext context, NativeLibraryModels& models);
 
   const ista::Database& database;
+  NativeLibraryModels& models;
   CsrReferenceInput input;
   std::map<std::string, NodeId> node_ids_by_full_name;
   std::map<std::string, std::size_t> instance_indices_by_name;

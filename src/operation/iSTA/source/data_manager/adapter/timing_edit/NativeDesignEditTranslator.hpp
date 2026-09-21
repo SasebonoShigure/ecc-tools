@@ -17,7 +17,7 @@ class Database;
 
 namespace ista::timing_edit {
 
-class TimingEditResolverState;
+class TimingEditResolverView;
 
 struct NativeTranslationResult
 {
@@ -34,7 +34,7 @@ class NativeDesignEditTranslator final
   // Applies only normalized semantic edits to raw Instance/Pin/Net inputs. The
   // target remains detached; graph arcs are exclusively rebuilt by GraphBuilder.
   [[nodiscard]] static NativeTranslationResult applyNormalizedBatch(Database& database, const PreparedBatch& batch,
-                                                                    const TimingEditResolverState& staged_resolver);
+                                                                    TimingEditResolverView staged_resolver);
 };
 
 }  // namespace ista::timing_edit

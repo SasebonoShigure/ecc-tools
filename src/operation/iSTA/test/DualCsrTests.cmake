@@ -39,7 +39,6 @@ set(ISTA_DUAL_CSR_FRESH_PROBE_LINKS
     ista_dual_csr_trace_runtime
     ista_timing_dual_csr
     ista_buffer_trace_runtime
-    ista_timing_edit_transaction
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
@@ -176,7 +175,7 @@ if(ISTA_ENABLE_CUDA)
     if(ECC_INCREGPUSTA_DEBUG_CHECKS)
       set(cuda_trace_mode)
     else()
-      set(cuda_trace_mode --performance)
+      set(cuda_trace_mode --performance --warmup-runs 1 --samples 3)
     endif()
     add_test(NAME ista_cuda_full_trace_${trace}
       COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
@@ -204,7 +203,7 @@ if(ISTA_ENABLE_CUDA)
     if(ECC_INCREGPUSTA_DEBUG_CHECKS)
       set(cuda_targeted_mode --full-probe "$<TARGET_FILE:ista_cuda_full_trace_probe>")
     else()
-      set(cuda_targeted_mode --performance)
+      set(cuda_targeted_mode --performance --warmup-runs 1 --samples 3)
     endif()
     add_test(NAME ista_cuda_targeted_trace_${trace}
       COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"

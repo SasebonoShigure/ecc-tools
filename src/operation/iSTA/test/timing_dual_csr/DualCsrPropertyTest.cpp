@@ -313,12 +313,7 @@ std::vector<csr::ArcId> auxRow(const DualCsrState& state,
   if (mapped == -1)
     return {};
   const auto row = static_cast<std::size_t>(mapped);
-  return {state.aux_out.arc_ids.begin()
-              + static_cast<std::ptrdiff_t>(
-                    state.aux_out.row_offsets.at(row)),
-          state.aux_out.arc_ids.begin()
-              + static_cast<std::ptrdiff_t>(
-                    state.aux_out.row_offsets.at(row + 1))};
+  return state.aux_out.row_arcs.at(row);
 }
 
 
@@ -370,12 +365,12 @@ void requireAtomicReject(const DualCsrState& state,
   const DualCsrState before = state;
   const auto attempt = [&]() {
     try {
-      return DualCsrUpdater::stage(state, malformed);
+      return validateDualCsrDescriptor(state, malformed);
     } catch (const std::exception& error) {
       throw std::runtime_error(context + " updater threw: " + error.what());
     }
   }();
-  require(!attempt.success() && !attempt.violations.empty(),
+  require(!attempt.empty(),
           context + " malformed descriptor was accepted: "
               + descriptorSummary(malformed));
   require(state == before,
@@ -386,21 +381,14 @@ void applyChecked(DualCsrState& state, PropertyOracle& oracle,
                   const DualCsrBatchDescriptor& descriptor,
                   const std::string& context)
 {
-  auto attempt = [&]() {
-    try {
-      return DualCsrUpdater::stage(state, descriptor);
-    } catch (const std::exception& error) {
-      throw std::runtime_error(context + " updater threw: " + error.what());
-    }
-  }();
-  require(attempt.success(),
-          context + " rejected " + descriptorSummary(descriptor) + " at "
-              + (attempt.violations.empty()
-                     ? std::string{"unknown"}
-                     : attempt.violations.front().field + ": "
-                           + attempt.violations.front().message));
+  const auto violations = validateDualCsrDescriptor(state, descriptor);
+  require(violations.empty(),
+          context + " rejected " + descriptorSummary(descriptor)
+              + (violations.empty() ? std::string{} : " at " + violations.front().field + ": " + violations.front().message));
+  detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+  patch.apply();
   oracle.apply(descriptor);
-  state = std::move(*attempt.state);
+  patch.commit();
   requirePropertyMatches(
       state, oracle,
       context + " [" + descriptorSummary(descriptor) + "]");

@@ -47,7 +47,6 @@ inline nlohmann::json analyzeAndCapturePublicTiming()
 {
   // Native candidate preparation may already have analyzed its own values.
   // Keep propagated point/arc state, but replace the old report groups.
-  STADM.getDatabase().get_timing_path_group_list().clear();
   const auto status = executeStaLifecyclePipeline(
       {{"TimingAnalyzer", [] { TimingAnalyzer::initInst(); }, [] { STATA.analyzePropagatedTiming(); }, [] { TimingAnalyzer::destroyInst(); }}},
       StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});

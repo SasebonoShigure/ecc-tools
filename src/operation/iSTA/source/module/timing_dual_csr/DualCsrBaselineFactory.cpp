@@ -146,11 +146,9 @@ DualCsrBaselineAttempt DualCsrBaselineFactory::create(
   state.base_in.offsets_extent = extentOf(state.base_in.row_offsets);
   state.base_in.edge_extent = extentOf(state.base_in.physical_slots);
 
-  state.aux_out.row_offsets = {0};
   state.aux_out.source_to_aux_row.assign(input.nodes.size(), -1);
-  state.aux_out.offsets_extent = extentOf(state.aux_out.row_offsets);
+  state.aux_out.rows_extent = extentOf(state.aux_out.row_arcs);
   state.aux_out.source_extent = extentOf(state.aux_out.row_sources);
-  state.aux_out.edge_extent = extentOf(state.aux_out.arc_ids);
   state.aux_out.mapping_extent = extentOf(state.aux_out.source_to_aux_row);
   state.reference_payload = makeDualCsrReferencePayload(input);
 

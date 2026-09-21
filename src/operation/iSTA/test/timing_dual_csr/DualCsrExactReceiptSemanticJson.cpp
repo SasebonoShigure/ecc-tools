@@ -310,6 +310,14 @@ Json replacement(const std::optional<ValueReplacement<T>>& value,
   });
 }
 
+template <typename T, typename Convert>
+Json append(const std::optional<RecordAppend<T>>& value, Convert convert)
+{
+  return optionalValue(value, [&](const RecordAppend<T>& item) {
+    return Json{{"expected_size", item.expected_size}, {"values", convert(item.values)}};
+  });
+}
+
 Json referenceDelta(const DualCsrReferencePayloadDelta& value)
 {
   const auto text = [](const std::string& item) { return Json(item); };
@@ -329,7 +337,7 @@ Json referenceDelta(const DualCsrReferencePayloadDelta& value)
       {"analysis_order", replacement(value.analysis_order, enum_tokens)},
       {"path_source_order", replacement(value.path_source_order, enum_tokens)},
       {"transition_order", replacement(value.transition_order, enum_tokens)},
-      {"instances", replacement(value.instances, [](const auto& items) {
+      {"instances", append(value.instances, [](const auto& items) {
          return arrayOf(items, instanceRecord);
        })},
       {"ordered_root_ids", replacement(value.ordered_root_ids, ids)},
@@ -343,7 +351,7 @@ Json referenceDelta(const DualCsrReferencePayloadDelta& value)
          return arrayOf(items, clock);
        })},
       {"clock_owner_by_node",
-       replacement(value.clock_owner_by_node, optional_texts)},
+       append(value.clock_owner_by_node, optional_texts)},
       {"port_constraints",
        replacement(value.port_constraints, [](const auto& items) {
          return arrayOf(items, portConstraint);
@@ -357,7 +365,7 @@ Json referenceDelta(const DualCsrReferencePayloadDelta& value)
          return arrayOf(items, timingCheck);
        })},
       {"referenced_library_cells",
-       replacement(value.referenced_library_cells, [](const auto& items) {
+       append(value.referenced_library_cells, [](const auto& items) {
          return arrayOf(items, libraryCell);
        })},
       {"parasitics", replacement(value.parasitics, parasitics)},
@@ -369,7 +377,7 @@ Json referenceDelta(const DualCsrReferencePayloadDelta& value)
          return arrayOf(items, endpoint);
        })},
       {"cell_pin_capacitances",
-       replacement(value.cell_pin_capacitances, [](const auto& items) {
+       append(value.cell_pin_capacitances, [](const auto& items) {
          return arrayOf(items, capacitance);
        })},
       {"unsupported_reasons",

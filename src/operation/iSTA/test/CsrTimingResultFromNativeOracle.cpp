@@ -389,7 +389,7 @@ void materializeArcs(const CsrReferenceInput& input, const CsrNativeTimingOracle
     }
 
     result.arcs.timing_arc_row_offsets[arc] = child_count;
-    for (const ChildTimingArcModel& child : input.arcs[arc].transfer.children) {
+    for (const ChildTimingArcModel& child : input.arcs[arc].transfer.children()) {
       const auto entry = std::ranges::find(native.timing_arcs, child.signature.arc_index, &CsrNativeTimingArcEntry::timing_arc_index);
       if (entry == native.timing_arcs.end()) {
         throw std::runtime_error("timing scatter materializer: timing Arc child is missing");
@@ -427,10 +427,6 @@ CsrTimingResult materializeTimingResultFromNativeOracle(const CsrReferenceInput&
   result.schema_version = input.schema_version;
   result.source_identity = input.source_identity;
   materializeNodes(input, oracle, result);
-  result.timing_order.reserve(oracle.native_timing_order.size());
-  for (const NodeKey& key : oracle.native_timing_order) {
-    result.timing_order.push_back(requireNodeId(input, key));
-  }
   materializePaths(input, oracle, result);
   materializeArcs(input, oracle, result);
   return result;

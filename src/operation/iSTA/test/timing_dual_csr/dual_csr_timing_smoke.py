@@ -11,7 +11,7 @@ import subprocess
 import sys
 from typing import Any
 
-from dual_csr_timing_evidence import duration_ms
+from dual_csr_timing_evidence import duration_ms, validate_batch_phase_timings
 from dual_csr_trace_controller import (
     ControllerError,
     read_json,
@@ -20,8 +20,7 @@ from dual_csr_trace_controller import (
     write_json,
 )
 
-SCHEMA = "ista-dual-csr-timing-smoke/2.0.0"
-MIN_SAMPLES = 6
+SCHEMA = "ista-dual-csr-timing-smoke/3.0.0"
 
 
 def _cpu_model() -> str:
@@ -77,7 +76,7 @@ def _run_sample(
         probe, "performance", trace, len(batches), root / name / "performance.json", timeout
     )
     require(
-        result["schema_version"] == "ista-incregpusta-performance-process/2.0.0",
+        result["schema_version"] == "ista-incregpusta-performance-process/3.0.0",
         f"{name} unsupported performance output",
     )
     require(
@@ -89,13 +88,20 @@ def _run_sample(
     )
     require(
         result["result"]["generation"] == len(batches)
-        and result["result"]["native_final_rollback_completed"] is True,
+        and result["result"]["lifecycle_cleanup_completed"] is True,
         f"{name} workload or lifecycle did not complete",
+    )
+    require(result["diagnostics"] == "not_run", f"{name} unexpectedly collected diagnostics")
+    require(result["result_requirements"] == {
+        "timing_values": True, "summary": True, "timing_paths": True, "file_artifacts": False,
+    }, f"{name} did not execute the requested consumers")
+    timings = validate_batch_phase_timings(
+        result["run"]["batch_phase_timings"], len(batches), name, require, debug_checks=False,
     )
     return {
         "targeted_pid": result["run"]["child_pid"],
         "targeted_wall_ms": duration_ms(wall_ms, f"{name}.wall_ms", require, positive=True),
-        "batch_phase_timings": result["run"]["batch_phase_timings"],
+        "batch_phase_timings": timings,
         "requested_mode": result["requested_mode"],
         "executed_mode": result["executed_mode"],
         "result": result["result"],
@@ -123,16 +129,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trace", required=True, type=pathlib.Path)
     parser.add_argument("--run-root", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
-    parser.add_argument("--warmup-runs", type=int, default=1)
-    parser.add_argument("--samples", type=int, default=MIN_SAMPLES)
+    parser.add_argument("--warmup-runs", type=int, default=5)
+    parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     return parser.parse_args()
 
 
 def run(args: argparse.Namespace) -> bool:
-    require(
-        args.samples >= MIN_SAMPLES, f"timing smoke requires at least {MIN_SAMPLES} raw samples"
-    )
+    require(args.samples >= 1, "timing smoke requires at least one raw sample")
     require(args.warmup_runs >= 1, "timing smoke requires a warm-up run")
     probe = args.probe.resolve(strict=True)
     build = probe_build_info(probe, args.timeout_seconds)
@@ -160,6 +164,10 @@ def run(args: argparse.Namespace) -> bool:
     raw_sample_count = len(samples)
     output = {
         "schema_version": SCHEMA,
+        "sampling_kind": (
+            "short_smoke" if args.warmup_runs < 5 or args.samples < 30 else "engineering"
+        ),
+        "stage12_performance_acceptance": "not_run",
         "trace_is_fixed": True,
         "trace": str(trace),
         "environment_fingerprint": _environment(
@@ -174,7 +182,7 @@ def run(args: argparse.Namespace) -> bool:
         "performance_claims_made": False,
         "speedup_or_break_even_reported": False,
     }
-    require(raw_sample_count >= MIN_SAMPLES, "timing smoke did not retain six raw samples")
+    require(raw_sample_count == args.samples, "timing smoke did not retain every raw sample")
     write_json(args.output.resolve(), output)
     return True
 

@@ -87,12 +87,11 @@ timing_edit::CreationToken tokenFor(std::uint64_t batch,
       .accepted_ordinal = 0};
 }
 
-timing_edit::DesignEditPlan plan(
+timing_edit::EditBatch plan(
     std::uint64_t generation, timing_edit::StableNetRef original_net,
     timing_edit::CreationToken creation_token)
 {
-  return timing_edit::DesignEditPlan{
-      .baseline = baseline(),
+  return timing_edit::EditBatch{
       .expected_generation = timing_edit::TransactionGeneration{generation},
       .edits = {timing_edit::BufferInsertionMutation{
           .original_net = std::move(original_net),
@@ -119,7 +118,7 @@ ReplayProgram syntheticProgram()
 {
   const auto first_token = tokenFor(1);
   const auto second_token = tokenFor(2);
-  std::vector<timing_edit::DesignEditPlan> batches;
+  std::vector<timing_edit::EditBatch> batches;
   batches.push_back(
       plan(0, timing_edit::ExistingNetRef{"fanout"}, first_token));
   batches.push_back(plan(
@@ -134,7 +133,7 @@ ReplayProgram syntheticProgram()
           .comparability_status = ComparabilityStatus::kNonComparable,
           .comparability_reason =
               ComparabilityReason::kEngineeringRcNoPhysical},
-      .workload = SyntheticReplayPayload{syntheticRecipe(), std::move(batches)}};
+      .workload = SyntheticReplayPayload{syntheticRecipe(), baseline(), std::move(batches)}};
 }
 
 ReplayProgram realProgram()
@@ -367,12 +366,10 @@ void testAcceptedEvaluationPermutationMapsByTokenOrdinal()
   auto artifact = syntheticArtifact();
   auto& batches
       = std::get<SyntheticReplayPayload>(artifact.replay.workload).batches;
-  auto expanded_baseline = batches.front().baseline;
+  auto& expanded_baseline = std::get<SyntheticReplayPayload>(artifact.replay.workload).baseline;
   expanded_baseline.canonical_pre_state.nodes = csr::sortedUniqueNodeKeys(
       {pin("u0", "A"), pin("u0", "B")});
   expanded_baseline.canonical_pre_state.nets = {"fanout", "fanout2"};
-  for (auto& batch : batches)
-    batch.baseline = expanded_baseline;
 
   auto second_token = tokenFor(1);
   second_token.accepted_ordinal = 1;
@@ -520,7 +517,7 @@ void testWorkloadFirstComparability()
           "created-net validation ignored the full defining token identity");
 }
 
-void appendDuplicateEdits(timing_edit::DesignEditPlan& edit_plan,
+void appendDuplicateEdits(timing_edit::EditBatch& edit_plan,
                           std::size_t target_count)
 {
   const auto prototype = edit_plan.edits.front();
@@ -571,9 +568,16 @@ void testReplayProfileLimitsAndTemplateBoundary()
   require(hasCode(validateReplayTemplate(program),
                   BufferTraceContractCode::kInvalidValue),
           "generation template accepted pre-populated replay edits");
-  std::get<SyntheticReplayPayload>(program.workload).batches.clear();
+  auto& payload = std::get<SyntheticReplayPayload>(program.workload);
+  payload.batches.clear();
+  require(hasCode(validateReplayTemplate(program), BufferTraceContractCode::kIdentityMismatch),
+          "synthetic template accepted a baseline that its wire format cannot represent");
+  payload.baseline = {};
   requireNoErrors(validateReplayTemplate(program),
                   "empty generation template was rejected");
+  const auto parsed = parseReplayTemplateJson(replayTemplateToJson(program));
+  require(std::holds_alternative<ReplayProgram>(parsed) && std::get<ReplayProgram>(parsed) == program,
+          "empty synthetic template changed during a wire round trip");
 }
 
 void testGenerationNumericDecisionMatrix()

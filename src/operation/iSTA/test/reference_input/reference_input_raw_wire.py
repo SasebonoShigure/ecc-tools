@@ -33,9 +33,9 @@ from reference_input_model import (
     Transition,
 )
 
-RAW_DOMAIN = "ista-csr-reference-input-raw/1.0.0"
+RAW_DOMAIN = "ista-csr-reference-input-raw/2.0.0"
 EMPTY_RAW_HEX = (
-    "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f312e30"
+    "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f322e30"
     "2e300000000000000000000000000000000000000000000000000000000000000000000000000000"
     "0000000000000000000000000000000000000000000000000000000000000000000000"
 )
@@ -96,6 +96,8 @@ def _write_node(writer: CanonicalWriter, node: RawNode) -> None:
     writer.boolean(node.is_port)
     writer.enum(node.direction)
     writer.string(node.instance_name)
+    writer.vector(node.outgoing_arc_ranks, writer.u64)
+    writer.vector(node.incoming_arc_ranks, writer.u64)
 
 
 def _read_node(reader: CanonicalReader) -> RawNode:
@@ -105,6 +107,8 @@ def _read_node(reader: CanonicalReader) -> RawNode:
         reader.boolean(),
         reader.enum(Direction, "node.direction"),
         reader.string(),
+        reader.vector(lambda _index: reader.u64(), "node.outgoing_arc_ranks"),
+        reader.vector(lambda _index: reader.u64(), "node.incoming_arc_ranks"),
     )
 
 

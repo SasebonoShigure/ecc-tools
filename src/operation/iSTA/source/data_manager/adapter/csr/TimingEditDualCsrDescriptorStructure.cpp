@@ -32,24 +32,24 @@ namespace {
 }
 
 const timing_edit::NativeSlotBinding& stagedNodeBinding(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const timing_edit::StableNodeRef& ref)
 {
-  const auto found = resolver.nodeBindings().find(ref);
-  if (found == resolver.nodeBindings().end() || found->second.tombstone)
+  const auto* found = resolver.findNodeBinding(ref);
+  if (found == nullptr || found->tombstone)
     invalid("reconnect sink has no live staged resolver binding");
-  return found->second;
+  return *found;
 }
 
 const timing_edit::NativeSlotBinding& stagedArcBinding(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const timing_edit::StableArcRef& ref, bool expected_tombstone)
 {
-  const auto found = resolver.arcBindings().find(ref);
-  if (found == resolver.arcBindings().end()
-      || found->second.tombstone != expected_tombstone)
+  const auto* found = resolver.findArcBinding(ref);
+  if (found == nullptr
+      || found->tombstone != expected_tombstone)
     invalid("reconnect arc has the wrong staged resolver lifecycle");
-  return found->second;
+  return *found;
 }
 
 bool matchesReconnect(const timing_edit::StableArcRef& arc,
@@ -163,12 +163,7 @@ std::vector<csr::ArcId> auxRow(const DualCsrState& state,
   if (mapped < 0)
     return {};
   const auto row = static_cast<std::size_t>(mapped);
-  const auto begin = state.aux_out.row_offsets.at(row);
-  const auto end = state.aux_out.row_offsets.at(row + 1);
-  return {state.aux_out.arc_ids.begin()
-              + static_cast<std::ptrdiff_t>(begin),
-          state.aux_out.arc_ids.begin()
-              + static_cast<std::ptrdiff_t>(end)};
+  return row < state.aux_out.row_arcs.size() ? state.aux_out.row_arcs[row] : std::vector<csr::ArcId>{};
 }
 
 std::vector<csr::ArcId> fullOutgoingRow(const DualCsrState& state,

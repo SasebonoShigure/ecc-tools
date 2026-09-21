@@ -40,7 +40,7 @@ using ActiveCsrFifoReplayFunction = CsrFifoLevelization (*)(const ActiveCsrEdgeV
 namespace detail {
 [[nodiscard]] CsrComputationWithTelemetry computeCsrCpuReferenceForStage(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads);
 [[nodiscard]] CsrComputationWithTelemetry propagateCsrCpuReferenceWithLevels(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
-                                                                             const CsrFifoLevelization& levels, CsrComputationWithTelemetry output = {});
+                                                                             CsrFifoLevelization levels, CsrComputationWithTelemetry output = {});
 }  // namespace detail
 
 enum class CsrCpuReferenceStageStatus : std::uint8_t
@@ -66,6 +66,32 @@ struct CsrCpuReferencePathState
 
   friend bool operator==(const CsrCpuReferencePathState&, const CsrCpuReferencePathState&) = default;
 };
+
+// Sparse initialization shared by CPU and CUDA. Unlisted nodes/rows retain
+// their default values; this contains no propagation work or arc result cache.
+struct CsrInitialNodeSeed
+{
+  NodeId node;
+  bool clock_point{false};
+  bool physical_clock_source{false};
+  bool data_start{false};
+  double arrival{-std::numeric_limits<double>::infinity()};
+  double launch{0.0};
+  std::string clock_name;
+  std::array<double, 4> slew{};
+};
+struct CsrInitialPathSeed
+{
+  std::size_t row;
+  CsrCpuReferencePathState path;
+};
+struct CsrInitialTimingSeeds
+{
+  std::vector<CsrInitialNodeSeed> nodes;
+  std::vector<CsrInitialPathSeed> paths;
+};
+[[nodiscard]] CsrCpuReferenceStageStatus collectCsrInitialTimingSeeds(
+    const TimingPayloadView& payloads, CsrInitialTimingSeeds& seeds);
 
 struct CsrCpuReferenceWorkState
 {
@@ -158,7 +184,7 @@ struct CsrDynamicArcValue
 
 // Precondition: the backend boundary has accepted replay through
 // validateCsrFifoLevelization().
-[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay,
+[[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, CsrFifoLevelization replay,
                                                                          CsrCpuReferenceWorkState& work);
 [[nodiscard]] CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work);
 [[nodiscard]] CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges, ArcId arc_id, AnalysisMode analysis, Transition input_transition,

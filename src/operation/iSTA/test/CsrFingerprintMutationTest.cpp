@@ -14,6 +14,7 @@
 //
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -122,7 +123,7 @@ CsrReferenceInput inputFixture()
   arc.transfer.delay = 0.1;
   arc.transfer.delay_min = 0.05;
   arc.transfer.delay_max = 0.2;
-  arc.transfer.children = {child};
+  arc.transfer.setChildren({child});
   arc.output_load.reset();
   ArcRecord parallel_arc = arc;
   parallel_arc.id = ArcId{1};
@@ -291,18 +292,18 @@ void addArcCases(std::vector<MutationCase>& cases)
   for (auto member : std::array{&CellTransferModel::is_clock_arc, &CellTransferModel::is_disabled, &CellTransferModel::is_clear_or_preset})
     cases.emplace_back("transfer flag", [member](auto& value) { value.arcs[0].transfer.*member = !(value.arcs[0].transfer.*member); });
   for (auto member : std::array{&ChildTimingArcModel::time_unit_scale, &ChildTimingArcModel::capacitance_unit_scale, &ChildTimingArcModel::slew_derate})
-    cases.emplace_back("child scale", [member](auto& value) { value.arcs[0].transfer.children[0].*member += 1.0; });
+    cases.emplace_back("child scale", [member](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].*member += 1.0; }); });
   using Threshold = std::array<double, kTransitionCount> ChildTimingArcModel::*;
   for (auto member : std::array<Threshold, 4>{&ChildTimingArcModel::slew_lower_threshold_pct, &ChildTimingArcModel::slew_upper_threshold_pct,
                                               &ChildTimingArcModel::input_threshold_pct, &ChildTimingArcModel::output_threshold_pct})
     for (std::size_t transition = 0; transition < kTransitionCount; ++transition)
-      cases.emplace_back("child threshold", [=](auto& value) { (value.arcs[0].transfer.children[0].*member)[transition] += 0.01; });
-  cases.emplace_back("child signature", [](auto& value) { value.arcs[0].transfer.children[0].signature.library_name = "fast.lib"; });
-  cases.emplace_back("delay table presence", [](auto& value) { value.arcs[0].transfer.children[0].delay_tables[0].present = false; });
-  cases.emplace_back("delay table variable", [](auto& value) { value.arcs[0].transfer.children[0].delay_tables[0].variable2 = TableVariable::kNone; });
-  cases.emplace_back("delay table axes", [](auto& value) { value.arcs[0].transfer.children[0].delay_tables[0].axes[0][0] += 1.0; });
-  cases.emplace_back("delay table values", [](auto& value) { value.arcs[0].transfer.children[0].delay_tables[0].values[0] += 1.0; });
-  cases.emplace_back("slew table presence", [](auto& value) { value.arcs[0].transfer.children[0].slew_tables[0].present = true; });
+      cases.emplace_back("child threshold", [=](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { (children[0].*member)[transition] += 0.01; }); });
+  cases.emplace_back("child signature", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].signature.library_name = "fast.lib"; }); });
+  cases.emplace_back("delay table presence", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0].present = false; }); });
+  cases.emplace_back("delay table variable", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0].variable2 = TableVariable::kNone; }); });
+  cases.emplace_back("delay table axes", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0].axes[0][0] += 1.0; }); });
+  cases.emplace_back("delay table values", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0].values[0] += 1.0; }); });
+  cases.emplace_back("slew table presence", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].slew_tables[0].present = true; }); });
 
   cases.emplace_back("arc lookup key", [](auto& value) { value.arc_ids_by_key[0].key.base.owner_name = "lookup"; });
   cases.emplace_back("arc lookup source", [](auto& value) { value.arc_ids_by_key[0].key.base.source.full_name = "source"; });
@@ -464,9 +465,9 @@ void testExcludedProcessAndCapacityState()
         value.instances[0].ordered_pins.reserve(64);
         value.arcs.reserve(64);
         value.arcs[0].key.base.library_arcs.reserve(64);
-        value.arcs[0].transfer.children.reserve(64);
-        value.arcs[0].transfer.children[0].delay_tables[0].axes.reserve(64);
-        value.arcs[0].transfer.children[0].delay_tables[0].values.reserve(64);
+        ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children.reserve(64);
+        children[0].delay_tables[0].axes.reserve(64);
+        children[0].delay_tables[0].values.reserve(64); });
         value.arc_ids_by_key.reserve(64);
         value.out_row_offsets.reserve(64);
         value.out_arc_ids.reserve(64);

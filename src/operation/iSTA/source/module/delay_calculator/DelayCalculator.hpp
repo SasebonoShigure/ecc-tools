@@ -34,6 +34,7 @@ class DelayCalculator
   void init();
   void calculate(DCTask& dc_task);
   void destroy();
+  void resetForEditRollback() noexcept;
   double getPowerOutputLoad(std::string& output_pin, AnalysisType analysis_type, TransType output_trans_type);
 
  private:
@@ -110,7 +111,7 @@ class DelayCalculator
   DelayCalculator& operator=(const DelayCalculator& other) = delete;
   DelayCalculator& operator=(DelayCalculator&& other) = delete;
   // function
-  void clearParasiticCache();
+  void clearParasiticCache() noexcept;
   void initializeArcTiming(DCTask& dc_task);
   void initializeArcTiming(Arc& arc);
   void initializeAnalysisArcTiming(Arc& arc, AnalysisType analysis_type);

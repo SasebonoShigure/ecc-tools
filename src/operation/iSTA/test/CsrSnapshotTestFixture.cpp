@@ -123,27 +123,6 @@ Bytes dynamic(const ArcIdLookupEntry& value)
   return dynamic(value.key);
 }
 
-Bytes dynamic(const TimingTableModel& value)
-{
-  Bytes result = vectorBytes(value.axes, [](const auto& axis) { return scalarVectorBytes(axis); });
-  return plus(result, scalarVectorBytes(value.values));
-}
-
-Bytes dynamic(const ChildTimingArcModel& value)
-{
-  Bytes result = dynamic(value.signature);
-  for (const auto& table : value.delay_tables)
-    result = plus(result, dynamic(table));
-  for (const auto& table : value.slew_tables)
-    result = plus(result, dynamic(table));
-  return result;
-}
-
-Bytes dynamic(const CellTransferModel& value)
-{
-  return vectorBytes(value.children, [](const auto& item) { return dynamic(item); });
-}
-
 Bytes dynamic(const NodeRecord& value)
 {
   return plus(plus(dynamic(value.key), dynamic(value.instance_cell)), dynamic(value.net_name));
@@ -156,7 +135,7 @@ Bytes dynamic(const InstanceRecord& value)
 
 Bytes dynamic(const ArcRecord& value)
 {
-  return plus(dynamic(value.key), dynamic(value.transfer));
+  return dynamic(value.key);
 }
 
 Bytes dynamic(const ClockConstraintModel& value)

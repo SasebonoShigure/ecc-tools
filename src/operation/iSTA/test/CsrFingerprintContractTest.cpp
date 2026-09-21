@@ -291,7 +291,7 @@ void testNestedBadEnums()
   ChildTimingArcModel child;
   child.signature = librarySignature();
   child.signature.check_transition = static_cast<Transition>(0xff);
-  bad_input.arcs[0].transfer.children = {child};
+  bad_input.arcs[0].transfer.setChildren({child});
   requireInvalid([&] { static_cast<void>(canonicalReferenceInputBytes(bad_input)); }, "nested reference-input enum");
 
   CsrReferenceInput bad_seed_input = validInput();

@@ -76,7 +76,7 @@ DualCsrTimingResult timingFor(const DualCsrState& state)
   const auto* values
       = std::get_if<csr::CsrTimingResult>(&output.computation.outcome);
   require(values != nullptr, "semantic receipt fixture did not compute");
-  DualCsrTimingResult result{*values, activeMask(state)};
+  DualCsrTimingResult result{*values};
   const auto violations = validateDualCsrTimingResult(state, result);
   require(violations.empty(),
           "semantic receipt timing failed intrinsic validation at "

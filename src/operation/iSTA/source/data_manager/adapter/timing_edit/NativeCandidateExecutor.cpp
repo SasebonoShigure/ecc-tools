@@ -45,21 +45,21 @@ class NativeExecutionScopeState final
 
   [[nodiscard]] bool matches(TimingEditSessionToken session_token) const noexcept
   {
-    return session_token == _session_token && active()
+    return session_token == _session_token && active() && !_violation_reported.load(std::memory_order_acquire)
            && std::this_thread::get_id() == _guard_thread;
   }
 
-  [[nodiscard]] bool attachOwner(TimingEditSessionToken session_token) noexcept
+  [[nodiscard]] bool readyForQuery(TimingEditSessionToken session_token) const noexcept
   {
-    if (!matches(session_token)) {
+    return matches(session_token) && _owner_count.load(std::memory_order_acquire) == 0;
+  }
+
+  [[nodiscard]] bool attachTransaction(TimingEditSessionToken session_token) noexcept
+  {
+    if (!matches(session_token))
       return false;
-    }
-    _owner_count.fetch_add(1, std::memory_order_acq_rel);
-    if (matches(session_token)) {
-      return true;
-    }
-    detachOwner(session_token);
-    return false;
+    std::uint32_t expected = 0;
+    return _owner_count.compare_exchange_strong(expected, 1, std::memory_order_acq_rel);
   }
 
   void detachOwner(TimingEditSessionToken session_token) noexcept
@@ -272,49 +272,6 @@ void destroyTransientSingletons() noexcept
   GraphBuilder::destroyInst();
 }
 
-bool quiesceDelayCalculatorNoThrow() noexcept
-{
-  bool success = true;
-  try {
-    // initInst() is idempotent and guarantees STADC cannot dereference null.
-    DelayCalculator::initInst();
-    STADC.destroy();
-  } catch (...) {
-    success = false;
-  }
-  DelayCalculator::destroyInst();
-  return success;
-}
-
-void quiesceDelayCalculatorOrRestore()
-{
-  DelayCalculator::initInst();
-  try {
-    STADC.destroy();
-  } catch (...) {
-    const std::exception_ptr failure = std::current_exception();
-    DelayCalculator::destroyInst();
-    try {
-      DelayCalculator::initInst();
-    } catch (...) {
-      // The active Database is still the old canonical Database. Preserve the
-      // original runtime-cleanup failure after attempting persistent restore.
-    }
-    std::rethrow_exception(failure);
-  }
-  DelayCalculator::destroyInst();
-}
-
-bool restorePersistentDelayCalculator() noexcept
-{
-  try {
-    DelayCalculator::initInst();
-    return true;
-  } catch (...) {
-    return false;
-  }
-}
-
 void runStage(NativeExecutionFailpoint armed, NativeExecutionFailpoint before_init, NativeExecutionFailpoint before_work,
               NativeExecutionFailpoint before_destroy, StageFunction init, StageFunction work, StageFunction destroy)
 {
@@ -399,200 +356,128 @@ bool NativeExecutionAuthority::active() const noexcept
   return _scope_state != nullptr && _scope_state->matches(_session_token);
 }
 
-InstalledNativeDatabase::InstalledNativeDatabase(
-    std::unique_ptr<Database> rollback_database,
-    TimingEditSessionToken session_token,
-    std::shared_ptr<NativeExecutionScopeState> execution_scope) noexcept
-    : _rollback_database(std::move(rollback_database)),
-      _execution_scope(std::move(execution_scope)),
-      _execution_session_token(session_token),
-      _scope_attached(_execution_scope != nullptr
-                      && _execution_scope->attachOwner(session_token)),
-      _installed(true)
+void NativeExecutionAuthority::poison() const noexcept
 {
-  if (!_scope_attached && _execution_scope != nullptr) {
-    _execution_scope->reportViolation();
+  _scope_state->reportViolation();
+}
+
+bool NativeExecutionAuthority::readyForQuery() const noexcept
+{
+  return _scope_state != nullptr && _scope_state->readyForQuery(_session_token);
+}
+
+void NativeEditTransaction::attach(const NativeExecutionAuthority& authority)
+{
+  if (!authority.active() || !authority._scope_state->attachTransaction(authority.sessionToken()))
+    throw std::logic_error("native edit transaction conflicts with a pending transaction");
+  _execution_scope = authority._scope_state;
+  _session_token = authority.sessionToken();
+  _attached = true;
+}
+bool NativeEditTransaction::active() const noexcept
+{
+  return _attached && _execution_scope && _execution_scope->matches(_session_token);
+}
+void NativeEditTransaction::commit() noexcept
+{
+  if (!active()) {
+    if (_execution_scope)
+      _execution_scope->reportViolation();
+    return;
   }
+  _applied = false;
+  discardUndo();
+  _execution_scope->detachOwner(_session_token);
+  _attached = false;
 }
-
-bool InstalledNativeDatabase::active() const noexcept
-{
-  return _installed && executionScopeActive();
-}
-
-bool InstalledNativeDatabase::executionScopeActive() const noexcept
-{
-  return _scope_attached && _execution_scope != nullptr
-         && _execution_scope->matches(_execution_session_token);
-}
-
-bool InstalledNativeDatabase::executionScopeMatches(
-    const NativeExecutionAuthority& authority) const noexcept
-{
-  return executionScopeActive() && authority.active()
-         && authority.sessionToken() == _execution_session_token
-         && authority._scope_state == _execution_scope;
-}
-
-void InstalledNativeDatabase::commit() noexcept
-{
-  _rollback_database.reset();
-  if (_scope_attached && _execution_scope != nullptr) {
-    _execution_scope->detachOwner(_execution_session_token);
-  }
-  _scope_attached = false;
-  _installed = false;
-}
-
-InstalledNativeDatabase::~InstalledNativeDatabase()
-{
-  if (!rollback()) {
-    std::fputs("ERROR: InstalledNativeDatabase destructor fallback could not restore all native "
-               "timing runtime invariants; the owning timing-edit session must be poisoned.\n",
-               stderr);
-    std::fflush(stderr);
-  }
-}
-
-bool InstalledNativeDatabase::rollback() noexcept
+bool NativeEditTransaction::rollback() noexcept
 {
   return rollbackStatus() == NativeRollbackFailure::kNone;
 }
-
-NativeRollbackFailure InstalledNativeDatabase::rollbackStatus() noexcept
+NativeRollbackFailure NativeEditTransaction::rollbackStatus() noexcept
 {
   return rollbackWithDiagnostics(NativeRollbackFailpoint::kNone);
 }
-
-NativeRollbackFailure InstalledNativeDatabase::rollbackWithDiagnostics(
-    NativeRollbackFailpoint failpoint) noexcept
+NativeRollbackFailure NativeEditTransaction::rollbackWithDiagnostics(NativeRollbackFailpoint failpoint) noexcept
 {
   if (!incregpusta_debug_checks_enabled && failpoint != NativeRollbackFailpoint::kNone)
     return NativeRollbackFailure::kDiagnosticsDisabled;
-  if (!_installed) {
+  if (!_attached)
     return NativeRollbackFailure::kNone;
-  }
-  if (_execution_scope == nullptr || !_scope_attached
-      || !_execution_scope->beginProtectedUse(_execution_session_token)) {
-    if (_execution_scope != nullptr) {
+  if (!_execution_scope || !_execution_scope->beginProtectedUse(_session_token)) {
+    if (_execution_scope) {
       _execution_scope->reportViolation();
-      if (_scope_attached) {
-        _execution_scope->detachOwner(_execution_session_token);
-      }
+      _execution_scope->detachOwner(_session_token);
     }
-    _rollback_database.reset();
-    _scope_attached = false;
-    _installed = false;
+    _attached = false;
+    discardUndo();
     return NativeRollbackFailure::kOutsideOperationGuardScope;
   }
-
-  destroyTransientSingletons();
-  bool cleanup_succeeded = quiesceDelayCalculatorNoThrow();
-  std::unique_ptr<Database> rejected_candidate
-      = NativeDatabaseCandidate::exchangeActiveDatabase(std::move(_rollback_database));
-  rejected_candidate.reset();
-
-  // Cleanup fault injection is observed only after the old canonical Database
-  // has been exchanged back and before persistent runtime restoration.
+  if (_applied) {
+    destroyTransientSingletons();
+    STADC.resetForEditRollback();
+  }
+  // Metadata can already be applied while native graph preparation still throws.
+  undo();
+  bool cleanup_succeeded = true;
+  discardUndo();
   cleanup_succeeded = cleanup_succeeded && !injectsCleanupFailure(failpoint);
-  bool restore_succeeded = restorePersistentDelayCalculator();
-  // Restore fault injection is observed after the actual restore attempt.
-  restore_succeeded = restore_succeeded && !injectsPersistentRestoreFailure(failpoint);
-  const NativeRollbackFailure failure
-      = classifyRollbackFailure(cleanup_succeeded, restore_succeeded);
-  if (failure != NativeRollbackFailure::kNone) {
+  const bool restore_succeeded = !injectsPersistentRestoreFailure(failpoint);
+  const auto failure = classifyRollbackFailure(cleanup_succeeded, restore_succeeded);
+  if (failure != NativeRollbackFailure::kNone)
     _execution_scope->reportViolation();
-  }
-  if (_scope_attached) {
-    _execution_scope->detachOwner(_execution_session_token);
-  }
-  _scope_attached = false;
-  _installed = false;
+  _execution_scope->detachOwner(_session_token);
+  _attached = false;
   _execution_scope->endProtectedUse();
   return failure;
 }
-
-InstalledNativeDatabase NativeCandidateExecutor::installAndExecute(const NativeExecutionAuthority& authority,
-                                                                    NativeDatabaseCandidate&& candidate,
-                                                                    NativeExecutionFailpoint failpoint,
-                                                                    NativeRollbackFailpoint rollback_failpoint)
+void NativeCandidateExecutor::executeFull(NativeEditTransaction& transaction,
+                                          NativeExecutionFailpoint failpoint,
+                                          NativeRollbackFailpoint rollback_failpoint)
 {
-  return installAndRun(authority, std::move(candidate), Execution::kCpuTiming, failpoint, rollback_failpoint);
+  runTransaction(transaction, true, failpoint, rollback_failpoint);
 }
-
-InstalledNativeDatabase NativeCandidateExecutor::installAndPrepareGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate)
+void NativeCandidateExecutor::prepareFullGraph(NativeEditTransaction& transaction)
 {
-  return installAndRun(authority, std::move(candidate), Execution::kGraphPreparation, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
+  runTransaction(transaction, false, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
 }
-
-InstalledNativeDatabase NativeCandidateExecutor::installPreparedGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate)
+void NativeCandidateExecutor::runTransaction(NativeEditTransaction& transaction, bool cpu_timing,
+                                             NativeExecutionFailpoint failpoint,
+                                             NativeRollbackFailpoint rollback_failpoint)
 {
-  return installAndRun(authority, std::move(candidate), Execution::kPreparedGraph, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
-}
-
-InstalledNativeDatabase NativeCandidateExecutor::installAndRun(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate,
-                                                               Execution execution, NativeExecutionFailpoint failpoint,
-                                                               NativeRollbackFailpoint rollback_failpoint)
-{
-  if (!incregpusta_debug_checks_enabled && (failpoint != NativeExecutionFailpoint::kNone || rollback_failpoint != NativeRollbackFailpoint::kNone)) {
+  if (!transaction.active())
+    throw std::invalid_argument("native computation requires an active edit transaction");
+  if (!incregpusta_debug_checks_enabled
+      && (failpoint != NativeExecutionFailpoint::kNone || rollback_failpoint != NativeRollbackFailpoint::kNone))
     throw std::invalid_argument("native fault injection requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
-  }
-  if (!authority.active() || authority.sessionToken().value() == 0) {
-    throw std::invalid_argument("native candidate executor received invalid operation-guard authority");
-  }
-  if (candidate.empty()) {
-    throw std::invalid_argument("native candidate executor received an empty candidate");
-  }
-  if (!isKnownExecutionFailpoint(failpoint)) {
-    throw std::invalid_argument("native candidate executor received an unknown execution failpoint");
-  }
-  if (!isKnownRollbackFailpoint(rollback_failpoint)) {
-    throw std::invalid_argument("native candidate executor received an unknown rollback failpoint");
-  }
-
-  destroyTransientSingletons();
-  quiesceDelayCalculatorOrRestore();
-
-  InstalledNativeDatabase installed
-      = candidate.installForExecution(authority.sessionToken(), authority._scope_state);
+  if (!isKnownExecutionFailpoint(failpoint))
+    throw std::invalid_argument("native computation received an unknown execution failpoint");
+  if (!isKnownRollbackFailpoint(rollback_failpoint))
+    throw std::invalid_argument("native computation received an unknown rollback failpoint");
   try {
-    if (!installed.executionScopeMatches(authority)) {
-      throw std::logic_error("native Database installation lost its operation-guard scope");
-    }
     inject(failpoint, NativeExecutionFailpoint::kAfterInstall);
-    DelayCalculator::initInst();
     inject(failpoint, NativeExecutionFailpoint::kBeforeDelayRuntimeInit);
     STADC.init();
-
-    if (execution == Execution::kCpuTiming) {
+    if (cpu_timing) {
       runFourTimingStages(failpoint);
-    } else if (execution == Execution::kGraphPreparation) {
-      GraphBuilder::initInst();
-      STAGB.buildStructure();
-      GraphBuilder::destroyInst();
+    } else {
+      runStage(failpoint, NativeExecutionFailpoint::kBeforeGraphBuilderInit, NativeExecutionFailpoint::kBeforeGraphBuilderWork,
+               NativeExecutionFailpoint::kBeforeGraphBuilderDestroy, [] { GraphBuilder::initInst(); }, [] { STAGB.buildStructure(); },
+               [] { GraphBuilder::destroyInst(); });
     }
     inject(failpoint, NativeExecutionFailpoint::kBeforeValidation);
-    if constexpr (incregpusta_debug_checks_enabled) {
-      // Full timing/order proof belongs after the selected backend computes.
-      if (execution == Execution::kCpuTiming)
-        requireValidNativeDatabase(installed.database());
-    }
-
+    if constexpr (incregpusta_debug_checks_enabled)
+      if (cpu_timing)
+        requireValidNativeDatabase(transaction.database());
     inject(failpoint, NativeExecutionFailpoint::kBeforeDelayRuntimeDestroy);
-    destroyTransientSingletons();
     STADC.destroy();
-    DelayCalculator::destroyInst();
     inject(failpoint, NativeExecutionFailpoint::kBeforePersistentDelayRestore);
-    DelayCalculator::initInst();
-    return installed;
   } catch (...) {
-    const std::exception_ptr failure = std::current_exception();
-    const NativeRollbackFailure rollback_failure
-        = installed.rollbackWithDiagnostics(rollback_failpoint);
-    if (rollback_failure == NativeRollbackFailure::kNone) {
-      std::rethrow_exception(failure);
-    }
-    throw NativeExecutionRollbackError(failpoint, rollback_failure, failure);
+    const auto original = std::current_exception();
+    const auto failure = transaction.rollbackWithDiagnostics(rollback_failpoint);
+    if (failure == NativeRollbackFailure::kNone)
+      std::rethrow_exception(original);
+    throw NativeExecutionRollbackError(failpoint, failure, original);
   }
 }
 

@@ -22,9 +22,28 @@ class Database;
 class Instance;
 class Pin;
 class TimingCellPort;
+class TimingCellArc;
 }
 
 namespace ista::csr::detail {
+
+// Bound to one session's immutable native Liberty. Graph and load edits do not
+// invalidate these models; replacing the Database requires a new store.
+class NativeLibraryModels final
+{
+ public:
+  explicit NativeLibraryModels(const ista::Database& database) : _database(database) {}
+  NativeLibraryModels(const NativeLibraryModels&) = delete;
+  NativeLibraryModels& operator=(const NativeLibraryModels&) = delete;
+  void requireDatabase(const ista::Database& database) const;
+  [[nodiscard]] const ReferencedLibraryCellModel& cell(const std::string& name);
+  [[nodiscard]] const CellTransferModel& transfer(const std::string& cell_name, const ista::TimingCellArc& arc);
+
+ private:
+  const ista::Database& _database;
+  std::map<std::string, ReferencedLibraryCellModel> _cells;
+  std::map<const ista::TimingCellArc*, const CellTransferModel*> _arcs;
+};
 
 struct CanonicalArcKeyContext
 {
@@ -65,7 +84,7 @@ void applyCanonicalNodeLibraryRoles(
                                                              bool replayed_clock_arc);
 [[nodiscard]] std::optional<ArcOutputLoadMatrix> projectCanonicalNoParasiticOutputLoad(
     const std::string& sink_net_name, const std::map<std::string, ArcOutputLoadMatrix>& net_loads);
-[[nodiscard]] CellTransferModel projectCanonicalArcTransfer(const ArcRecord& arc, const ista::Arc& native_arc);
+[[nodiscard]] CellTransferModel projectCanonicalArcTransfer(const ista::Database& database, NativeLibraryModels& models, const ArcRecord& arc, const ista::Arc& native_arc);
 [[nodiscard]] ArcOutputLoadMatrix projectCanonicalNoParasiticNetLoad(
     const ista::Database& database, const std::string& net_name,
     const std::map<std::string, CanonicalLoadPinFacts>& load_pin_facts);

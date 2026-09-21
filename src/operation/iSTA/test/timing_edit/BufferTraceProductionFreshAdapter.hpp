@@ -22,8 +22,6 @@ struct ProductionFreshSessionView;
 
 namespace ista::buffer_trace {
 
-class PendingVerifiedBatch;
-
 enum class OneShotProcessState : std::uint8_t
 {
   kUnused,
@@ -180,12 +178,6 @@ class BufferTraceProductionFreshAdapter final : public FreshBaselineRunner
   [[nodiscard]] ReplayReceipt runOnce(const ReplayProgram& program,
                                       BufferReplayWork work,
                                       bool generation_template);
-  class Services;
-  static void proveSealAndPublish(
-      const timing_edit::oracle::ProductionFreshSessionView& view,
-      timing_edit::TimingEditCoordinator& coordinator,
-      PendingVerifiedBatch&& pending);
-
   std::optional<SourceIsolationFunctionalReceipt> _source_isolation;
   std::optional<DerivedTimingFreshnessFunctionalReceipt> _derived_freshness;
   bool _prove_first_empty_failure{false};

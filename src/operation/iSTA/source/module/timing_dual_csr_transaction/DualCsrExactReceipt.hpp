@@ -30,8 +30,7 @@ enum class DualCsrReceiptPhase : std::uint8_t
   kMixedLevelization,
   kFullPropagation,
   kIntrinsicVerify,
-  kPublish,
-  kNativeFinalRollback
+  kPublish
 };
 
 enum class DualCsrPropagationScope : std::uint8_t
@@ -58,6 +57,7 @@ struct DualCsrStructuralReceipt
   BaseCsrState base_out;
   BaseCsrState base_in;
   AuxOutCsrState aux_out;
+  csr::CsrBufferExtent aux_edge_extent;
   DualCsrTelemetry update_telemetry;
 
   friend bool operator==(const DualCsrStructuralReceipt&,
@@ -80,20 +80,13 @@ struct DualCsrOperationCounters
   std::uint64_t host_snapshot_rebuilds{0};
   std::uint64_t baseline_factory_calls{0};
   std::uint64_t fallback_calls{0};
-  std::uint64_t candidate_creates{0};
-  std::uint64_t candidate_clones{0};
-  std::uint64_t candidate_applies{0};
-  std::uint64_t candidate_executes{0};
-  std::uint64_t candidate_installs{0};
-  std::uint64_t candidate_rollbacks{0};
 
   friend bool operator==(const DualCsrOperationCounters&,
                          const DualCsrOperationCounters&) = default;
 };
 
-// This evidence is filled by the owner of the isolated native carrier. It is
-// deliberately separate from publish authorization and can only finalize a
-// successful receipt after the run-final rollback has completed.
+// Development evidence describes committed batches. Session destruction is
+// recorded separately by the fresh-session runner after its loader returns.
 struct DualCsrTransactionEvidence
 {
   std::vector<DualCsrReceiptPhase> phase_trace;
@@ -102,7 +95,6 @@ struct DualCsrTransactionEvidence
   bool incremental_batch_executed{false};
   DualCsrPropagationScope propagation_scope{
       DualCsrPropagationScope::kFullGraph};
-  bool native_final_rollback_completed{false};
 
   friend bool operator==(const DualCsrTransactionEvidence&,
                          const DualCsrTransactionEvidence&) = default;

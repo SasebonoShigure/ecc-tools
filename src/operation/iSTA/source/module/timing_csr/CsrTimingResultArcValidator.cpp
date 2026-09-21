@@ -109,12 +109,12 @@ void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& re
     for (std::size_t arc = 0; arc < arc_count; ++arc) {
       const std::uint64_t begin = result.timing_arc_row_offsets[arc];
       const std::uint64_t end = result.timing_arc_row_offsets[arc + 1];
-      if (end - begin != input.arcs[arc].transfer.children.size()) {
+      if (end - begin != input.arcs[arc].transfer.children().size()) {
         reject(errors, ResultClass::kShape, "result.arcs.timing_arc_indices", "row cardinality differs from input children");
         continue;
       }
-      for (std::size_t child = 0; child < input.arcs[arc].transfer.children.size(); ++child)
-        if (result.timing_arc_indices[begin + child] != input.arcs[arc].transfer.children[child].signature.arc_index)
+      for (std::size_t child = 0; child < input.arcs[arc].transfer.children().size(); ++child)
+        if (result.timing_arc_indices[begin + child] != input.arcs[arc].transfer.children()[child].signature.arc_index)
           reject(errors, ResultClass::kIdMapping, "result.arcs.timing_arc_indices", "row must exactly preserve child arc-index order");
     }
   }

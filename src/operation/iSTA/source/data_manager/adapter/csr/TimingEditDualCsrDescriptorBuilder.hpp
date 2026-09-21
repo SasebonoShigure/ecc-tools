@@ -22,9 +22,6 @@ namespace test {
 class DualCsrStageFactoryFaultAdapter;
 }
 
-[[nodiscard]] DualCsrStageAttempt makeStagedDualCsrAnalysisState(
-    const CommittedDualCsrAnalysisState&, VerifiedStructuredBatch&&);
-
 class VerifiedStructuredBatch final
 {
  public:
@@ -39,19 +36,13 @@ class VerifiedStructuredBatch final
   {
     return _prepared_batch;
   }
-  [[nodiscard]] const timing_edit::TimingEditResolverState& stagedResolver()
-      const noexcept
+  [[nodiscard]] const timing_edit::TimingEditResolverDelta& resolverDelta() const noexcept
   {
-    return _staged_resolver;
+    return _resolver_delta;
   }
   [[nodiscard]] const DualCsrBatchDescriptor& descriptor() const noexcept
   {
     return _descriptor;
-  }
-  [[nodiscard]] const ExpectedBeforeBinding& expectedBefore()
-      const noexcept
-  {
-    return _expected_before;
   }
   [[nodiscard]] const NarrowCaptureAudit& captureAudit() const noexcept
   {
@@ -60,31 +51,27 @@ class VerifiedStructuredBatch final
 
  private:
   VerifiedStructuredBatch(
+      const DualCsrState* source_graph,
       timing_edit::PreparedBatch prepared_batch,
-      timing_edit::TimingEditResolverState staged_resolver,
+      timing_edit::TimingEditResolverDelta resolver_delta,
       DualCsrBatchDescriptor descriptor,
-      ExpectedBeforeBinding expected_before,
       NarrowCaptureAudit capture_audit)
-      : _prepared_batch(std::move(prepared_batch)),
-        _staged_resolver(std::move(staged_resolver)),
+      : _source_graph(source_graph), _prepared_batch(std::move(prepared_batch)),
+        _resolver_delta(std::move(resolver_delta)),
         _descriptor(std::move(descriptor)),
-        _expected_before(std::move(expected_before)),
         _capture_audit(std::move(capture_audit))
   {
   }
 
+  const DualCsrState* _source_graph;
   timing_edit::PreparedBatch _prepared_batch;
-  timing_edit::TimingEditResolverState _staged_resolver;
+  timing_edit::TimingEditResolverDelta _resolver_delta;
   DualCsrBatchDescriptor _descriptor;
-  ExpectedBeforeBinding _expected_before;
   NarrowCaptureAudit _capture_audit;
 
   friend class TimingEditDualCsrDescriptorBuilder;
   friend class DualCsrStageFactoryAccess;
   friend class test::DualCsrStageFactoryFaultAdapter;
-  friend DualCsrStageAttempt makeStagedDualCsrAnalysisState(
-      const CommittedDualCsrAnalysisState&,
-      VerifiedStructuredBatch&&);
 };
 
 class TimingEditDualCsrDescriptorBuilder final

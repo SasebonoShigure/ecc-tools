@@ -60,7 +60,7 @@ std::string replaySummary(const ista::csr::CsrReferenceInput& input)
   output << "] transfers=[";
   for (const auto& arc : input.arcs)
     output << arc.id.value() << ':' << arc.transfer.delay << '/' << arc.transfer.delay_min << '/' << arc.transfer.delay_max
-           << "/children=" << arc.transfer.children.size() << ',';
+           << "/children=" << arc.transfer.children().size() << ',';
   output << ']';
   return output.str();
 }

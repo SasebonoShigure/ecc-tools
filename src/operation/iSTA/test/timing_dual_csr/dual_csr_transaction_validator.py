@@ -3,7 +3,10 @@
 
 import copy
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
+
+from dual_csr_arc_group_validator import validate_arc_group_semantics
 from dual_csr_descriptor_replay_validator import validate_descriptor_replay
 from dual_csr_execution_shape_validator import (
     validate_execution_levels,
@@ -11,7 +14,6 @@ from dual_csr_execution_shape_validator import (
 )
 from dual_csr_reference_replay_validator import validate_reference_replay
 from dual_csr_resolver_semantics_validator import validate_resolver_semantics
-from dual_csr_arc_group_validator import validate_arc_group_semantics
 from dual_csr_structural_semantics_validator import validate_structural_semantics
 from dual_csr_typed_json_validator import (
     validate_arc_payload,
@@ -411,7 +413,7 @@ def validate_traversal_counts(value: object, structural: dict[str, Any],
             _count(entry[key], f"{label}.{stage}.{key}", require)
     base_active = sum(slot is not None
                       for slot in structural["base_out"]["physical_slots"])
-    aux_active = len(structural["aux_out"]["arc_ids"])
+    aux_active = sum(map(len, structural["aux_out"]["row_arcs"]))
     active = base_active + aux_active
     full_levelization = {"base_out": base_active, "aux_out": aux_active,
                          "base_in": active}
@@ -641,8 +643,8 @@ def validate_transaction(value: object, generation: int,
         item["baseline_reference_input"], semantic,
         f"{label}.resolver_semantics", require)
     evidence = _object(item["evidence"], {"phase_trace", "capture_audits",
-        "operation_counters", "incremental_batch_executed", "propagation_scope",
-        "native_final_rollback_completed"}, f"{label}.evidence", require)
+        "operation_counters", "incremental_batch_executed", "propagation_scope"},
+        f"{label}.evidence", require)
     expected_phases: list[str] = []
     for mode in execution_modes:
         expected_phases.extend([
@@ -650,8 +652,7 @@ def validate_transaction(value: object, generation: int,
             "post_candidate_capture", "dual_csr_update",
             "mixed_levelization" if mode == "mixed_stage6" else "full_levelization",
             "full_propagation", "intrinsic_verify", "publish"])
-    require(evidence["phase_trace"] == expected_phases
-            + ["native_final_rollback"], f"{label}.evidence phase trace differs")
+    require(evidence["phase_trace"] == expected_phases, f"{label}.evidence phase trace differs")
     audits = _array(evidence["capture_audits"],
                     f"{label}.evidence.capture_audits", require)
     require(len(audits) == generation, f"{label} audit count differs")
@@ -659,9 +660,7 @@ def validate_transaction(value: object, generation: int,
         _validate_audit(audit, descriptors[index],
                         f"{label}.evidence.capture_audits[{index}]", require)
     counter_keys = {"native_full_graph_exports", "native_full_reference_exports",
-        "host_snapshot_rebuilds", "baseline_factory_calls", "fallback_calls",
-        "candidate_creates", "candidate_clones", "candidate_applies",
-        "candidate_executes", "candidate_installs", "candidate_rollbacks"}
+        "host_snapshot_rebuilds", "baseline_factory_calls", "fallback_calls"}
     counters = _object(evidence["operation_counters"], counter_keys,
                        f"{label}.evidence.operation_counters", require)
     for key in counter_keys:
@@ -669,14 +668,6 @@ def validate_transaction(value: object, generation: int,
     for key in ("native_full_graph_exports", "native_full_reference_exports",
                 "host_snapshot_rebuilds", "baseline_factory_calls", "fallback_calls"):
         require(counters[key] == 0, f"{label}.evidence.{key} must be zero")
-    expected_counts = {"candidate_creates": 1,
-        "candidate_clones": generation - 1, "candidate_applies": generation,
-        "candidate_executes": generation, "candidate_installs": generation,
-        "candidate_rollbacks": generation}
-    for key, expected_count in expected_counts.items():
-        require(counters[key] == expected_count,
-                f"{label}.evidence.{key} differs")
     require(evidence["incremental_batch_executed"] is True
-            and evidence["propagation_scope"] == "full_graph"
-            and evidence["native_final_rollback_completed"] is True,
+            and evidence["propagation_scope"] == "full_graph",
             f"{label}.evidence completion fields differ")

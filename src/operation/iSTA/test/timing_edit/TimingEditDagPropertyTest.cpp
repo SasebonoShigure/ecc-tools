@@ -517,7 +517,7 @@ GraphResult analyze(Shape shape, std::uint64_t seed)
     const TimingEditResolverState resolver
         = TimingEditResolverState::bindBaseline(database);
     NativeTimingEditPreparer::requireExactCommittedTraceClosure(
-        database, *input, resolver, baseline, std::vector<DesignEditPlan>{});
+        database, *input, resolver, baseline, std::vector<EditBatch>{});
   }
   const CsrFifoLevelization fifo = replayFifoLevelization(*input);
   require(fifo.complete && fifo.level_nodes.size() == input->nodes.size()

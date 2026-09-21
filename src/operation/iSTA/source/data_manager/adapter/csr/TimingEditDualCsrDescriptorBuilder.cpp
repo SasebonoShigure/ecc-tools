@@ -57,23 +57,23 @@ const T& requireUnique(const std::vector<T>& values, Predicate predicate,
 }
 
 const timing_edit::NativeSlotBinding& stagedNodeBinding(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const timing_edit::StableNodeRef& ref)
 {
-  const auto found = resolver.nodeBindings().find(ref);
-  if (found == resolver.nodeBindings().end() || found->second.tombstone)
+  const auto* found = resolver.findNodeBinding(ref);
+  if (found == nullptr || found->tombstone)
     invalid("captured node has no live staged resolver binding");
-  return found->second;
+  return *found;
 }
 
 const timing_edit::NativeSlotBinding& stagedArcBinding(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const timing_edit::StableArcRef& ref)
 {
-  const auto found = resolver.arcBindings().find(ref);
-  if (found == resolver.arcBindings().end())
+  const auto* found = resolver.findArcBinding(ref);
+  if (found == nullptr)
     invalid("captured arc has no staged resolver binding");
-  return found->second;
+  return *found;
 }
 
 void requireExactAudit(const AffectedCapturePlan& plan,
@@ -117,18 +117,16 @@ void requirePlanBinding(const PendingStructuredBatch& pending)
 {
   const auto& before = pending.expectedBefore();
   const auto& batch = pending.preparedBatch();
-  if (batch.sealed() || before.graph().session_token != batch.sessionToken() || before.graph().generation != batch.expectedGeneration()
+  if (before.graph().session_token != batch.sessionToken() || before.graph().generation != batch.expectedGeneration()
       || before.graph().high_water != batch.slotPlan().before || before.arcGroupIndex().session_token != batch.sessionToken()
       || before.arcGroupIndex().generation != batch.expectedGeneration() || before.arcGroupIndex().arc_high_water != batch.slotPlan().before.arc_slots
-      || batch.expectedPreCommittedIdentity().generation != batch.expectedGeneration() || pending.stagedResolver().highWater() != batch.slotPlan().after)
+      || (batch.expectedPreCommittedIdentity() && batch.expectedPreCommittedIdentity()->generation != batch.expectedGeneration()) || pending.stagedResolver().highWater() != batch.slotPlan().after)
     invalid("pending capability no longer matches its exact before-state");
 
-  // The preparer checked the original resolver boundary and copied the exact
-  // identity into PreparedBatch. Replaying that controlled construction is a
-  // diagnostic proof; capture binding and record coverage remain mandatory.
+  // Rebuilding the capture plan is a development proof; owner and local
+  // expected-value checks remain part of the controlled path.
   if constexpr (incregpusta_debug_checks_enabled) {
-    if (before.resolver().highWater() != batch.slotPlan().before || before.identity() != batch.expectedPreCommittedIdentity()
-        || before.resolver().stage(batch) != pending.stagedResolver())
+    if (before.resolver().highWater() != batch.slotPlan().before)
       invalid("pending capability no longer matches its exact before-state");
     const DualSemanticReadView view(before.graph());
     const auto rebuilt = detail::makeStructuredCapturePlan(batch, before.resolver(), pending.stagedResolver(), before.arcGroupIndex(), view);
@@ -327,12 +325,12 @@ void requireLibraryRef(
       model.cell_arcs, [&](const auto& arc) {
         if (arc.source_port != requested.input_port
             || arc.sink_port != requested.output_port
-            || arc.transfer.children.size()
+            || arc.transfer.children().size()
                    != requested.ordered_arc_signatures.size())
           return false;
         for (std::size_t index = 0;
-             index < arc.transfer.children.size(); ++index)
-          if (arc.transfer.children[index].signature
+             index < arc.transfer.children().size(); ++index)
+          if (arc.transfer.children()[index].signature
               != requested.ordered_arc_signatures[index])
             return false;
         return true;
@@ -393,18 +391,15 @@ void requireNetAndLibraryCoverage(const PendingStructuredBatch& pending,
 }
 
 template <typename T>
-void requireDelta(const std::optional<ValueReplacement<T>>& actual,
-                  const T& expected, const T& replacement,
-                  std::string_view field)
+void requireAppend(const std::optional<RecordAppend<T>>& actual, std::size_t expected_size,
+                   const std::vector<T>& values, std::string_view field)
 {
-  if (expected == replacement) {
+  if (values.empty()) {
     if (actual)
-      invalid(std::string(field) + " changes an unmodified field");
-    return;
+      invalid(std::string(field) + " appends no values");
+  } else if (!actual || actual->expected_size != expected_size || actual->values != values) {
+    invalid(std::string(field) + " is not the exact captured append");
   }
-  if (!actual || actual->expected != expected
-      || actual->replacement != replacement)
-    invalid(std::string(field) + " is not the exact typed replacement");
 }
 
 void requireForbiddenReferenceFieldsEmpty(
@@ -429,42 +424,26 @@ void requireReferenceDelta(const PendingStructuredBatch& pending,
   const auto& delta = records.reference_payload;
   requireForbiddenReferenceFieldsEmpty(delta);
 
-  auto instances = current.instances;
+  std::vector<csr::InstanceRecord> instances;
   for (const auto& captured : records.instances) {
-    if (std::ranges::any_of(instances, [&](const auto& value) {
-          return value.instance_name == captured.record.instance_name;
-        }))
+    if (std::ranges::any_of(current.instances, [&](const auto& value) { return value.instance_name == captured.record.instance_name; }))
       invalid("captured instance already exists in committed reference");
     instances.push_back(captured.record);
   }
-  std::ranges::sort(instances, [](const auto& lhs, const auto& rhs) {
-    return csr::detail::referenceByteStringLess(lhs.instance_name,
-                                                rhs.instance_name);
-  });
-  requireDelta(delta.instances, current.instances, instances,
-               "reference.instances");
+  requireAppend(delta.instances, current.instances.size(), instances, "reference.instances");
 
-  auto cells = current.referenced_library_cells;
+  std::vector<csr::ReferencedLibraryCellModel> cells;
   for (const auto& captured : records.library_cells) {
-    const auto found = std::ranges::find_if(cells, [&](const auto& value) {
-      return value.cell_name == captured.model.cell_name;
-    });
-    if (found == cells.end())
+    const auto found = std::ranges::find(current.referenced_library_cells, captured.model.cell_name, &csr::ReferencedLibraryCellModel::cell_name);
+    if (found == current.referenced_library_cells.end())
       cells.push_back(captured.model);
     else if (*found != captured.model)
       invalid("captured library model changes a committed cell");
   }
-  std::ranges::sort(cells, [](const auto& lhs, const auto& rhs) {
-    return csr::detail::referenceByteStringLess(lhs.cell_name,
-                                                rhs.cell_name);
-  });
-  requireDelta(delta.referenced_library_cells,
-               current.referenced_library_cells, cells,
-               "reference.referenced_library_cells");
+  requireAppend(delta.referenced_library_cells, current.referenced_library_cells.size(), cells, "reference.referenced_library_cells");
 
   const auto keyForId = [&](csr::NodeId id) -> const csr::NodeKey& {
-    const auto captured = std::ranges::find(
-        records.nodes, id, &CapturedNode::id);
+    const auto captured = std::ranges::find(records.nodes, id, &CapturedNode::id);
     if (captured != records.nodes.end())
       return captured->record.key;
     const auto& graph = pending.expectedBefore().graph();
@@ -472,33 +451,24 @@ void requireReferenceDelta(const PendingStructuredBatch& pending,
       invalid("capacitance refers to an uncaptured appended node");
     return graph.nodes[id.value()].key;
   };
-  auto caps = current.cell_pin_capacitances;
+  std::vector<csr::CellPinCapacitanceModel> caps;
   for (const auto& captured : records.cell_pin_capacitances) {
-    if (captured.requested.expected_key
-        != keyForId(captured.model.node))
+    if (captured.requested.expected_key != keyForId(captured.model.node))
       invalid("captured capacitance key differs from its logical NodeId");
-    const auto found = std::ranges::find(
-        caps, captured.model.node, &csr::CellPinCapacitanceModel::node);
-    if (found == caps.end())
+    const auto found = std::ranges::find(current.cell_pin_capacitances, captured.model.node, &csr::CellPinCapacitanceModel::node);
+    if (found == current.cell_pin_capacitances.end())
       caps.push_back(captured.model);
     else if (*found != captured.model)
       invalid("captured capacitance changes a committed NodeId");
   }
-  std::ranges::sort(caps, [&](const auto& lhs, const auto& rhs) {
-    return csr::detail::referenceByteStringLess(
-        keyForId(lhs.node).full_name,
-        keyForId(rhs.node).full_name);
-  });
-  requireDelta(delta.cell_pin_capacitances,
-               current.cell_pin_capacitances, caps,
-               "reference.cell_pin_capacitances");
+  requireAppend(delta.cell_pin_capacitances, current.cell_pin_capacitances.size(), caps, "reference.cell_pin_capacitances");
 
-  auto owners = current.clock_owner_by_node;
-  owners.resize(pending.preparedBatch().slotPlan().after.node_slots,
-                std::nullopt);
-  requireDelta(delta.clock_owner_by_node,
-               current.clock_owner_by_node, owners,
-               "reference.clock_owner_by_node");
+  const auto& slots = pending.preparedBatch().slotPlan();
+  if (current.clock_owner_by_node.size() != slots.before.node_slots)
+    invalid("clock owner high-water differs from the committed graph");
+  const std::vector<std::optional<std::string>> owners(slots.after.node_slots - slots.before.node_slots);
+  requireAppend(delta.clock_owner_by_node, current.clock_owner_by_node.size(), owners, "reference.clock_owner_by_node");
+
 }
 
 DualCsrBatchDescriptor basicDescriptor(
@@ -671,9 +641,9 @@ VerifiedStructuredBatch TimingEditDualCsrDescriptorBuilder::build(
             + index_violations.front().message);
 
   return VerifiedStructuredBatch{
-      std::move(pending._prepared_batch),
-      std::move(pending._staged_resolver), std::move(descriptor),
-      std::move(pending._expected_before), std::move(records.audit)};
+      &pending.expectedBefore().graph(), std::move(pending._prepared_batch),
+      std::move(pending._resolver_delta), std::move(descriptor),
+      std::move(records.audit)};
 }
 
 }  // namespace ista::timing_dual_csr

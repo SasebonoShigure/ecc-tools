@@ -94,7 +94,7 @@ bool referenceByteStringLess(const std::string& lhs, const std::string& rhs)
                                       [](char left, char right) { return static_cast<unsigned char>(left) < static_cast<unsigned char>(right); });
 }
 
-ReferenceBuildState::ReferenceBuildState(const ista::Database& native_database, CsrGraphSnapshot graph, StaAnalysisContext context) : database(native_database)
+ReferenceBuildState::ReferenceBuildState(const ista::Database& native_database, CsrGraphSnapshot graph, StaAnalysisContext context, NativeLibraryModels& library_models) : database(native_database), models(library_models)
 {
   input.analysis_context = std::move(context);
   input.nodes = std::move(graph.nodes);
@@ -228,6 +228,14 @@ namespace ista::csr {
 CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Database& database, const StaAnalysisContext& canonical_context,
                                                                std::uint64_t caller_session_token)
 {
+  detail::NativeLibraryModels models(database);
+  return exportCsrReferenceInputCandidate(database, canonical_context, caller_session_token, models);
+}
+
+CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Database& database, const StaAnalysisContext& canonical_context,
+                                                               std::uint64_t caller_session_token, detail::NativeLibraryModels& models)
+{
+  models.requireDatabase(database);
   if constexpr (incregpusta_debug_checks_enabled)
     detail::noteNativeFullReferenceExport();
   if (caller_session_token == 0)
@@ -243,7 +251,7 @@ CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Datab
     if (const auto* failure = std::get_if<CsrGraphExportFailure>(&graph_result))
       return progress.failure(failure->code);
 
-    detail::ReferenceBuildState state(database, std::move(std::get<CsrGraphSnapshot>(graph_result)), canonical_context);
+    detail::ReferenceBuildState state(database, std::move(std::get<CsrGraphSnapshot>(graph_result)), canonical_context, models);
     progress.current_fingerprints.topology_fingerprint = makeReferenceTopologyFingerprint(state.input);
 
     progress.failed_phase = CsrReferenceInputExportPhase::kClockConstraint;

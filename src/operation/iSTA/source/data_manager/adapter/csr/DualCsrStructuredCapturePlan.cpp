@@ -41,21 +41,21 @@ struct ArcBaseLess
 
 csr::ArcId stagedArcId(
     const timing_edit::StableArcRef& ref,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const timing_edit::AppendOnlyHighWater& after)
 {
-  const auto found = staged.arcBindings().find(ref);
-  if (found == staged.arcBindings().end()
-      || found->second.slot.value() >= after.arc_slots)
+  const auto* found = staged.findArcBinding(ref);
+  if (found == nullptr
+      || found->slot.value() >= after.arc_slots)
     invalid("requested stable arc has no staged logical ArcId");
-  return csr::ArcId{found->second.slot.value()};
+  return csr::ArcId{found->slot.value()};
 }
 
 std::optional<csr::ArcKey> currentKey(
     const timing_edit::StableArcRef& ref,
     const timing_edit::AppendOnlySlotPlan& slots,
     const timing_edit::TimingEditResolverState& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const DualCsrArcGroupIndex& index,
     const DualSemanticReadView& view)
 {
@@ -81,7 +81,7 @@ std::optional<csr::ArcKey> currentKey(
 csr::ArcKeyBase postBase(
     const timing_edit::StableArcRef& ref,
     const std::optional<csr::ArcKey>& current,
-    const timing_edit::TimingEditResolverState& staged)
+    timing_edit::TimingEditResolverView staged)
 {
   if (current.has_value())
     return current->base;
@@ -108,7 +108,7 @@ void addCurrentGroup(
 std::uint64_t postMultiplicity(
     const csr::ArcKeyBase& base,
     const timing_edit::PreparedBatch& batch,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const DualCsrArcGroupIndex& index,
     const std::set<timing_edit::StableArcRef>& deactivated)
 {
@@ -137,25 +137,25 @@ std::uint64_t postMultiplicity(
 AffectedNodeModelCapture nodeModelRequest(
     const timing_edit::StableNodeRef& ref,
     const timing_edit::PreparedBatch& batch,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const DualSemanticReadView& view)
 {
   const auto key = stableNodeKey(ref, staged);
   if (key.kind != csr::NodeKind::kInstancePin
       || key.instance_name.empty() || key.pin_name.empty())
     invalid("node-model dependency is not an instance pin");
-  const auto binding = staged.nodeBindings().find(ref);
-  if (binding == staged.nodeBindings().end()
-      || binding->second.tombstone
-      || binding->second.native_name != key.full_name
-      || binding->second.slot.value()
+  const auto* binding = staged.findNodeBinding(ref);
+  if (binding == nullptr
+      || binding->tombstone
+      || binding->native_name != key.full_name
+      || binding->slot.value()
              >= batch.slotPlan().after.node_slots)
     invalid("node-model dependency has no staged node slot");
   std::string cell;
-  if (binding->second.slot.value()
+  if (binding->slot.value()
       < batch.slotPlan().before.node_slots) {
     const auto current = view.nodeById(
-        csr::NodeId{binding->second.slot.value()});
+        csr::NodeId{binding->slot.value()});
     if (!current || current.value().key != key)
       invalid("existing node-model dependency differs from its slot");
     cell = current.value().instance_cell;
@@ -191,7 +191,7 @@ void addNodeModelRequest(
 AffectedCapturePlan makeStructuredCapturePlan(
     const timing_edit::PreparedBatch& batch,
     const timing_edit::TimingEditResolverState& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const DualCsrArcGroupIndex& arc_group_index,
     const DualSemanticReadView& view)
 {

@@ -51,7 +51,6 @@ set(ISTA_TIMING_EDIT_PRODUCTION_ORACLE_SOURCES
     CsrTimingResultFromNativeOracle.cpp
 )
 set(ISTA_TIMING_EDIT_PRODUCTION_ORACLE_LINKS
-    ista_timing_edit_transaction
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers

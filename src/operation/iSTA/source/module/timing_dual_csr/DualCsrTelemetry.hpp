@@ -21,7 +21,7 @@ enum class DualCsrBufferKind : std::uint8_t
   kBaseOutSlots,
   kBaseInOffsets,
   kBaseInSlots,
-  kAuxOffsets,
+  kAuxRows,
   kAuxSources,
   kAuxArcs,
   kAuxSourceMap

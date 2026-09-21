@@ -171,7 +171,7 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
         session, [&](std::uint64_t guarded_token, StaCsrSessionContext& context,
                      const NativeExecutionAuthority& authority) {
           csr::CsrReferenceInputExportResult exported = csr::exportCsrReferenceInputCandidate(
-              STADM.getDatabase(), artifacts.analysis_context, guarded_token);
+              STADM.getDatabase(), artifacts.analysis_context, guarded_token, context.libraryModels(STADM.getDatabase()));
           const auto* reference = std::get_if<csr::CsrReferenceInput>(&exported);
           if (reference == nullptr || reference->source_identity.session_token != guarded_token
               || reference->source_identity.graph_generation != 0

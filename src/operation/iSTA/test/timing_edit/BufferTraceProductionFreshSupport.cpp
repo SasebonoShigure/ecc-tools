@@ -112,14 +112,17 @@ DerivedTimingFreshnessFunctionalReceipt proveDerivedTimingFreshness(
     reject("generation-zero Database has no finite-arrival timing point");
   }
   const auto& [point_name, baseline_point] = *point;
-  timing_edit::NativeDatabaseCandidate candidate
-      = timing_edit::NativeDatabaseCandidate::create(view.database);
-  if (!candidate.database().get_timing_point_map().empty()) {
+  // Retain only the point used by this diagnostic before moving old derived
+  // state into the full transaction.
+  const auto saved_point_name = point_name;
+  const auto saved_point = baseline_point;
+  auto installed = timing_edit::NativeEditTransaction::prepareFull(view.authority);
+  if (!installed.database().get_timing_point_map().empty()) {
     reject("detached candidate retained derived timing state");
   }
   auto [injected, inserted]
-      = candidate.database().get_timing_point_map().emplace(point_name,
-                                                             baseline_point);
+      = installed.database().get_timing_point_map().emplace(saved_point_name,
+                                                             saved_point);
   if (!inserted) {
     reject("could not inject the detached timing point tamper");
   }
@@ -130,12 +133,10 @@ DerivedTimingFreshnessFunctionalReceipt proveDerivedTimingFreshness(
     reject("arrival tamper did not change the detached candidate");
   }
 
-  timing_edit::InstalledNativeDatabase installed
-      = timing_edit::NativeCandidateExecutor::installAndExecute(
-          view.authority, std::move(candidate));
+  timing_edit::NativeCandidateExecutor::executeFull(installed);
   DerivedTimingFreshnessFunctionalReceipt receipt;
   receipt.exercised = true;
-  receipt.timing_point = point_name;
+  receipt.timing_point = saved_point_name;
   receipt.baseline_arrival = baseline_arrival;
   receipt.tampered_arrival = tampered_arrival;
   receipt.tamper_observed = true;
@@ -171,7 +172,7 @@ DerivedTimingFreshnessFunctionalReceipt proveDerivedTimingFreshness(
     std::rethrow_exception(failure);
   }
   if (!installed.rollback()) {
-    reject("InstalledNativeDatabase exact rollback failed");
+    reject("native full transaction rollback failed");
   }
 
   receipt.rollback_owner_restored = &STADM.getDatabase() == &view.database;
@@ -199,11 +200,10 @@ DerivedTimingFreshnessFunctionalReceipt proveDerivedTimingFreshness(
 
 bool proveFirstEmptyGenerationZero(
     const timing_edit::oracle::ProductionFreshSessionView& view,
-    const timing_edit::TimingEditCoordinator& coordinator,
+    const timing_edit::CommittedEditIdentity& current_identity,
+    const timing_edit::TimingEditResolverState& resolver,
     const timing_edit::CommittedEditIdentity& initial_identity)
 {
-  const timing_edit::TransactionGeneration zero{0};
-  const csr::CsrCommittedSessionSnapshot* host = coordinator.hostSnapshot();
   timing_edit::TimingEditResolverState rebound;
   try {
     rebound = timing_edit::TimingEditResolverState::bindBaseline(
@@ -245,20 +245,14 @@ bool proveFirstEmptyGenerationZero(
     rejectFirstEmpty(std::string("observation proof failed: ") + error.what());
   }
   const bool exact
-      = coordinator.state() == timing_edit::TimingEditCoordinatorState::kIdle
-        && coordinator.committedIdentity() == initial_identity
-        && coordinator.cumulativeTrace().batches.empty()
-        && coordinator.deviceState().generation == zero
-        && coordinator.commitMarker().generation == zero
-        && host != nullptr
-        && sameReferenceInput(host->input, view.reference_input)
-        && coordinator.resolverState() == rebound
+      = current_identity == initial_identity
+        && resolver == rebound
         && &STADM.getDatabase() == &view.database
         && identityFor(STADM.getDatabase(), view) == initial_identity
         && view.session.state() == StaSessionState::kBaselineExecuted
         && view.authority.active();
   if (!exact) {
-    rejectFirstEmpty("generation-zero coordinator, native Database, CSR, "
+    rejectFirstEmpty("generation-zero native Database, "
                      "resolver, session, or authority state changed");
   }
   return true;

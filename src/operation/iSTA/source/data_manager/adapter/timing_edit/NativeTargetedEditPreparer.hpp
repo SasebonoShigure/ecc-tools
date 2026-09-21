@@ -9,13 +9,20 @@
 #include <vector>
 
 #include "CudaDualCsrPatch.hpp"
-#include "NativeDatabaseCandidate.hpp"
+#include "NativeEditTransaction.hpp"
 #include "TimingEditResolver.hpp"
 
+namespace ista::csr::detail { class NativeLibraryModels; }
 namespace ista::timing_edit {
 // Address/identity metadata only: no host Base slots, Aux edges or arc payloads.
 struct NativeTargetedEditState
 {
+  NativeTargetedEditState() = default;
+  NativeTargetedEditState(const NativeTargetedEditState&) = delete;
+  NativeTargetedEditState& operator=(const NativeTargetedEditState&) = delete;
+  NativeTargetedEditState(NativeTargetedEditState&&) noexcept = default;
+  NativeTargetedEditState& operator=(NativeTargetedEditState&&) noexcept = default;
+  csr::detail::NativeLibraryModels* models{nullptr};
   TimingEditSessionToken session_token;
   TransactionGeneration generation;
   std::shared_ptr<const BaselineSemanticIdentity> baseline;
@@ -23,21 +30,24 @@ struct NativeTargetedEditState
   TimingEditResolverState resolver;
   std::vector<std::string> node_names;
   std::map<std::string, csr::NodeId> node_ids;
+  // Stable map keys owned by resolver. std::map moves/merges preserve them;
+  // the containing state is move-only so they cannot point into a copied owner.
+  std::vector<const StableArcRef*> arc_refs;
   std::vector<csr::ArcId> native_arc_ids;
   std::vector<std::optional<std::size_t>> arc_native_ranks;
   std::vector<std::uint64_t> base_out_offsets, base_in_offsets;
 };
 struct NativeTargetedEditBatch
 {
-  NativeDatabaseCandidate candidate;
-  NativeTargetedEditState staged;
+  NativeEditTransaction transaction;
+  NativeTargetedEditState& staged;
   csr::CudaDualCsrPatch patch;
 };
 class NativeTargetedEditPreparer final
 {
  public:
   [[nodiscard]] static NativeTargetedEditState bindBaseline(const Database& database, const csr::CsrReferenceInput& input,
-                                                            const BaselineSemanticIdentity& baseline);
-  [[nodiscard]] static NativeTargetedEditBatch prepare(const Database& database, DesignEditPlan plan, const NativeTargetedEditState& current);
+                                                            const BaselineSemanticIdentity& baseline, csr::detail::NativeLibraryModels& models);
+  [[nodiscard]] static NativeTargetedEditBatch prepare(Database& database, const NativeExecutionAuthority& authority, EditBatch plan, NativeTargetedEditState& current);
 };
 }  // namespace ista::timing_edit

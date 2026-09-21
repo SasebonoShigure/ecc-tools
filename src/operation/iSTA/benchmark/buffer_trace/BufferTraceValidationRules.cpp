@@ -25,12 +25,12 @@ void reject(BufferTraceContractViolations& errors,
       BufferTraceContractViolation{code, std::move(field), std::move(message)});
 }
 
-const std::vector<timing_edit::DesignEditPlan>& batches(
+const std::vector<timing_edit::EditBatch>& batches(
     const ReplayProgram& program)
 {
   return std::visit(
       [](const auto& payload)
-          -> const std::vector<timing_edit::DesignEditPlan>& {
+          -> const std::vector<timing_edit::EditBatch>& {
         return payload.batches;
       },
       program.workload);

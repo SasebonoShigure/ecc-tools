@@ -66,8 +66,8 @@ endif()
 
 file(READ "${RECEIPT_FILE}" RECEIPT_TEXT)
 string(CONCAT EXPECTED_RECEIPT
-    "schema|ista-timing-edit-derived-tamper-receipt/1.0.0\n"
-    "derived_tamper_detected|csr_full_exact|prepublish|sealed=false|"
+    "schema|ista-timing-edit-derived-tamper-receipt/2.0.0\n"
+    "derived_tamper_detected|csr_full_exact|prepublish|"
     "published=false|database_generation=0|raw=unchanged|"
     "transaction_generation=0\n")
 if(NOT "${RECEIPT_TEXT}" STREQUAL "${EXPECTED_RECEIPT}")

@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <set>
+#include <stdexcept>
 
 #include "CsrReferenceInputAdapterInternal.hpp"
 #include "TimingGraphCsrAdapterInternal.hpp"
@@ -56,9 +57,11 @@ LibraryTimingCheckArcModel projectLibraryTimingCheck(
   requireFiniteReference(check.check_time);
   if (check.clock_transition == Transition::kNone)
     malformedReferenceInput();
-  check.children.reserve(native_check.get_timing_arc_list().size());
+  std::vector<ChildTimingArcModel> children;
+  children.reserve(native_check.get_timing_arc_list().size());
   for (const auto& native_child : native_check.get_timing_arc_list())
-    check.children.push_back(exportReferenceChildTimingArc(native_child));
+    children.push_back(exportReferenceChildTimingArc(native_child));
+  check.setChildren(children);
   return check;
 }
 
@@ -114,6 +117,36 @@ void addCheckedLoad(double value, double& total)
 }
 
 }  // namespace
+
+void NativeLibraryModels::requireDatabase(const ista::Database& database) const
+{
+  if (&database != &_database)
+    throw std::invalid_argument("Liberty model store belongs to another Database");
+}
+const ReferencedLibraryCellModel& NativeLibraryModels::cell(const std::string& name)
+{
+  if (const auto found = _cells.find(name); found != _cells.end())
+    return found->second;
+  auto model = projectCanonicalReferencedLibraryCell(_database, name);
+  std::map<const ista::TimingCellArc*, const CellTransferModel*> arcs;
+  const auto native = _database.get_timing_library().get_cell_map().find(name);
+  if (native != _database.get_timing_library().get_cell_map().end()) {
+    std::size_t ordinal = 0;
+    for (const auto& arc : native->second.get_cell_arc_list())
+      arcs.emplace(&arc, &model.cell_arcs.at(ordinal++).transfer);
+  }
+  auto result = _cells.emplace(name, std::move(model)).first;
+  _arcs.merge(arcs);
+  return result->second;
+}
+const CellTransferModel& NativeLibraryModels::transfer(const std::string& name, const ista::TimingCellArc& arc)
+{
+  static_cast<void>(cell(name));
+  const auto found = _arcs.find(&arc);
+  if (found == _arcs.end())
+    malformedReferenceInput();
+  return *found->second;
+}
 
 LibraryPortModel projectCanonicalLibraryPort(
     const ista::TimingCellPort& native_port)

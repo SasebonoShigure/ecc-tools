@@ -125,7 +125,7 @@ void preflightConvertedLoads(const ReferenceBuildState& state)
   for (const auto& arc : state.input.arcs) {
     if (!arc.output_load)
       continue;
-    for (const auto& child : arc.transfer.children) {
+    for (const auto& child : arc.transfer.children()) {
       if (std::abs(child.capacitance_unit_scale - 1.0) < STA_ERROR)
         continue;
       for (const auto& analysis : *arc.output_load) {

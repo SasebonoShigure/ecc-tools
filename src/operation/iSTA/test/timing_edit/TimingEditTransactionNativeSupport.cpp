@@ -59,6 +59,7 @@ class FakeSessionOperations final : public StaSessionOperations
  public:
   StaStatus initialize(std::uint64_t, std::map<std::string, std::any>&) override
   {
+    DelayCalculator::initInst();
     return StaStatus::success(StaSessionState::kInitialized);
   }
 
@@ -235,25 +236,14 @@ std::unique_ptr<csr::CsrCommittedSessionSnapshot> buildNativeHostSnapshot(
   return std::move(*snapshot);
 }
 
-NativeDatabaseCandidate translateNativeCandidate(
-    const PreparedNativeTransaction& transaction,
-    const TimingEditResolverState& staged_resolver)
-{
-  NativeDatabaseCandidate candidate
-      = NativeDatabaseCandidate::create(STADM.getDatabase());
-  const NativeTranslationResult translated
-      = NativeDesignEditTranslator::applyNormalizedBatch(
-          candidate.database(), transaction.prepared, staged_resolver);
-  if (!translated.applied() || !translated.reasons.empty()) {
-    throw std::runtime_error("real transaction native translation fell back");
-  }
-  return candidate;
-}
 
 void requireReleasedSnapshotForNativeMutation(
     StaCsrSessionContext& session_context,
     TimingEditSessionToken session_token)
 {
+  if (session_context.token() == session_token.value()
+      && StaTimingEditSessionProbeAccess::snapshotReleasedForTesting(session_context))
+    return;
   std::unique_ptr<csr::CsrSnapshotObservation> released_observation;
   StaTimingEditSessionProbeAccess::releaseSnapshotForMutation(
       session_context, &released_observation);
@@ -276,39 +266,25 @@ void requireReleasedSnapshotForNativeMutation(
 ExecutedNativeTransaction executeNativeTransaction(
     const NativeExecutionAuthority& authority,
     StaCsrSessionContext& session_context,
-    const PreparedNativeTransaction& transaction)
+    PreparedNativeTransaction& transaction)
 {
   requireReleasedSnapshotForNativeMutation(session_context,
                                            authority.sessionToken());
-  TimingEditResolverState staged_resolver
-      = transaction.resolver.stage(transaction.prepared);
-  NativeDatabaseCandidate candidate
-      = translateNativeCandidate(transaction, staged_resolver);
-  InstalledNativeDatabase installed = NativeCandidateExecutor::installAndExecute(
-      authority, std::move(candidate));
-  std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot
-      = buildNativeHostSnapshot(installed.database(), authority.sessionToken());
-  CsrExecutionAuthorization csr_full_receipt
-      = StaTimingEditSessionProbeAccess::proveCsrFullExact(authority, *host_snapshot, installed.database(), transaction.prepared.targetGeneration());
-  const CommittedEditIdentity post_identity
-      = NativeTimingEditPreparer::captureCurrentIdentity(
-          installed.database(), transaction.prepared.targetGeneration(),
-          editTestAnalysisContext(), authority.sessionToken());
-  const TokenMaterialization materialization = staged_resolver.materialization(
+  auto delta = transaction.resolver.prepare(transaction.prepared);
+  const TimingEditResolverView staged(transaction.resolver, delta);
+  const TokenMaterialization materialization = staged.materialization(
       transaction.plan.edits.front().creation_token);
-  return {std::move(installed), std::move(host_snapshot),
-          std::move(csr_full_receipt), post_identity,
-          std::move(staged_resolver), materialization};
-}
-
-CumulativeEditTrace nativeSuccessorTrace(
-    const PreparedNativeTransaction& transaction)
-{
-  DesignEditPlan plan;
-  plan.baseline = transaction.baseline;
-  plan.expected_generation = transaction.prepared.expectedGeneration();
-  plan.edits = transaction.prepared.normalizedEdits();
-  return CumulativeEditTrace{{std::move(plan)}};
+  auto installed = NativeEditTransaction::prepareFull(
+      authority, transaction.prepared, staged);
+  NativeCandidateExecutor::executeFull(installed);
+  if constexpr (incregpusta_debug_checks_enabled) {
+    auto host = buildNativeHostSnapshot(installed.database(), authority.sessionToken());
+    StaTimingEditSessionProbeAccess::requireCsrFullExact(*host, installed.database());
+  }
+  auto post_identity = NativeTimingEditPreparer::captureCurrentIdentity(
+      installed.database(), transaction.prepared.targetGeneration(),
+      editTestAnalysisContext(), authority.sessionToken());
+  return {std::move(installed), std::move(post_identity), materialization};
 }
 
 void requireRecursiveStaOperationRejected(std::uint64_t token,

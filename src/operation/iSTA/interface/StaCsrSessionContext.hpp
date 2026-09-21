@@ -21,16 +21,20 @@
 #include <variant>
 
 #include "CsrReferenceTypes.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "TimingResultScatter.hpp"
 
 namespace ista {
 
 class Database;
+class StaCudaSessionState;
+namespace timing_edit { class NativeExecutionAuthority; }
 class STAInterface;
 class StaCsrSessionContextTestAccess;
 class StaTimingEditSessionProbeAccess;
 
 namespace csr {
+namespace detail { class NativeLibraryModels; }
 struct CsrCommittedSessionSnapshot;
 struct CsrSnapshotObservation;
 }  // namespace csr
@@ -81,6 +85,15 @@ class StaCsrSessionContext final
   StaCsrSessionContext& operator=(const StaCsrSessionContext&) = delete;
   StaCsrSessionContext& operator=(StaCsrSessionContext&&) = delete;
 
+#if ISTA_ENABLE_CUDA
+  [[nodiscard]] StaCudaSessionState& cudaState(const timing_edit::NativeExecutionAuthority& authority);
+  void materializeCudaTiming(Database& database, const timing_edit::NativeExecutionAuthority& authority);
+  void prepareCudaReport(Database& database, const timing_edit::NativeExecutionAuthority& authority);
+#endif
+
+  // Internal callers hold the session operation guard.
+  [[nodiscard]] csr::detail::NativeLibraryModels& libraryModels(Database& database);
+
   [[nodiscard]] const csr::StaAnalysisContext& analysisContext() const noexcept { return _analysis_context; }
   [[nodiscard]] std::uint64_t token() const noexcept { return _session_token; }
   [[nodiscard]] bool hasReadySnapshot() const noexcept { return _substate == StaCsrSessionSubstate::kReady && _snapshot != nullptr; }
@@ -94,13 +107,18 @@ class StaCsrSessionContext final
   [[nodiscard]] StaCsrCaptureAttempt capture(const Database& database);
   [[nodiscard]] StaCsrReferenceAttempt computeReference();
   [[nodiscard]] StaCsrScatterAttempt scatter(Database& database, const csr::CsrTimingResult& result);
-  void release(std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) noexcept;
+  bool release(std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) noexcept;
   [[nodiscard]] bool copyObservation(std::unique_ptr<csr::CsrSnapshotObservation>* detached_out);
 
   const csr::StaAnalysisContext _analysis_context;
   const std::uint64_t _session_token;
+  bool _baseline_ready{false};
   StaCsrSessionSubstate _substate{StaCsrSessionSubstate::kAwaitingCapture};
   std::unique_ptr<csr::CsrCommittedSessionSnapshot> _snapshot;
+  std::unique_ptr<csr::detail::NativeLibraryModels> _library_models;
+#if ISTA_ENABLE_CUDA
+  std::unique_ptr<StaCudaSessionState> _cuda;
+#endif
 };
 
 }  // namespace ista

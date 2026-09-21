@@ -10,19 +10,33 @@ import unittest
 from unittest.mock import patch
 
 import dual_csr_timing_smoke as smoke
+from dual_csr_timing_evidence import DURATION_KEYS, validate_batch_phase_timings
 
 
 class PerformanceModeTest(unittest.TestCase):
     def test_sample_starts_only_the_target_workload(self):
+        phases = [
+            {**dict.fromkeys(DURATION_KEYS, 0.0),
+             "generation_before": i, "generation_after": i + 1,
+             "session_step_ms": 1.0, "query_materialization_ms": 2.0,
+             "report_ms": 3.0, "consumer_step_ms": 6.5,
+             "invariant_ms": "not_run", "verify_ms": "not_run"}
+            for i in range(2)
+        ]
         result = {
-            "schema_version": "ista-incregpusta-performance-process/2.0.0",
+            "schema_version": "ista-incregpusta-performance-process/3.0.0",
             "debug_checks_enabled": False,
             "correctness_comparison": "not_run",
+            "diagnostics": "not_run",
+            "result_requirements": {
+                "timing_values": True, "summary": True, "timing_paths": True,
+                "file_artifacts": False,
+            },
             "input": {"node_slots": 2, "arc_slots": 1, "batches": 2},
             "requested_mode": "full_stage5",
             "executed_mode": "full_stage5",
-            "result": {"generation": 2, "native_final_rollback_completed": True},
-            "run": {"child_pid": 123, "batch_phase_timings": []},
+            "result": {"generation": 2, "lifecycle_cleanup_completed": True},
+            "run": {"child_pid": 123, "batch_phase_timings": phases},
         }
         with patch.object(smoke, "run_child", return_value=(result, 1.0)) as child:
             sample = smoke._run_sample(
@@ -42,6 +56,24 @@ class PerformanceModeTest(unittest.TestCase):
             10,
         )
         self.assertEqual(sample["correctness_comparison"], "not_run")
+
+    def test_consumer_interval_and_diagnostic_canaries(self):
+        phase = {
+            **dict.fromkeys(DURATION_KEYS, 0.0),
+            "generation_before": 0, "generation_after": 1,
+            "session_step_ms": 1.0, "query_materialization_ms": 2.0,
+            "report_ms": 3.0, "consumer_step_ms": 6.5,
+            "invariant_ms": "not_run", "verify_ms": "not_run",
+        }
+        validate_batch_phase_timings([phase], 1, "sample", smoke.require, debug_checks=False)
+        for key, value in [
+            ("consumer_step_ms", 5.0), ("verify_ms", 0.0),
+            ("query_materialization_ms", float("nan")),
+        ]:
+            with self.subTest(key=key), self.assertRaises(smoke.ControllerError):
+                validate_batch_phase_timings(
+                    [{**phase, key: value}], 1, "sample", smoke.require, debug_checks=False,
+                )
 
     def test_on_build_is_rejected_before_creating_runs(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -30,7 +30,8 @@
 #include "../source/data_manager/DataManager.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "CsrSnapshotObservation.hpp"
-#include "IncrementalStaSession.hpp"
+#include "StaSessionTestSync.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "STAInterface.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "StaLifecycleGuard.hpp"
@@ -38,6 +39,11 @@
 #include "TimingGraphCsrAdapter.hpp"
 
 namespace ista {
+class StaCsrSessionContextTestAccess final
+{
+ public:
+  static bool hasLibraryModels(const StaCsrSessionContext& context) noexcept { return bool(context._library_models); }
+};
 class StaInterfaceLifecycleTestAccess final
 {
  public:
@@ -46,42 +52,9 @@ class StaInterfaceLifecycleTestAccess final
 }  // namespace ista
 namespace {
 using namespace ista;
-constexpr auto kWaitTimeout = std::chrono::seconds(5);
-[[noreturn]] void failTimeout(const std::string& operation)
-{
-  std::cerr << operation << " timed out\n";
-  std::quick_exit(2);
-}
-template <typename T>
-T await(std::future<T>& result, const std::string& operation)
-{
-  if (result.wait_for(kWaitTimeout) != std::future_status::ready)
-    failTimeout(operation);
-  return result.get();
-}
-class BoundedGate final
-{
- public:
-  void signal()
-  {
-    {
-      std::scoped_lock lock(_mutex);
-      _signaled = true;
-    }
-    _condition.notify_all();
-  }
-  void wait(const std::string& operation)
-  {
-    std::unique_lock lock(_mutex);
-    if (!_condition.wait_for(lock, kWaitTimeout, [this] { return _signaled; }))
-      failTimeout(operation);
-  }
-
- private:
-  std::mutex _mutex;
-  std::condition_variable _condition;
-  bool _signaled{false};
-};
+using ista::test::await;
+using ista::test::failTimeout;
+using ista::test::BoundedGate;
 void require(bool condition, const std::string& message)
 {
   if (!condition) {
@@ -93,101 +66,14 @@ csr::StaAnalysisContext validContext()
 {
   return {"slow", "25", "__no_rc_corner__"};
 }
-std::unique_ptr<csr::CsrSnapshotObservation> makeObservation(std::uint64_t token, csr::CsrSnapshotState state)
-{
-  auto observation = std::make_unique<csr::CsrSnapshotObservation>();
-  observation->state = state;
-  observation->identity.session_token = token;
-  observation->identity.topology_fingerprint.assign(64, 'a');
-  observation->identity.clock_constraint_fingerprint.assign(64, 'b');
-  observation->identity.library_fingerprint.assign(64, 'c');
-  observation->identity.corner_fingerprint.assign(64, 'd');
-  observation->identity.parasitic_fingerprint.assign(64, 'e');
-  observation->identity.timing_input_fingerprint.assign(64, 'f');
-  return observation;
-}
-class FakeOperations final : public StaSessionOperations
-{
- public:
-  StaStatus initialize(std::uint64_t token, std::map<std::string, std::any>&) override
-  {
-    ++initialize_calls;
-    initialize_token = token;
-    return initialize_status;
-  }
-  StaStatus runFullBaseline(std::uint64_t token, StaCsrSessionContext* context) override
-  {
-    ++run_calls;
-    run_token = token;
-    run_context_was_null = context == nullptr;
-    if (context != nullptr) {
-      require(context->token() == token, "fake run received a foreign context");
-      active = makeObservation(token, csr::CsrSnapshotState::kReady);
-    }
-    if (reentrant_session != nullptr)
-      reentrant_close_status = reentrant_session->close();
-    return run_status;
-  }
-  StaStatus close(std::uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* released_out) override
-  {
-    ++close_calls;
-    close_token = token;
-    if (context != nullptr) {
-      require(context->token() == token, "fake close received a foreign context");
-      require(released_out != nullptr && !*released_out, "fake close received an invalid handoff out parameter");
-      if (active) {
-        auto released = std::make_unique<csr::CsrSnapshotObservation>(*active);
-        released->state = csr::CsrSnapshotState::kReleased;
-        *released_out = std::move(released);
-      }
-    }
-    if (throw_close_after_handoff)
-      throw std::runtime_error("injected close throw after handoff");
-    return close_status;
-  }
-  StaStatus copyObservation(std::uint64_t token, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* detached_out) override
-  {
-    ++copy_calls;
-    require(context != nullptr && context->token() == token, "fake copy received a foreign or null context");
-    require(detached_out != nullptr && !*detached_out, "fake copy received an invalid out parameter");
-    if (block_copy) {
-      require(copy_entered != nullptr && copy_release != nullptr, "blocking copy gates were not installed");
-      copy_entered->signal();
-      copy_release->wait("blocking copy release");
-    }
-    if (active)
-      *detached_out = std::make_unique<csr::CsrSnapshotObservation>(*active);
-    return copy_status;
-  }
-  StaCsrReferenceAttempt computeCsrReferenceForTesting(std::uint64_t, StaCsrSessionContext*) override { return {.value = StaCsrSessionOperationFailure{}}; }
-  StaCsrScatterAttempt scatterCsrTimingResultForTesting(std::uint64_t, StaCsrSessionContext*, const csr::CsrTimingResult&) override
-  {
-    return {.value = csr::CsrTimingResultScatterAttempt{}};
-  }
-  int initialize_calls{0};
-  int run_calls{0};
-  int close_calls{0};
-  int copy_calls{0};
-  std::uint64_t initialize_token{0};
-  std::uint64_t run_token{0};
-  std::uint64_t close_token{0};
-  bool run_context_was_null{false};
-  bool throw_close_after_handoff{false};
-  bool block_copy{false};
-  BoundedGate* copy_entered{nullptr};
-  BoundedGate* copy_release{nullptr};
-  IncrementalStaSession* reentrant_session{nullptr};
-  std::optional<StaStatus> reentrant_close_status;
-  std::unique_ptr<csr::CsrSnapshotObservation> active;
-  StaStatus initialize_status = StaStatus::success(StaSessionState::kInitialized);
-  StaStatus run_status = StaStatus::success(StaSessionState::kBaselineExecuted);
-  StaStatus close_status = StaStatus::success(StaSessionState::kClosed);
-  StaStatus copy_status = StaStatus::success(StaSessionState::kBaselineExecuted);
-};
 class GuardOperations final : public StaProductionLifecycleOperations
 {
  public:
-  StaOperationResult initialize(std::map<std::string, std::any>&) override { return StaOperationResult::success(); }
+  StaOperationResult initialize(std::map<std::string, std::any>&) override
+  {
+    DataManager::initInst();
+    return StaOperationResult::success();
+  }
   StaOperationResult runFullBaseline() override { return invoke(run_hook, full_calls); }
   StaOperationResult extractLib() override { return StaOperationResult::success(); }
   StaOperationResult updateTiming() override { return StaOperationResult::success(); }
@@ -227,15 +113,7 @@ STAInterface& install(GuardOperations& operations)
   return interface;
 }
 
-StaExecutionRequest fullRequest()
-{
-  return {StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError};
-}
 
-StaExecutionRequest incrementalRequest()
-{
-  return {StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError};
-}
 
 void testSingletonLifetime()
 {
@@ -320,112 +198,10 @@ void testOwnerLease()
   require(lease.isNone() && !lease.isQuarantined(), "successful close did not release the lease");
 }
 
-void testFullSessionAndRetry()
-{
-  auto operations = std::make_unique<FakeOperations>();
-  FakeOperations* fake = operations.get();
-  IncrementalStaSession session(fullRequest(), std::move(operations));
 
-  const StaStatus invalid = session.initialize(csr::StaAnalysisContext{}, {});
-  require(invalid.code == StaSessionStatusCode::kInitFailed && session.state() == StaSessionState::kCreated,
-          "invalid context did not fail preflight in created state");
-  require(!session.sessionToken().has_value() && fake->initialize_calls == 0, "invalid context allocated a token or called native initialize");
 
-  require(session.initialize(validContext(), {}).ok(), "valid retry after context failure did not initialize");
-  const auto token = session.sessionToken();
-  require(token.has_value() && *token != 0 && fake->initialize_token == *token, "initialized session token was not propagated");
-  require(!session.snapshotObservation(), "full session exposed an observation before run");
 
-  const StaExecutionResult result = session.runFullBaseline();
-  require(result.ok() && fake->run_calls == 1 && fake->run_context_was_null, "full baseline did not use the null-context path");
-  require(!session.snapshotObservation(), "full session exposed an observation after run");
-  require(session.close().ok() && session.close().ok(), "full session close was not idempotent");
-  require(fake->close_calls == 1 && fake->close_token == *token, "full session close count or token drifted");
-  require(session.sessionToken() == token, "readonly token changed after close");
-}
 
-void testIncrementalObservationLifecycle()
-{
-  auto operations = std::make_unique<FakeOperations>();
-  FakeOperations* fake = operations.get();
-  IncrementalStaSession session(incrementalRequest(), std::move(operations));
-  require(session.initialize(validContext(), {}).ok(), "incremental initialize failed");
-  const std::uint64_t token = *session.sessionToken();
-  require(session.runFullBaseline().ok(), "incremental baseline failed");
-
-  auto ready = session.snapshotObservation();
-  require(ready && ready->state == csr::CsrSnapshotState::kReady && ready->identity.session_token == token,
-          "incremental getter did not return the ready observation");
-  ready->identity.topology_fingerprint = "mutated-detached-value";
-  auto stable = session.snapshotObservation();
-  require(stable && stable->identity.topology_fingerprint == std::string(64, 'a'), "detached observation mutation leaked into session state");
-
-  require(session.close().ok(), "incremental close failed");
-  auto released = session.snapshotObservation();
-  require(released && released->state == csr::CsrSnapshotState::kReleased && released->identity.session_token == token,
-          "closed getter did not return the released cache");
-  released->state = csr::CsrSnapshotState::kReady;
-  require(session.snapshotObservation()->state == csr::CsrSnapshotState::kReleased, "released getter did not return a detached copy");
-  require(session.close().ok() && fake->close_calls == 1, "incremental double close retried cleanup");
-}
-
-void testHandoffSurvivesCloseThrow()
-{
-  auto operations = std::make_unique<FakeOperations>();
-  FakeOperations* fake = operations.get();
-  fake->throw_close_after_handoff = true;
-  IncrementalStaSession session(incrementalRequest(), std::move(operations));
-  require(session.initialize(validContext(), {}).ok() && session.runFullBaseline().ok(), "handoff fixture setup failed");
-
-  const StaStatus close = session.close();
-  require(close.code == StaSessionStatusCode::kCleanupFailed && session.state() == StaSessionState::kClosed,
-          "throwing close did not report cleanup failure and close the session");
-  auto released = session.snapshotObservation();
-  require(released && released->state == csr::CsrSnapshotState::kReleased, "close throw lost the detached released observation");
-  require(session.close().ok() && fake->close_calls == 1, "close throw was retried");
-}
-
-void testSameSessionReentrancy()
-{
-  auto operations = std::make_unique<FakeOperations>();
-  FakeOperations* fake = operations.get();
-  IncrementalStaSession session(fullRequest(), std::move(operations));
-  fake->reentrant_session = &session;
-  require(session.initialize(validContext(), {}).ok(), "reentrant fixture initialize failed");
-  require(session.runFullBaseline().ok(), "outer baseline failed");
-  require(fake->reentrant_close_status.has_value() && fake->reentrant_close_status->code == StaSessionStatusCode::kInvalidState,
-          "same-session reentrant close was not rejected");
-  require(fake->close_calls == 0, "reentrant close entered native operations");
-  require(session.close().ok() && fake->close_calls == 1, "normal close after reentrant rejection failed");
-}
-
-void testGetterVersusClose()
-{
-  auto operations = std::make_unique<FakeOperations>();
-  FakeOperations* fake = operations.get();
-  IncrementalStaSession session(incrementalRequest(), std::move(operations));
-  require(session.initialize(validContext(), {}).ok() && session.runFullBaseline().ok(), "concurrency fixture setup failed");
-
-  BoundedGate copy_entered;
-  BoundedGate copy_release;
-  fake->block_copy = true;
-  fake->copy_entered = &copy_entered;
-  fake->copy_release = &copy_release;
-
-  auto reader = std::async(std::launch::async, [&] { return session.snapshotObservation(); });
-  copy_entered.wait("getter entry");
-
-  auto closer = std::async(std::launch::async, [&] { return session.close(); });
-  copy_release.signal();
-  auto read_result = await(reader, "getter versus close read");
-  const StaStatus close_result = await(closer, "getter versus close cleanup");
-
-  require(read_result && read_result->state == csr::CsrSnapshotState::kReady, "getter did not return a complete pre-close observation");
-  require(close_result.ok(), "concurrent close failed");
-  auto released = session.snapshotObservation();
-  require(released && released->state == csr::CsrSnapshotState::kReleased, "post-close getter did not return released cache");
-  require(fake->close_calls == 1, "concurrent close executed cleanup more than once");
-}
 void requireInvalid(const StaStatus& status, const std::string& operation)
 {
   require(status.code == StaSessionStatusCode::kInvalidState, operation + " did not return invalid-state");
@@ -434,6 +210,27 @@ void requireInvalid(const StaCsrScatterAttempt& attempt, const std::string& oper
 {
   require(attempt.value.scatter_result.code == csr::CsrScatterCode::kInvalidState && attempt.value.scatter_result.writes_applied == 0,
           operation + " did not return zero-write invalid_state");
+}
+void testLibraryModelsClose()
+{
+  GuardOperations operations;
+  STAInterface& interface = install(operations);
+  constexpr std::uint64_t token = 697;
+  StaCsrSessionContext owner(validContext(), token), foreign(validContext(), token + 1);
+  std::map<std::string, std::any> config;
+  require(interface.initializeSession(token, config).ok(), "model owner initialize");
+  auto* models = &owner.libraryModels(STADM.getDatabase());
+  require(StaCsrSessionContextTestAccess::hasLibraryModels(owner), "session did not retain its models");
+  std::unique_ptr<csr::CsrSnapshotObservation> released;
+  requireInvalid(interface.closeSession(token, &foreign, &released), "foreign model owner close");
+  require(&owner.libraryModels(STADM.getDatabase()) == models, "foreign close discarded the active model owner");
+  operations.close_hook = [&] {
+    require(!StaCsrSessionContextTestAccess::hasLibraryModels(owner), "native close retained its library model owner");
+  };
+  require(interface.closeSession(token, &owner, &released).ok(), "model owner close");
+  require(!released && !StaCsrSessionContextTestAccess::hasLibraryModels(owner), "close retained unrequested state");
+  require(!interface.closeSession(token, &owner, &released).ok() && operations.close_calls == 1, "closed owner repeated native cleanup");
+  STAInterface::destroyInst();
 }
 void testForeignContextAndSameTokenScatter()
 {
@@ -446,6 +243,18 @@ void testForeignContextAndSameTokenScatter()
   std::map<std::string, std::any> config;
   require(interface.initializeSession(kOwner, config).ok() && interface.runSessionBaseline(kOwner, &owner).ok(), "authority fixture capture failed");
   auto reference = interface.computeSessionCsrReferenceForTesting(kOwner, &owner);
+  if constexpr (!incregpusta_debug_checks_enabled) {
+    const auto* failure = std::get_if<StaCsrSessionOperationFailure>(&reference.value);
+    require(failure && failure->writes_applied == 0, "OFF diagnostic propagation executed");
+    requireInvalid(interface.runSessionBaseline(kOwner, &foreign), "OFF foreign-context run");
+    std::unique_ptr<csr::CsrSnapshotObservation> out;
+    requireInvalid(interface.copySessionCsrSnapshotObservation(kOwner, &foreign, &out), "OFF foreign-context copy");
+    requireInvalid(interface.closeSession(kOwner, &foreign, &out), "OFF foreign-context close");
+    require(interface.closeSession(kOwner, &owner, &out).ok() && !out && operations.close_calls == 1,
+            "OFF rejection changed ownership or created a close observation");
+    STAInterface::destroyInst();
+    return;
+  }
   auto* computation = std::get_if<csr::CsrComputationResult>(&reference.value);
   auto* timing = computation ? std::get_if<csr::CsrTimingResult>(&computation->outcome) : nullptr;
   require(timing, "authority fixture did not produce timing");
@@ -680,15 +489,13 @@ int main()
     testSingletonLifetime();
     testTokenAllocator();
     testOwnerLease();
-    testFullSessionAndRetry();
-    testIncrementalObservationLifecycle();
-    testHandoffSurvivesCloseThrow();
-    testSameSessionReentrancy();
-    testGetterVersusClose();
+    testLibraryModelsClose();
     testForeignContextAndSameTokenScatter();
     testQueuedAuthorityAndDestroy();
     testRecursiveCallbacks();
     testExceptionReleasesAuthority();
+    DataManager::destroyInst();
+    std::cout << "STA session lifecycle contracts passed\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

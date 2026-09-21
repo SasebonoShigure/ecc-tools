@@ -182,6 +182,32 @@ def _run_sequential_canary(compare: Callable, first_difference: Callable,
                          require, error_type, f"deferred-{field}-tamper")
 
 
+
+def _run_interleaved_arc_canary(compare: Callable, first_difference: Callable,
+                                require: Callable,
+                                error_type: type[Exception]) -> None:
+    graph, timing = _equal_cost_fixture(1)
+    graph["active_arcs"].insert(1, {
+        "key": {"canary_arc": "s0-s1"}, "source": _key("s0"),
+        "sink": _key("s1"), "eligibility": {"data_arrival": True},
+    })
+    arcs = timing["arcs"]
+    arcs["delays"] = _soa([1, 1, 1],
+                          [_number(1.0), _number(-2.0), _number(1.0)])
+    for field in ("input_output_delays", "graph_delays"):
+        arcs[field]["presence"][8:8] = [1] + [0] * 7
+        arcs[field]["values"][8:8] = [_number(-2.0)] * 8
+    # First incoming arc uses graph delay; the final global arc uses IO fallback.
+    arcs["input_output_delays"]["values"][0] = _number(9.0)
+    arcs["graph_delays"]["presence"][16] = 0
+    compare(graph, timing, copy.deepcopy(timing), "interleaved-global-arcs",
+            first_difference, require)
+    bad = copy.deepcopy(timing)
+    bad["arcs"]["graph_delays"]["presence"][23] = 2
+    _expect_rejected(graph, bad, bad, compare, first_difference,
+                     require, error_type, "unvisited-delay-lane-presence")
+
+
 def run_equal_cost_canary(compare: Callable, first_difference: Callable,
                           require: Callable,
                           error_type: type[Exception]) -> dict[str, int]:
@@ -201,4 +227,5 @@ def run_equal_cost_canary(compare: Callable, first_difference: Callable,
     _expect_rejected(graph, left, bad_path, compare, first_difference,
                      require, error_type, "path-endpoint-tamper")
     _run_sequential_canary(compare, first_difference, require, error_type)
+    _run_interleaved_arc_canary(compare, first_difference, require, error_type)
     return evidence

@@ -20,6 +20,7 @@ namespace ista {
 class Database;
 namespace csr {
 struct CsrReferenceInput;
+namespace detail { class NativeLibraryModels; }
 }
 namespace timing_edit {
 class NativeExecutionAuthority;
@@ -34,6 +35,7 @@ struct DualCsrTraceContext
   const csr::CsrReferenceInput& baseline_reference_input;
   const timing_edit::NativeExecutionAuthority& authority;
   std::uint64_t session_token{0};
+  csr::detail::NativeLibraryModels& models;
 };
 
 struct DualCsrBatchPhaseTimings
@@ -52,6 +54,10 @@ struct DualCsrBatchPhaseTimings
   double invariant_ms{0.0};
   double verify_ms{0.0};
   double publish_ms{0.0};
+  double session_step_ms{0.0};
+  double query_materialization_ms{0.0};
+  double report_ms{0.0};
+  double consumer_step_ms{0.0};
 
   friend bool operator==(const DualCsrBatchPhaseTimings&,
                          const DualCsrBatchPhaseTimings&) = default;
@@ -78,7 +84,7 @@ struct DualCsrWorkloadResult
   std::uint64_t arc_slots{0};
   std::uint64_t fallback_count{0};
   LevelizationExecutionMode executed_mode{LevelizationExecutionMode::kFullStage5};
-  bool native_final_rollback_completed{false};
+  bool lifecycle_cleanup_completed{false};
 };
 
 struct DualCsrTraceRunResult

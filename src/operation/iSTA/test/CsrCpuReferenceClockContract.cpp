@@ -17,13 +17,15 @@ void runCpuReferenceClockContracts()
   input.clock_owner_by_node.assign(input.nodes.size(), std::string{"clk"});
   for (auto& arc : input.arcs)
     arc.eligibility.clock = true;
-  auto& child = input.arcs[1].transfer.children.front();
+  auto children = input.arcs[1].transfer.children();
+  auto& child = children.front();
   child.time_unit_scale = 1.0;
   child.capacitance_unit_scale = 1.0;
   for (auto& table : child.delay_tables)
     std::ranges::fill(table.values, 2.0);
   for (auto& table : child.slew_tables)
     std::ranges::fill(table.values, 3.0);
+  input.arcs[1].transfer.setChildren(children);
   FlatCsrEdgeView edges(input);
   FlatTimingPayloadView payloads(input);
   const auto levels = replayFifoLevelization(edges, payloads);
@@ -60,6 +62,7 @@ void runCpuReferenceClockContracts()
 
   for (auto& table : child.delay_tables)
     std::ranges::fill(table.values, std::numeric_limits<double>::max());
+  input.arcs[1].transfer.setChildren(children);
   FlatCsrEdgeView overflow_edges(input);
   CsrCpuReferenceWorkState overflow_work;
   requireCpuReference(initializeCsrCpuReferenceResult(payloads, levels, overflow_work) == CsrCpuReferenceStageStatus::kSuccess, "numeric case seed failed");

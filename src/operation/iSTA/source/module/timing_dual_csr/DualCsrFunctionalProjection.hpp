@@ -300,7 +300,6 @@ struct DualCsrTimingSemanticProjection
   std::vector<std::uint64_t> level_offsets;
   std::vector<csr::NodeKey> level_nodes;
   std::vector<std::uint64_t> node_to_level;
-  std::vector<csr::NodeKey> timing_order;
   DualCsrProjectedNodeTiming nodes;
   DualCsrProjectedClockTiming effective_clock;
   DualCsrProjectedClockTiming physical_clock;

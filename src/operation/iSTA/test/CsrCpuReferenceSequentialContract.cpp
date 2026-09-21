@@ -1,3 +1,4 @@
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <limits>
 
@@ -60,7 +61,7 @@ CsrReferenceInput sequentialFixture()
     child.delay_tables[transition] = {true, TableVariable::kOutputCapacitance, TableVariable::kNone, {{0.0, 10.0}}, {1.0, 11.0}};
     child.slew_tables[transition] = {true, TableVariable::kInputTransition, TableVariable::kNone, {{0.0, 10.0}}, {0.5, 0.5}};
   }
-  ctq.transfer.children.push_back(child);
+  ctq.transfer.setChildren({child});
   cell.cell_arcs.push_back(ctq);
   input.referenced_library_cells.push_back(cell);
   ArcRecord net;
@@ -183,7 +184,7 @@ void runCpuReferenceCheckContracts()
   child.signature.trigger_transition = Transition::kRise;
   for (auto& table : child.check_tables)
     table = {true, TableVariable::kConstrainedTransition, TableVariable::kInputTransition, {{0.0, 100.0}, {0.0, 100.0}}, {0.0, 100.0, 200.0, 300.0}};
-  check.children = {child};
+  check.setChildren({child});
   TimingCheckEndpointModel endpoint;
   endpoint.instance_name = "ff";
   endpoint.check_kind = TimingCheckKind::kSetup;
@@ -221,9 +222,9 @@ void runCpuReferenceCheckContracts()
 
   auto second = check;
   second.kind = TimingCheckKind::kRecovery;
-  second.children.clear();
+  second.setChildren({});
   second.check_time = 2.0;
-  check.children[0].check_tables[1] = {};
+  ista::csr::test::mutateChildren(check, [&](auto& children) { children[0].check_tables[1] = {}; });
   input.referenced_library_cells[0].timing_checks.push_back(second);
   endpoint.referenced_check_ordinal = 2;
   endpoint.check_kind = TimingCheckKind::kRecovery;
@@ -236,8 +237,8 @@ void runCpuReferenceCheckContracts()
   requireCpuReference(seedCsrCpuSequentialRequired(payloads, work) == CsrCpuReferenceStageStatus::kSuccess, "recovery fallback failed");
   requireCpuReference(work.result.nodes.requireds.values[3] == 101.0, "max required must use recovery rather than hold");
   auto& recovery = input.referenced_library_cells[0].timing_checks[2];
-  recovery.children = {child};
-  recovery.children[0].time_unit_scale = std::numeric_limits<double>::max();
+  recovery.setChildren({child});
+  ista::csr::test::mutateChildren(recovery, [&](auto& children) { children[0].time_unit_scale = std::numeric_limits<double>::max(); });
   requireCpuReference(seedCsrCpuSequentialRequired(payloads, work) == CsrCpuReferenceStageStatus::kNumericFailure,
                       "check time-axis overflow was not rejected");
 }

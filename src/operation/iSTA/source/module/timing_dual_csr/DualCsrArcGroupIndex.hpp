@@ -122,10 +122,6 @@ struct DualCsrArcGroupIndexAttempt
 
 // Applies only the descriptor's typed append/deactivate/rekey delta. It does
 // not inspect a resolver or native graph.
-[[nodiscard]] DualCsrArcGroupIndexAttempt stageDualCsrArcGroupIndex(
-    const DualCsrState& committed_graph,
-    const DualCsrArcGroupIndex& committed_index,
-    const DualCsrState& staged_graph,
-    const DualCsrBatchDescriptor& descriptor);
+
 
 }  // namespace ista::timing_dual_csr

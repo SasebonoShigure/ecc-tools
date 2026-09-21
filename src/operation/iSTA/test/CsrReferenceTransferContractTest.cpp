@@ -3,6 +3,7 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -139,7 +140,7 @@ CsrReferenceInputRawProjection complexRawKatProjection()
 }
 
 constexpr std::string_view kComplexRawKatHex
-    = "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f312e302e3000000000000000000000000000000001000000000000000175000000000000000443"
+    = "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f322e302e3000000000000000000000000000000001000000000000000175000000000000000443"
       "454c4c010000000000000000000000000000000000000000000000000003753a5100000000000000010000000000000003753a58000000000000000000000000000000000000000000000000"
       "010000000000000001630000000000000001650000000000000002000000000000000567686f7374000000000000000567686f737400c00000000000000000000000000000000000bff00000"
       "000000000000000000000000000000000000000000000000000000000000000000000000010000000000000004736c6f77000000000000000443454c4c010100000000000000000000000000"
@@ -201,7 +202,7 @@ void decodeComplexRawLiteral(const std::vector<std::uint8_t>& bytes)
 {
   Reader reader(bytes);
   const auto count = [&](std::uint64_t expected, const char* field) { require(reader.u64() == expected, std::string{"raw KAT count: "} + field); };
-  require(reader.string() == "ista-csr-reference-input-raw/1.0.0", "raw KAT domain");
+  require(reader.string() == "ista-csr-reference-input-raw/2.0.0", "raw KAT domain");
   count(0, "nodes");
   count(1, "instances");
   require(reader.string() == "u" && reader.string() == "CELL", "raw KAT instance names");
@@ -273,7 +274,7 @@ void testRawKatsAndMutations()
   const CsrReferenceInputRawProjection empty;
   const auto empty_bytes = canonicalIndependentReferenceInputRawBytes(empty);
   constexpr std::string_view kEmptyHex
-      = "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f312e30"
+      = "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f322e30"
         "2e300000000000000000000000000000000000000000000000000000000000000000000000000000"
         "0000000000000000000000000000000000000000000000000000000000000000000000";
   require(empty_bytes.size() == 115 && hex(empty_bytes) == kEmptyHex, "empty raw KAT");
@@ -423,8 +424,8 @@ void testTransfersTablesAndChangedSets()
   auto& library = c2qLibraryTransfer(baseline);
   require(graph == library, "graph/library C2Q transfer mismatch");
   require(graph.delay == 0.12 && graph.delay_min == 0.08 && graph.delay_max == 0.18 && graph.is_clock_arc, "C2Q scalar transfer mismatch");
-  require(graph.children.size() == 1, "C2Q child count");
-  const auto& child = graph.children[0];
+  require(graph.children().size() == 1, "C2Q child count");
+  const auto& child = graph.children()[0];
   require(child.signature.library_name == "slow.lib" && child.signature.arc_index == 11 && child.signature.sense == TimingSense::kPositiveUnate
               && child.signature.trigger_transition == Transition::kFall && child.signature.check_transition == Transition::kFall
               && child.signature.sdf_condition == "ENABLE",
@@ -436,14 +437,14 @@ void testTransfersTablesAndChangedSets()
   require(child.delay_tables[0].present && child.delay_tables[0].axes.empty() && child.delay_tables[0].values.empty(), "present-empty table collapsed");
   require(!child.delay_tables[1].present, "missing table fabricated");
   require(child.slew_tables[1].present && child.slew_tables[1].axes.empty() && child.slew_tables[1].values == std::vector{0.07}, "0D table mismatch");
-  const auto& data_table = baseline.referenced_library_cells[0].cell_arcs[1].transfer.children[0].delay_tables[0];
+  const auto& data_table = baseline.referenced_library_cells[0].cell_arcs[1].transfer.children()[0].delay_tables[0];
   require(data_table.present && data_table.axes.size() == 2 && data_table.values.size() == 4, "2D table mismatch");
   const auto& check = baseline.referenced_library_cells[0].timing_checks[0];
   require(check.kind == TimingCheckKind::kSetup && check.check_time == 0.15 && check.clock_transition == Transition::kRise, "timing check scalar mismatch");
-  require(check.children[0].check_tables[0].present && check.children[0].check_tables[0].axes.size() == 1, "1D timing-check table mismatch");
+  require(check.children()[0].check_tables[0].present && check.children()[0].check_tables[0].axes.size() == 1, "1D timing-check table mismatch");
   for (const auto& arc : baseline.arcs)
     if (arc.kind == ArcKind::kNet)
-      require(arc.transfer == CellTransferModel{0.0, 0.0, 0.0, false, false, false, {}}, "net transfer is not exact zero");
+      require(arc.transfer == [] { CellTransferModel model; model.delay = model.delay_min = model.delay_max = 0.0; return model; }(), "net transfer is not exact zero");
 
   const auto verify = [&](std::uint8_t expected, const char* name, auto mutate) {
     CsrReferenceInput changed = baseline;
@@ -458,7 +459,8 @@ void testTransfersTablesAndChangedSets()
   verify(4 | 32, "clear/preset", [](auto& input) { c2qGraphTransfer(input).is_clear_or_preset = c2qLibraryTransfer(input).is_clear_or_preset = true; });
   verify(4 | 32, "scales/derate/thresholds", [](auto& input) {
     for (CellTransferModel* transfer : {&c2qGraphTransfer(input), &c2qLibraryTransfer(input)}) {
-      auto& value = transfer->children[0];
+      ista::csr::test::mutateChildren(*transfer, [&](auto& children) {
+      auto& value = children[0];
       value.time_unit_scale = 2.0;
       value.capacitance_unit_scale = 3.0;
       value.slew_derate = 0.8;
@@ -466,13 +468,16 @@ void testTransfersTablesAndChangedSets()
       value.slew_upper_threshold_pct[1] = 0.8;
       value.input_threshold_pct[0] = 0.4;
       value.output_threshold_pct[1] = 0.6;
+    });
     }
   });
   verify(4 | 32, "table axes/values", [](auto& input) {
     for (CellTransferModel* transfer : {&c2qGraphTransfer(input), &c2qLibraryTransfer(input)}) {
-      auto& table = transfer->children[0].delay_tables[0];
+      ista::csr::test::mutateChildren(*transfer, [&](auto& children) {
+      auto& table = children[0].delay_tables[0];
       table.axes = {{0.1}};
       table.values = {0.2};
+    });
     }
   });
   verify(1 | 4 | 32, "signature sense/trigger/check/condition/table", [](auto& input) {
@@ -485,8 +490,8 @@ void testTransfersTablesAndChangedSets()
       value.sdf_condition = "ALT";
       value.delay_tables[0] = {true, TableVariable::kInputTransition, TableVariable::kNone};
     };
-    mutate(c2qGraphTransfer(input).children[0].signature);
-    mutate(c2qLibraryTransfer(input).children[0].signature);
+    ista::csr::test::mutateChildren(c2qGraphTransfer(input), [&](auto& children) { mutate(children[0].signature); });
+    ista::csr::test::mutateChildren(c2qLibraryTransfer(input), [&](auto& children) { mutate(children[0].signature); });
     for (auto& arc : input.arcs)
       if (arc.key.base.library_source_port == "CK")
         mutate(arc.key.base.library_arcs[0]);
@@ -499,14 +504,14 @@ void testTransfersTablesAndChangedSets()
     value.kind = TimingCheckKind::kHold;
     value.check_time = 0.25;
     value.clock_transition = Transition::kFall;
-    value.children[0].check_tables[0].values[0] = 0.25;
+    ista::csr::test::mutateChildren(value, [&](auto& children) { children[0].check_tables[0].values[0] = 0.25; });
   });
   verify(8 | 32, "corner", [](auto& input) { input.analysis_context.liberty_corner += "x"; });
 
   auto empty_child_fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
   empty_child_fixture.database().get_timing_library().get_cell_map().at("DFF_X1").get_cell_arc_list()[0].get_timing_arc_list().clear();
   const CsrReferenceInput empty_child = exportInput(empty_child_fixture, 22);
-  require(c2qLibraryTransfer(empty_child).children.empty() && c2qLibraryTransfer(empty_child).delay == 0.12,
+  require(c2qLibraryTransfer(empty_child).children().empty() && c2qLibraryTransfer(empty_child).delay == 0.12,
           "empty child did not preserve transfer fallback scalars");
 }
 

@@ -1,3 +1,4 @@
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #pragma once
@@ -8,12 +9,11 @@
 #include <utility>
 
 #include "DualCsrModeRecoveryReplay.hpp"
-#include "DualCsrNativeCandidateCarrierInternal.hpp"
+#include "NativeCandidateExecutor.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "NarrowTimingRecordReader.hpp"
 
 namespace ista::timing_dual_csr::test::recovery_support {
-using ::ista::timing_dual_csr::detail::DualCsrNativeCandidateCarrier;
 inline void require(bool condition, const std::string& message)
 {
   if (!condition)
@@ -25,34 +25,28 @@ class CumulativeBatchSource final
 {
  public:
   CumulativeBatchSource(
-      Database& baseline,
       const timing_edit::NativeExecutionAuthority& authority)
-      : _baseline(baseline), _authority(authority)
+      : _authority(authority)
   {
   }
 
   [[nodiscard]] VerifiedStructuredBatch mint(
-      const CommittedDualCsrAnalysisState& committed,
-      timing_edit::DesignEditPlan plan)
+      DualCsrTransactionCoordinator& coordinator,
+      timing_edit::EditBatch plan)
   {
+    const auto& committed = coordinator.committed();
+    commitPending(committed.generation);
     DualSemanticReadView committed_view(committed.graph);
     PendingStructuredBatch pending
-        = DualCsrStructuredBatchPreparer::prepare(
-            std::move(plan), committed.resolver, committed_view,
-            committed.graph, committed.identity,
-            committed.arc_group_index);
+        = coordinator.prepareBatch(std::move(plan));
 
-    timing_edit::NativeDatabaseCandidate candidate
-        = _installed ? DualCsrNativeCandidateCarrier::clone(*_installed) : DualCsrNativeCandidateCarrier::create(_baseline);
-    if (_installed) {
-      require(DualCsrNativeCandidateCarrier::rollback(*_installed), "cumulative source could not roll back prior candidate");
-      _installed.reset();
-    }
-    const auto translated = DualCsrNativeCandidateCarrier::apply(candidate, pending.preparedBatch(), pending.stagedResolver());
-    require(translated.applied(),
-            "cumulative source native apply was rejected");
-    _installed.emplace(DualCsrNativeCandidateCarrier::installAndExecute(_authority, std::move(candidate)));
-    CandidateBoundCapture capture = NarrowTimingRecordReader{}.read(
+    _installed.emplace(timing_edit::NativeEditTransaction::prepareFull(
+        _authority, pending.preparedBatch(), pending.stagedResolver()));
+    _pending_generation = pending.preparedBatch().targetGeneration();
+    timing_edit::NativeCandidateExecutor::executeFull(*_installed);
+
+    csr::detail::NativeLibraryModels models(_installed->database());
+    CandidateBoundCapture capture = NarrowTimingRecordReader{models}.read(
         _installed->database(), committed_view,
         committed.arc_group_index, pending.stagedResolver(),
         pending.preparedBatch(), pending.capturePlan());
@@ -83,9 +77,9 @@ class CumulativeBatchSource final
         return attempt;
       }
       VerifiedStructuredBatch verified = mint(
-          request.exact_recovered_before,
+          request.coordinator,
           request.persisted_semantic_batch);
-      if (verified.descriptor() != request.persisted_descriptor) {
+      if (request.diagnostic_descriptor && verified.descriptor() != *request.diagnostic_descriptor) {
         attempt.detail
             = "rebuilt descriptor differs from typed-rebound persistence";
         return attempt;
@@ -98,29 +92,41 @@ class CumulativeBatchSource final
     }
   }
 
-  [[nodiscard]] bool finish() noexcept
+  // Recovery's coordinator is local to replay; retain only the pending
+  // generation, then confirm publication through the next call or its result.
+  void commitPending(timing_edit::TransactionGeneration generation)
+  {
+    if (!_installed)
+      return;
+    require(_installed->active() && generation == _pending_generation,
+            "native batch has no matching committed CSR generation");
+    _installed->commit();
+    _installed.reset();
+  }
+
+  [[nodiscard]] bool rollback() noexcept
   {
     if (!_installed)
       return true;
-    const bool rolled_back = DualCsrNativeCandidateCarrier::rollback(*_installed);
+    const bool restored = _installed->rollback();
     _installed.reset();
-    return rolled_back;
+    return restored;
   }
 
  private:
-  Database& _baseline;
   const timing_edit::NativeExecutionAuthority& _authority;
-  std::optional<timing_edit::InstalledNativeDatabase> _installed;
+  std::optional<timing_edit::NativeEditTransaction> _installed;
+  timing_edit::TransactionGeneration _pending_generation;
   std::size_t _mint_count{0};
 };
 
 inline DualCsrVerifiedStage stage(
-    const CommittedDualCsrAnalysisState& committed,
+    DualCsrTransactionCoordinator& coordinator,
     VerifiedStructuredBatch verified, LevelizationExecutionMode mode)
 {
   if (mode == LevelizationExecutionMode::kFullStage5) {
     auto attempt = makeStagedDualCsrAnalysisState(
-        committed, std::move(verified));
+        coordinator, std::move(verified));
     if (!attempt.success()) {
       std::string detail;
       for (const auto& violation : attempt.violations)
@@ -130,7 +136,7 @@ inline DualCsrVerifiedStage stage(
     return std::move(*attempt.staged);
   }
   auto attempt = makeMixedLevelizedDualCsrAnalysisState(
-      committed, std::move(verified));
+      coordinator, std::move(verified));
   auto* staged = std::get_if<DualCsrVerifiedStage>(&attempt);
   require(staged != nullptr, "focused mixed stage was rejected");
   return std::move(*staged);
@@ -140,4 +146,5 @@ inline DualCsrVerifiedStage stage(
 
 namespace ista::timing_dual_csr::test {
 void realReplayRecovery(const char* replay, const char* output);
+void realReplayConsumer(const char* replay, const char* output, const char* mode, const char* prefix);
 }

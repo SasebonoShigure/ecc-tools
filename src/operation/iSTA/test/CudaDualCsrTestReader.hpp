@@ -8,6 +8,7 @@ class CudaDualCsrTestReader final
 {
  public:
   static nlohmann::json capture(const CudaDualCsrSession& session);
+  static const CsrTimingValues& materializeWithLevelOwnershipCheck(CudaDualCsrSession& session);
   static void omitAuxAndRecompute(CudaDualCsrSession& candidate);
 };
 }  // namespace ista::csr

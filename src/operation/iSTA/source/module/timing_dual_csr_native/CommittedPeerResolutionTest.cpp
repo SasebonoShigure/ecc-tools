@@ -111,7 +111,7 @@ void checkCommittedPeerFallbackIsExact()
 
   const std::string peer_name{"out"};
   const csr::NodeRecord& peer = nodeNamed(committed_state, peer_name);
-  auto resolved = detail::resolvePlannedNodeId(
+  auto resolved = ista::timing_dual_csr::detail::resolvePlannedNodeId(
       committed, staged, empty_plan, peer.key);
   const auto* id = std::get_if<csr::NodeId>(&resolved);
   require(id != nullptr && *id == peer.id
@@ -125,7 +125,7 @@ void checkCommittedPeerFallbackIsExact()
   require(shifted_binding != shifted.nodeBindings().end()
               && shifted_binding->second.slot.value() != peer.id.value(),
           "slot-mismatch fixture did not shift the committed peer");
-  resolved = detail::resolvePlannedNodeId(
+  resolved = ista::timing_dual_csr::detail::resolvePlannedNodeId(
       committed, shifted, empty_plan, peer.key);
   const auto* error = std::get_if<NarrowCaptureError>(&resolved);
   require(error != nullptr
@@ -134,7 +134,7 @@ void checkCommittedPeerFallbackIsExact()
 
   csr::NodeKey unknown = peer.key;
   unknown.full_name = "unknown_post_candidate_peer";
-  resolved = detail::resolvePlannedNodeId(
+  resolved = ista::timing_dual_csr::detail::resolvePlannedNodeId(
       committed, staged, empty_plan, unknown);
   error = std::get_if<NarrowCaptureError>(&resolved);
   require(error != nullptr

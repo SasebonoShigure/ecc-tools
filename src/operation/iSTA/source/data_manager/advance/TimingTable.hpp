@@ -26,6 +26,7 @@ class TimingTable
  public:
   TimingTable() = default;
   ~TimingTable() = default;
+  friend bool operator==(const TimingTable&, const TimingTable&) = default;
   // getter
   TimingTableVariableType get_variable_type1() const { return _variable_type1; }
   TimingTableVariableType get_variable_type2() const { return _variable_type2; }

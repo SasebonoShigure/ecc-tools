@@ -103,25 +103,6 @@ StaCsrScatterAttempt StaTimingEditSessionProbeAccess::scatterForTesting(
   return context.scatter(database, result);
 }
 
-timing_edit::SessionStateSignal StaTimingEditSessionProbeAccess::stateSignal(IncrementalStaSession& session) noexcept
-{
-  return timing_edit::SessionStateSignal{&session, &StaTimingEditSessionProbeAccess::writeSessionState};
-}
-
-void StaTimingEditSessionProbeAccess::writeSessionState(void* opaque_session,
-                                                        timing_edit::SessionTransactionState state) noexcept
-{
-  auto& session = *static_cast<IncrementalStaSession*>(opaque_session);
-  switch (state) {
-    case timing_edit::SessionTransactionState::kBaselineExecuted:
-      session._state.store(StaSessionState::kBaselineExecuted, std::memory_order_release);
-      break;
-    case timing_edit::SessionTransactionState::kPoisoned:
-      session._state.store(StaSessionState::kPoisoned, std::memory_order_release);
-      break;
-  }
-}
-
 void StaTimingEditSessionProbeAccess::poisonSessionOnScopeViolation(
     void* opaque_session) noexcept
 {

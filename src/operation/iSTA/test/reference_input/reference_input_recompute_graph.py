@@ -325,11 +325,23 @@ def _validate_arcs(
 
     outgoing: list[list[int]] = [[] for _ in candidate.nodes]
     incoming: list[list[int]] = [[] for _ in candidate.nodes]
-    for raw_arc in ranked:
-        arc_id = rank_to_id[raw_arc.native_rank]
-        assert arc_id is not None
-        outgoing[node_by_name[raw_arc.source]].append(arc_id)
-        incoming[node_by_name[raw_arc.sink]].append(arc_id)
+    for rows, field, endpoint in (
+        (outgoing, "outgoing_arc_ranks", "source"),
+        (incoming, "incoming_arc_ranks", "sink"),
+    ):
+        seen: set[int] = set()
+        for node in raw.nodes:
+            for rank in getattr(node, field):
+                if rank >= len(ranked) or rank in seen:
+                    _fail(f"raw {field} has a duplicate or invalid slot")
+                if getattr(ranked[rank], endpoint) != node.full_name:
+                    _fail(f"raw {field} endpoint differs from its node")
+                seen.add(rank)
+                arc_id = rank_to_id[rank]
+                assert arc_id is not None
+                rows[node_by_name[node.full_name]].append(arc_id)
+        if len(seen) != len(ranked):
+            _fail(f"raw {field} omits an arc")
     expected_out_offsets, expected_out_ids = _flatten_rows(outgoing)
     expected_in_offsets, expected_in_ids = _flatten_rows(incoming)
     if (
@@ -338,7 +350,7 @@ def _validate_arcs(
         or candidate.in_row_offsets != expected_in_offsets
         or candidate.in_arc_ids != expected_in_ids
     ):
-        _fail("candidate CSR rows differ from raw native-rank order")
+        _fail("candidate CSR rows differ from raw native adjacency")
     return ranked, tuple(tuple(row) for row in outgoing)
 
 

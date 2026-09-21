@@ -70,7 +70,7 @@ CsrCpuReferenceStageStatus propagateCsrCpuReferenceClocks(const ActiveCsrEdgeVie
     return Status::kInvariantViolation;
   for (const auto& clock : payloads.clocks()) {
     for (bool slew_pass : {true, false}) {
-      for (NodeId node : work.result.timing_order) {
+      for (NodeId node : work.result.level_nodes) {
         if (node.value() >= work.node_count)
           return Status::kInvariantViolation;
         const auto& owner = payloads.clockOwners()[node.value()];

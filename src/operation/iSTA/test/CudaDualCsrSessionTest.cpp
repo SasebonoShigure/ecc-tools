@@ -6,14 +6,22 @@
 #include <limits>
 
 #include "CsrCpuReferenceBackend.hpp"
+#include "CsrCudaPacking.hpp"
+#include "AllocationFailureSupport.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
+#include "FlatCsrEdgeView.hpp"
+#include "FlatTimingPayloadView.hpp"
 #include "CsrCpuReferenceTestFixture.hpp"
 #include "CudaDualCsrDebugState.hpp"
 #include "CudaDualCsrSession.hpp"
 #include "CudaDualCsrTestReader.hpp"
+#include "CudaDualCsrTestSupport.hpp"
 #include "CudaTargetedExecutionInternal.hpp"
 #include "NativeTargetedEditPreparer.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "PublicTimingJson.hpp"
+#include "StaCsrSessionContext.hpp"
+#include "StaCudaSessionState.hpp"
 #include "TimingResultScatterInternal.hpp"
 #include "timing_edit/BufferTraceReplayInput.hpp"
 #include "timing_dual_csr/DualCsrTargetedArtifactSupport.hpp"
@@ -26,17 +34,7 @@ using namespace ista;
 using namespace csr;
 using namespace timing_dual_csr;
 using namespace timing_dual_csr::test;
-CudaDualCsrPatch patchFor(const CsrReferenceInput& input, std::uint64_t generation, timing_edit::AppendOnlyHighWater before,
-                          timing_edit::AppendOnlyHighWater after)
-{
-  CudaDualCsrPatch patch;
-  patch.session_token = timing_edit::TimingEditSessionToken{input.source_identity.session_token};
-  patch.expected_generation = timing_edit::TransactionGeneration{generation};
-  patch.target_generation = timing_edit::TransactionGeneration{generation + 1};
-  patch.before = before;
-  patch.after = after;
-  return patch;
-}
+using csr::test::patchFor;
 void compareFreshFull(const CsrReferenceInput& baseline, const CudaDualCsrPatch& first, const CudaDualCsrPatch* second, const CsrTimingValues& actual)
 {
   auto input = baseline;
@@ -125,8 +123,7 @@ void compareIndependentCpu(const CsrReferenceInput& input, const CudaDualCsrPatc
   state.base_in.row_offsets = {0, 0, 1, 2};
   state.base_in.physical_slots = {ArcId{0}, ArcId{1}};
   state.aux_out.row_sources = {NodeId{0}};
-  state.aux_out.row_offsets = {0, 1};
-  state.aux_out.arc_ids = {ArcId{1}};
+  state.aux_out.row_arcs = {{ArcId{1}}};
   state.aux_out.source_to_aux_row = {0, -1, -1};
   state.reference_payload.ordered_end_ids = {NodeId{1}, NodeId{2}};
   state.reference_payload.endpoint_required.push_back(first.appended_endpoints[0]);
@@ -143,8 +140,7 @@ void compareIndependentCpu(const CsrReferenceInput& input, const CudaDualCsrPatc
     state.base_in.row_offsets = {0, 0, 1, 2, 2};
     state.base_in.physical_slots = {ArcId{0}, ArcId{2}};
     state.aux_out.row_sources.clear();
-    state.aux_out.row_offsets = {0};
-    state.aux_out.arc_ids.clear();
+    state.aux_out.row_arcs.clear();
     state.aux_out.source_to_aux_row = {-1, -1, -1, -1};
     state.reference_payload.ordered_root_ids = {NodeId{0}, NodeId{3}};
     state.reference_payload.ordered_start_ids.push_back(NodeId{3});
@@ -164,8 +160,7 @@ void compareIndependentCpu(const CsrReferenceInput& input, const CudaDualCsrPatc
   std::string mismatch;
   require(csr::test::exactTimingResultEqual(actual_result, *result, &mismatch), "independent CPU complete values differ after Aux update: " + mismatch);
   if (!second) {
-    state.aux_out.arc_ids.clear();
-    state.aux_out.row_offsets = {0};
+    state.aux_out.row_arcs.clear();
     state.aux_out.row_sources.clear();
     state.aux_out.source_to_aux_row = {-1, -1, -1};
     DualCsrEdgeViewImpl omitted_edges(state);
@@ -174,6 +169,8 @@ void compareIndependentCpu(const CsrReferenceInput& input, const CudaDualCsrPatc
     require(!wrong || static_cast<const CsrTimingValues&>(*wrong) != actual, "Aux omission canary did not change actual computation");
   }
 }
+
+
 void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
 {
   const auto input = csr::test::makeCpuReferenceNetFixture();
@@ -212,13 +209,7 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
     malformed_rejected = true;
   }
   require(malformed_rejected, "duplicate adjacency was accepted");
-  auto candidate = owner.stage(first, mode);
-  require(!candidate.computationCode(), "Aux append failed");
-  require(candidate.timingValues().nodes.arrivals.values[2] == 1.0, "Aux-only endpoint arrival missing");
-  require(candidate.timingValues().nodes.requireds.values[0] == -2.0, "Aux required pass missing");
-  require(candidate.telemetry().cuda.d2d_bytes > 0 && candidate.telemetry().cuda.kernel_launches > 0, "missing device stage or full compute");
   if constexpr (incregpusta_debug_checks_enabled) {
-    compareIndependentCpu(input, first, nullptr, candidate.timingValues());
     if (mode == CudaLevelizationMode::kFull) {
       auto omitted = owner.stage(first, mode);
       CudaDualCsrTestReader::omitAuxAndRecompute(omitted);
@@ -227,8 +218,16 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
       require(owner.generation().value() == 0 && !owner.poisoned() && owner.timingValues() == stranger.timingValues(),
               "GPU omission canary changed committed owner");
     }
+  }
+  auto candidate = owner.stage(first, mode);
+  require(!candidate.computationCode(), "Aux append failed");
+  require(candidate.timingValues().nodes.arrivals.values[2] == 1.0, "Aux-only endpoint arrival missing");
+  require(candidate.timingValues().nodes.requireds.values[0] == -2.0, "Aux required pass missing");
+  require(candidate.telemetry().cuda.h2d_bytes > 0 && candidate.telemetry().cuda.kernel_launches > 0, "missing patch upload or computation");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    compareIndependentCpu(input, first, nullptr, candidate.timingValues());
     const auto graph = candidate.debugState();
-    require(graph.out_arcs == std::vector<cuda_detail::Index>{0} && graph.aux_arcs == std::vector<cuda_detail::Index>{1},
+    require(graph.out_arcs == std::vector<cuda_detail::Index>{0} && graph.aux_rows[0] == std::vector<cuda_detail::Index>{1},
             "Base expanded instead of genuine Aux overflow");
     for (unsigned stage = mode == CudaLevelizationMode::kFull ? 0 : 1; stage < 4; ++stage)
       require(graph.storage_visits[stage * 2 + 1] > 0, "GPU pass never visited Aux");
@@ -236,9 +235,19 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
   if (snapshots)
     snapshots->push_back(CudaDualCsrTestReader::capture(candidate));
   require(!stranger.publish(std::move(candidate)), "foreign owner accepted candidate");
-  auto stale = owner.stage(first, mode);
+  bool pending_rejected = false, query_rejected = false;
+  try {
+    static_cast<void>(owner.stage(first, mode));
+  } catch (const std::invalid_argument&) {
+    pending_rejected = true;
+  }
+  try {
+    static_cast<void>(owner.timingValues());
+  } catch (const std::logic_error&) {
+    query_rejected = true;
+  }
+  require(pending_rejected && query_rejected, "pending transaction admitted a sibling or stale query");
   require(owner.publish(std::move(candidate)) && !owner.publish(std::move(candidate)), "candidate publication is not one-shot");
-  require(!owner.publish(std::move(stale)), "stale sibling candidate published");
   if (mode == CudaLevelizationMode::kMixed) {
     auto conflict = patchFor(input, 1, first.after, {3, 3, 3});
     conflict.arc_appends = {appendArc(2, NodeId{2}, NodeId{1}, sink.key, input.nodes[1].key, 0)};
@@ -250,11 +259,13 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
     require(rejected.telemetry().mixed_failure == timing_incremental_levelization::MixedStageFailureCode::kOldLevelOrderConflict
                 && rejected.computationCode() && !owner.publish(std::move(rejected)),
             "acyclic old-level order conflict was accepted as mixed");
+    {
     auto full = owner.stage(conflict, CudaLevelizationMode::kFull);
     require(!full.computationCode() && full.timingValues().node_to_level == std::vector<std::uint64_t>{1, 3, 2},
             "explicit full retry did not execute the acyclic replacement");
     require(owner.generation().value() == 1 && !owner.poisoned(), "unpublished full retry changed origin");
 
+    }
     // Replacing eligibility must update the CPU topology metadata, not just
     // the device payload. Node 2 is now an independent (noncompact) old root.
     auto eligibility = patchFor(input, 1, first.after, first.after);
@@ -262,9 +273,10 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
     disabled.eligibility = {};
     eligibility.payload_changes = {{ArcId{1}, first.arc_appends[0].payload, disabled}};
     eligibility.roots = ValueReplacement<std::vector<NodeId>>{{NodeId{0}}, {NodeId{0}, NodeId{2}}};
+    const auto previous_levels = owner.timingValues().node_to_level;
     auto changed_eligibility = owner.stage(eligibility, mode);
     require(!changed_eligibility.computationCode(), "payload eligibility replacement left stale mixed topology");
-    require(changed_eligibility.timingValues().node_to_level == owner.timingValues().node_to_level,
+    require(changed_eligibility.timingValues().node_to_level == previous_levels,
             "noncompact old levels were not preserved after eligibility replacement");
   }
   auto second = patchFor(input, 1, first.after, {4, 4, 3});
@@ -293,7 +305,7 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
   if constexpr (incregpusta_debug_checks_enabled) {
     compareIndependentCpu(input, first, &second, cleared.timingValues());
     const auto graph = cleared.debugState();
-    require(graph.aux_arcs.empty() && !graph.arcs[1].active && graph.in_arcs[1] == 2, "Aux clear/reverse change failed");
+    require(std::ranges::all_of(graph.aux_rows, [](const auto& row) { return row.empty(); }) && !graph.arcs[1].active && graph.in_arcs[1] == 2, "Aux clear/reverse change failed");
   }
   if (snapshots)
     snapshots->push_back(CudaDualCsrTestReader::capture(cleared));
@@ -337,38 +349,71 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
   }
   require(rejected && !owner.poisoned(), "capacity rejection poisoned committed owner");
 }
-nlohmann::json captureCudaPublic(const timing_edit::oracle::ProductionFreshSessionView& loaded,
-                                 const Database& source, const timing_edit::NativeTargetedEditState& state,
-                                 const CsrTimingValues& values)
+void queryAllocationRetry(const timing_edit::oracle::ProductionFreshSessionView& loaded)
 {
-  auto installed = timing_edit::NativeCandidateExecutor::installPreparedGraph(
-      loaded.authority, timing_edit::NativeDatabaseCandidate::createPreservingGraph(source));
-  try {
-    auto& database = installed.database();
-    csr::detail::StableScatterTargets targets;
-    for (const auto& name : state.node_names)
-      targets.nodes.push_back({&database.get_timing_point_map().at(name), &name});
-    targets.arcs.resize(state.arc_native_ranks.size());
-    for (std::size_t id = 0; id < state.arc_native_ranks.size(); ++id)
-      if (state.arc_native_ranks[id]) {
-        const auto rank = *state.arc_native_ranks[id];
-        targets.arcs[id] = {&database.get_arc_list().at(rank), rank};
-      }
-    targets.timing_order = &database.get_timing_order_list();
-    const auto& input = loaded.reference_input;
-    auto prepared = csr::detail::prepareResolvedTimingResult(
-        targets, {input.analysis_order, input.path_source_order, input.transition_order, input.clock_tags}, values);
-    auto* scatter = std::get_if<csr::detail::PreparedTimingResult>(&prepared);
-    require(scatter != nullptr, "acceptance CUDA result could not scatter");
-    csr::detail::publishPreparedTimingResult(*scatter);
-    auto output = ista::test::analyzeAndCapturePublicTiming();
-    require(installed.rollback(), "acceptance CUDA report rollback failed");
-    return output;
-  } catch (...) {
-    if (installed.active())
-      require(installed.rollback(), "acceptance CUDA report failure rollback failed");
-    throw;
+  if constexpr (incregpusta_debug_checks_enabled) {
+    auto& context = loaded.session_context;
+    bool failed = false;
+    ista_test_allocation::armFailure(0);
+    try {
+      context.materializeCudaTiming(loaded.database, loaded.authority);
+    } catch (const std::bad_alloc&) {
+      failed = true;
+    } catch (...) {
+      static_cast<void>(ista_test_allocation::disable());
+      throw;
+    }
+    static_cast<void>(ista_test_allocation::disable());
+    require(failed, "first materialization did not exercise real allocation failure");
+    context.materializeCudaTiming(loaded.database, loaded.authority);
+
+    STADC.init();
+    TimingAnalyzer::initInst();
+    ista_test_allocation::armCountOnly();
+    STATA.analyzePropagatedTiming();
+    const auto count = ista_test_allocation::disable();
+    require(count != 0, "report preparation did not allocate a result");
+    auto& summary = loaded.database.get_summary().ta_summary;
+    const auto saved_slack = summary.worst_slack;
+    summary.worst_slack = 123456.0;
+    auto& groups = loaded.database.get_timing_path_group_list();
+    const auto* storage = groups.data();
+    failed = false;
+    ista_test_allocation::armFailure(count - 1);
+    try {
+      STATA.analyzePropagatedTiming();
+    } catch (const std::bad_alloc&) {
+      failed = true;
+    } catch (...) {
+      static_cast<void>(ista_test_allocation::disable());
+      throw;
+    }
+    static_cast<void>(ista_test_allocation::disable());
+    require(failed && summary.worst_slack == 123456.0 && groups.data() == storage,
+            "failed report preparation partially published paths or summary");
+    TimingAnalyzer::destroyInst();
+    STADC.destroy();
+    failed = false;
+    ista_test_allocation::armFailure(count - 1);
+    try {
+      context.prepareCudaReport(loaded.database, loaded.authority);
+    } catch (const std::exception&) {
+      failed = true;
+    } catch (...) {
+      static_cast<void>(ista_test_allocation::disable());
+      throw;
+    }
+    static_cast<void>(ista_test_allocation::disable());
+    require(failed, "guarded report query did not exercise allocation failure");
+    context.prepareCudaReport(loaded.database, loaded.authority);
+    require(summary.worst_slack == saved_slack, "report preparation retry failed");
   }
+}
+
+nlohmann::json captureCudaPublic(const timing_edit::oracle::ProductionFreshSessionView& loaded)
+{
+  loaded.session_context.prepareCudaReport(loaded.database, loaded.authority);
+  return ista::test::capturePublicTiming();
 }
 
 void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mode, nlohmann::json& snapshots)
@@ -387,33 +432,47 @@ void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mo
           require(!recovering || loaded.session_token != original_session, "recovery did not create a new session");
           if (!recovering)
             original_session = loaded.session_token;
-          auto state = timing_edit::NativeTargetedEditPreparer::bindBaseline(loaded.database, loaded.reference_input, plans.front().baseline);
-          CudaDualCsrSession owner(loaded.reference_input, state.resolver.highWater());
+          auto& owned = loaded.session_context.cudaState(loaded.authority);
+          owned.bindEdits(loaded.database, loaded.reference_input, program.baseline(), loaded.session_context.libraryModels(loaded.database));
+          auto& state = *owned.native;
+          auto& owner = owned.device;
           require(!owner.computationCode(), "cross-build CUDA baseline failed");
           nlohmann::json observations = nlohmann::json::array();
           observations.push_back({{"execution", "baseline-full"}, {"state", CudaDualCsrTestReader::capture(owner)}});
-          std::optional<timing_edit::NativeDatabaseCandidate> native;
           const auto requested = mode == CudaLevelizationMode::kMixed ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull;
           for (std::size_t index = 0; index < plans.size(); ++index) {
             const auto strategy = recovering && index == 0 ? persisted.front().executed_update_strategy : requested;
             auto prepared = timing_edit::NativeTargetedEditPreparer::prepare(
-                native ? native->database() : loaded.database, plans[index], state);
+                loaded.database, loaded.authority, plans[index], state);
+            bool pending_rejected = false;
+            try {
+              loaded.session_context.materializeCudaTiming(loaded.database, loaded.authority);
+            } catch (const std::logic_error&) {
+              pending_rejected = true;
+            }
+            require(pending_rejected, "native pending transaction served cached timing");
             CudaTargetedTraceBatch batch;
             auto candidate = csr::detail::stageCudaTargetedBatch(owner, prepared.patch, strategy, StaFallbackPolicy::kError, batch);
             require(!candidate.computationCode() && !candidate.poisoned()
                         && batch.execution.executed_update_strategy == strategy && !batch.execution.fallback_to_full,
                     "cross-build replay did not execute the requested CUDA mode");
             require(owner.publish(std::move(candidate)), "cross-build CUDA publication failed");
-            state = std::move(prepared.staged);
-            native.emplace(std::move(prepared.candidate));
+            prepared.transaction.commit();
+            owned.committed();
             require(owner.generation() == state.generation, "cross-build native/device generation differs");
+            if (index == 0)
+              queryAllocationRetry(loaded);
             observations.push_back({
                 {"requested_update_strategy", toString(batch.execution.requested_update_strategy)},
                 {"executed_update_strategy", toString(batch.execution.executed_update_strategy)},
                 {"incremental_batch_executed", batch.execution.incremental_batch_executed},
                 {"fallback_to_full", batch.execution.fallback_to_full},
                 {"state", CudaDualCsrTestReader::capture(owner)},
-                {"public", captureCudaPublic(loaded, native->database(), state, owner.timingValues())}});
+                {"public", captureCudaPublic(loaded)}});
+            const auto d2h_after_query = owner.telemetry().cuda.d2h_bytes;
+            require(captureCudaPublic(loaded) == observations.back().at("public")
+                        && owner.telemetry().cuda.d2h_bytes == d2h_after_query,
+                    "repeat public query changed results or repeated D2H");
             if (!recovering)
               persisted.push_back(batch.execution);
             else
@@ -440,8 +499,9 @@ void emptyGraph(CudaLevelizationMode mode)
   csr::test::refreshCpuReferenceIdentity(input);
   CudaDualCsrSession owner(input, {0, 0, 0});
   require(!owner.computationCode() && owner.timingValues().level_offsets == std::vector<std::uint64_t>{0}, "empty GPU graph failed");
+  const auto before = owner.timingValues();
   auto candidate = owner.stage(patchFor(input, 0, {0, 0, 0}, {0, 0, 0}), mode);
-  require(!candidate.computationCode() && candidate.timingValues() == owner.timingValues() && owner.publish(std::move(candidate)), "empty GPU batch failed");
+  require(!candidate.computationCode() && candidate.timingValues() == before && owner.publish(std::move(candidate)), "empty GPU batch failed");
 }
 void removeChangeAndCycle(CudaLevelizationMode mode)
 {
@@ -490,6 +550,7 @@ void removeChangeAndCycle(CudaLevelizationMode mode)
   require(owner.publish(std::move(healthy)), "healthy publication after cycle failed");
 }
 
+
 void multiBlockReconstruction()
 {
   const auto input = csr::test::makeCpuReferenceNetFixture();
@@ -513,62 +574,29 @@ void multiBlockReconstruction()
   auto candidate = owner.stage(patch, CudaLevelizationMode::kMixed);
   require(!candidate.computationCode(), "multiple CUDA blocks failed mixed reconstruction");
   const auto& result = candidate.timingValues();
-  require(result.level_offsets == std::vector<std::uint64_t>{0, count + 1, count + 2} && result.level_nodes == order && result.timing_order == order
+  require(result.level_offsets == std::vector<std::uint64_t>{0, count + 1, count + 2} && result.level_nodes == order
               && result.node_to_level == inverse,
           "cross-block new-node placement or inverse map is incorrect");
   require(owner.publish(std::move(candidate)), "cross-block reconstruction could not publish");
+  const auto committed = owner.timingValues();
   auto replay = owner.stage(patchFor(input, 1, patch.after, patch.after), CudaLevelizationMode::kMixed);
-  require(!replay.computationCode() && replay.timingValues() == owner.timingValues() && owner.publish(std::move(replay)),
+  require(!replay.computationCode() && replay.timingValues() == committed && owner.publish(std::move(replay)),
           "cross-block reconstructed owner could not continue with an empty batch");
 }
 
-void payloadFailures(CudaLevelizationMode mode)
-{
-  const auto input = csr::test::makeCpuReferenceCellFixture();
-  const timing_edit::AppendOnlyHighWater water{input.nodes.size(), 0, input.arcs.size()};
-  CudaDualCsrSession owner(input, water);
-  const auto found = std::ranges::find(input.arcs, ArcKind::kCell, &ArcRecord::kind);
-  require(found != input.arcs.end() && !found->transfer.children.empty(), "cell fixture lacks a timing child");
-  const auto& arc = *found;
-  ArcSemanticPayload expected;
-  expected.key = arc.key;
-  expected.source = arc.source;
-  expected.sink = arc.sink;
-  expected.kind = arc.kind;
-  expected.is_clock_arc = arc.is_clock_arc;
-  expected.is_disabled = arc.is_disabled;
-  expected.is_loop_disabled = arc.is_loop_disabled;
-  expected.eligibility = arc.eligibility;
-  expected.transfer = arc.transfer;
-  expected.output_load = arc.output_load;
-  auto patch = patchFor(input, 0, water, water);
-  auto malformed = expected;
-  malformed.transfer.children[0].delay_tables[0].values.push_back(1.0);
-  patch.payload_changes = {{arc.id, expected, malformed}};
-  bool rejected = false;
-  try {
-    static_cast<void>(owner.stage(patch, mode));
-  } catch (const std::invalid_argument&) {
-    rejected = true;
-  }
-  require(rejected && !owner.poisoned(), "malformed cell table accepted or poisoned owner");
-  auto huge = expected;
-  for (auto& child : huge.transfer.children)
-    for (auto& table : child.delay_tables)
-      for (auto& value : table.values)
-        value = std::numeric_limits<double>::max();
-  patch.payload_changes = {{arc.id, expected, huge}};
-  auto failure = owner.stage(patch, mode);
-  require(failure.computationCode() == CsrComputationCode::kNumericFailure && !owner.publish(std::move(failure)) && !owner.poisoned(),
-          "actual GPU numeric failure changed committed owner");
-  auto healthy = owner.stage(patchFor(input, 0, water, water), mode);
-  require(!healthy.computationCode() && owner.publish(std::move(healthy)), "healthy replay after numeric rejection failed");
-}
+
+
+
 
 }  // namespace
 int main(int argc, char** argv)
 {
   try {
+    if (argc == 2 && std::string(argv[1]) == "--lazy-sequence") {
+      csr::test::runCudaLazySequence(CudaLevelizationMode::kMixed);
+      std::cout << "CUDA lazy commit/query sequence passed\n";
+      return 0;
+    }
     CudaLevelizationMode mode = CudaLevelizationMode::kFull;
     if (argc > 1 && (std::string(argv[1]) == "--mixed" || std::string(argv[1]) == "--mixed-cross-build-output"))
       mode = CudaLevelizationMode::kMixed;
@@ -587,12 +615,12 @@ int main(int argc, char** argv)
       require(argc == 1 || (argc == 2 && mode == CudaLevelizationMode::kMixed), "unknown arguments; hardware fault modes require the ON-only target");
     if (mode == CudaLevelizationMode::kMixed)
       multiBlockReconstruction();
+    csr::test::runCudaDualCsrStorageContracts(mode);
     runCudaClockContracts();
     runCudaSequentialContracts();
     emptyGraph(mode);
     auxSequence(snapshots ? &*snapshots : nullptr, mode);
     removeChangeAndCycle(mode);
-    payloadFailures(mode);
     if (argc == 5)
       replayCrossBuild(argv[4], mode, *snapshots);
     if (snapshots) {

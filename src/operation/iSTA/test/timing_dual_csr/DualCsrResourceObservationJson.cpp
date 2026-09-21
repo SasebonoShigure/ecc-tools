@@ -79,8 +79,8 @@ std::string_view dualCsrBufferToken(DualCsrBufferKind value)
       return "base_in_offsets";
     case DualCsrBufferKind::kBaseInSlots:
       return "base_in_slots";
-    case DualCsrBufferKind::kAuxOffsets:
-      return "aux_offsets";
+    case DualCsrBufferKind::kAuxRows:
+      return "aux_rows";
     case DualCsrBufferKind::kAuxSources:
       return "aux_sources";
     case DualCsrBufferKind::kAuxArcs:

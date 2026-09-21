@@ -1,3 +1,4 @@
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "NarrowTimingRecordReader.hpp"
 
 #include <algorithm>
@@ -15,7 +16,6 @@
 #include "DualCsrArcGroupResolverValidation.hpp"
 #include "DualCsrBaselineFactory.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
-#include "NativeDatabaseCandidate.hpp"
 #include "NativeDesignEditTranslator.hpp"
 #include "NativeTimingEditPreparer.hpp"
 #include "TimingCellArc.hpp"
@@ -222,7 +222,8 @@ CandidateBoundCapture read(
     const PendingStructuredBatch& pending,
     const AffectedCapturePlan& plan)
 {
-  return NarrowTimingRecordReader{}.read(
+  csr::detail::NativeLibraryModels models(candidate);
+  return NarrowTimingRecordReader{models}.read(
       candidate, DualSemanticReadView{baseline.state},
       baseline.arc_group_index, pending.stagedResolver(),
       pending.preparedBatch(), plan);
@@ -293,22 +294,20 @@ void checkStableReresolutionAndBoundaryCanaries()
 {
   Baseline baseline = makeBaseline();
   PendingStructuredBatch pending = prepareBuffer(baseline);
-  NativeDatabaseCandidate candidate
-      = NativeDatabaseCandidate::create(baseline.fixture.database());
   require(NativeDesignEditTranslator::applyNormalizedBatch(
-              candidate.database(), pending.preparedBatch(),
+              baseline.fixture.database(), pending.preparedBatch(),
               pending.stagedResolver())
               .applied(),
           "candidate translation failed");
   materializePostGraph(
-      candidate.database(),
+      baseline.fixture.database(),
       pending.preparedBatch().tokenMaterializations().front());
-  addUnindexedMalformedCanary(candidate.database());
+  addUnindexedMalformedCanary(baseline.fixture.database());
 
   const AffectedCapturePlan& plan = pending.capturePlan();
   auto duplicate = plan;
   duplicate.arcs.push_back(duplicate.arcs.front());
-  auto rejected = read(baseline, candidate.database(), pending, duplicate);
+  auto rejected = read(baseline, baseline.fixture.database(), pending, duplicate);
   require(rejected.error() == NarrowCaptureError::kDuplicateRequest
               && rejected.audit() != nullptr
               && !rejected.audit()->full_export_guard_active,
@@ -321,7 +320,7 @@ void checkStableReresolutionAndBoundaryCanaries()
   require(active != wrong_multiplicity.arcs.end(),
           "fixture has no active arc request");
   ++active->expected_post_multiplicity;
-  rejected = read(baseline, candidate.database(), pending,
+  rejected = read(baseline, baseline.fixture.database(), pending,
                   wrong_multiplicity);
   require(rejected.error()
               == NarrowCaptureError::kArcMultiplicityMismatch,
@@ -331,23 +330,23 @@ void checkStableReresolutionAndBoundaryCanaries()
   foreign_ref.arcs.front().ref = ExistingArcRef{csr::ArcKey{
       foreign_ref.arcs.front().expected_post_base,
       std::numeric_limits<std::uint64_t>::max()}};
-  rejected = read(baseline, candidate.database(), pending, foreign_ref);
+  rejected = read(baseline, baseline.fixture.database(), pending, foreign_ref);
   require(rejected.error() == NarrowCaptureError::kBatchBindingMismatch,
           "foreign stable arc ref was accepted");
 
   auto rebound = plan;
   rebound.target_generation = TransactionGeneration{9};
-  rejected = read(baseline, candidate.database(), pending, rebound);
+  rejected = read(baseline, baseline.fixture.database(), pending, rebound);
   require(rejected.error() == NarrowCaptureError::kBatchBindingMismatch,
           "typed exact plan/batch mismatch was accepted");
 
   CandidateBoundCapture capture
-      = read(baseline, candidate.database(), pending, plan);
+      = read(baseline, baseline.fixture.database(), pending, plan);
   require(capture.success() && capture.audit() != nullptr,
           "valid narrow capture was rejected");
   const NarrowCaptureAudit audit = *capture.audit();
   requireExactAudit(plan, audit,
-                    candidate.database().get_arc_list().size());
+                    baseline.fixture.database().get_arc_list().size());
 
   VerifiedStructuredBatch verified
       = TimingEditDualCsrDescriptorBuilder::build(

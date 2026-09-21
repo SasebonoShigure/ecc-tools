@@ -22,7 +22,9 @@
 #include <variant>
 
 #include "CsrSessionSnapshotAdapter.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "DataManager.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "Logger.hpp"
 #include "STAHeader.hpp"
 #include "STAInterface.hpp"
@@ -539,22 +541,8 @@ StaStatus STAInterface::runOwned(StaOwner owner, StaCsrSessionContext* capture_o
                               result.message);
   }
 
-  if (capture_or_null != nullptr) {
-    try {
-      StaCsrCaptureAttempt capture = capture_or_null->capture(STADM.getDatabase());
-      if (const auto* local_failure = std::get_if<StaCsrSessionOperationFailure>(&capture.value)) {
-        return StaStatus::failure(StaSessionStatusCode::kRunFailed, StaSessionState::kPoisoned,
-                                  "CSR capture rejected in local state with writes=" + std::to_string(local_failure->writes_applied));
-      }
-      const csr::CsrCaptureResult& capture_result = std::get<csr::CsrCaptureResult>(capture.value);
-      if (capture_result.error) {
-        return StaStatus::failure(StaSessionStatusCode::kRunFailed, StaSessionState::kPoisoned,
-                                  "CSR capture failed: " + std::string(csr::token(*capture_result.error)));
-      }
-    } catch (...) {
-      return StaStatus::failure(StaSessionStatusCode::kRunFailed, StaSessionState::kPoisoned, "CSR capture threw: " + currentExceptionMessage());
-    }
-  }
+  if (capture_or_null != nullptr)
+    capture_or_null->_baseline_ready = true;
   return StaStatus::success(StaSessionState::kBaselineExecuted);
 }
 
@@ -592,18 +580,22 @@ StaStatus STAInterface::closeOwned(StaOwner owner, StaCsrSessionContext* context
     }
   }
 
+  const bool device_cleanup_succeeded = context == nullptr || context->release(released_out);
   if (context != nullptr)
-    context->release(released_out);
+    context->_library_models.reset();
   StaOperationResult result = invokeLifecycleOperation("STA persistent close", [this] { return _lifecycle_operations->close(); });
+  const bool clean = device_cleanup_succeeded && result.succeeded;
   _is_initialized = false;
   _is_timing_updated = false;
   {
     std::scoped_lock lifecycle_lock(_lifecycle_mutex);
-    _lifecycle.completeClose(result.succeeded);
+    _lifecycle.completeClose(clean);
   }
   reservation->commit();
-  if (result.succeeded)
+  if (clean)
     return StaStatus::success(StaSessionState::kClosed);
+  if (!device_cleanup_succeeded)
+    result.message = "CUDA STA cleanup failed" + (result.message.empty() ? std::string{} : ": " + result.message);
   return StaStatus::failure(StaSessionStatusCode::kCleanupFailed, StaSessionState::kClosed, result.message);
 }
 
@@ -619,6 +611,15 @@ StaStatus STAInterface::copySessionCsrSnapshotObservation(uint64_t token, StaCsr
   if (!authority)
     return failure;
   try {
+    if constexpr (incregpusta_debug_checks_enabled) {
+      if (context->_baseline_ready && context->substate() == StaCsrSessionSubstate::kAwaitingCapture) {
+        const auto captured = context->capture(STADM.getDatabase());
+        const auto* result = std::get_if<csr::CsrCaptureResult>(&captured.value);
+        if (result == nullptr || result->error)
+          return StaStatus::failure(StaSessionStatusCode::kInvalidState, StaSessionState::kBaselineExecuted,
+                                    "explicit CSR observation capture failed");
+      }
+    }
     if (!context->copyObservation(detached_out))
       return StaStatus::failure(StaSessionStatusCode::kInvalidState, StaSessionState::kBaselineExecuted,
                                 "CSR snapshot observation is unavailable in the current state");
@@ -635,6 +636,14 @@ StaCsrReferenceAttempt STAInterface::computeSessionCsrReferenceForTesting(uint64
   auto authority = acquireUse(StaOwner::session(token), context, true, StaSessionState::kBaselineExecuted, &failure);
   if (!authority)
     return invalidReferenceAttempt();
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return invalidReferenceAttempt();
+  if (context->_baseline_ready && context->substate() == StaCsrSessionSubstate::kAwaitingCapture) {
+    const auto captured = context->capture(STADM.getDatabase());
+    const auto* result = std::get_if<csr::CsrCaptureResult>(&captured.value);
+    if (result == nullptr || result->error)
+      return invalidReferenceAttempt();
+  }
   return context->computeReference();
 }
 

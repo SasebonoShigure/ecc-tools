@@ -256,7 +256,7 @@ void seedStarts(Database& database, const CsrReferenceInput& input)
 [[nodiscard]] bool chainRelationExists(const ArcRecord& record, Transition input, Transition output)
 {
   if (record.transfer.is_clock_arc) {
-    const Transition trigger = record.transfer.children.front().signature.trigger_transition;
+    const Transition trigger = record.transfer.children().front().signature.trigger_transition;
     if (input != (trigger == Transition::kFall ? Transition::kFall : Transition::kRise)) {
       return false;
     }
@@ -264,7 +264,7 @@ void seedStarts(Database& database, const CsrReferenceInput& input)
     return false;
   }
   const std::size_t lane = transitionLane(output);
-  return std::ranges::any_of(record.transfer.children, [lane](const ChildTimingArcModel& child) {
+  return std::ranges::any_of(record.transfer.children(), [lane](const ChildTimingArcModel& child) {
     return child.delay_tables[lane].present || child.slew_tables[lane].present || child.check_tables[lane].present;
   });
 }
@@ -298,7 +298,7 @@ void seedArcs(Database& database, const CsrReferenceInput& input)
       for (Transition input_transition : input.transition_order) {
         const TransType native_input = nativeTransition(input_transition);
         arc.get_trans_delay_map()[native_analysis][native_input] = 0.0;
-        if (record.kind == ArcKind::kNet || record.transfer.children.empty()) {
+        if (record.kind == ArcKind::kNet || record.transfer.children().empty()) {
           const double delay = record.kind == ArcKind::kNet ? 0.0 : (analysis == AnalysisMode::kMax ? record.transfer.delay_max : record.transfer.delay_min);
           arc.get_trans_delay_map()[native_analysis][native_input] = delay;
           arc.get_input_output_delay_map()[native_analysis][native_input][native_input] = delay;
@@ -316,7 +316,7 @@ void seedArcs(Database& database, const CsrReferenceInput& input)
           const std::size_t output_lane = transitionLane(output);
           bool candidate_seen = false;
           double aggregate = 0.0;
-          for (const ChildTimingArcModel& child : record.transfer.children) {
+          for (const ChildTimingArcModel& child : record.transfer.children()) {
             if (!chainChildSelected(child, input_transition, output) || !child.delay_tables[output_lane].present) {
               continue;
             }
@@ -380,7 +380,7 @@ void propagateForward(Database& database, const CsrReferenceInput& input, const 
             bool delay_seen = false;
             bool slew_seen = false;
             const std::size_t output_lane = transitionLane(output);
-            for (const ChildTimingArcModel& child : record.transfer.children) {
+            for (const ChildTimingArcModel& child : record.transfer.children()) {
               if (!chainChildSelected(child, input_transition, output)) {
                 continue;
               }
@@ -401,7 +401,7 @@ void propagateForward(Database& database, const CsrReferenceInput& input, const 
                 }
               }
             }
-            if (!record.transfer.children.empty() && !delay_seen) {
+            if (!record.transfer.children().empty() && !delay_seen) {
               delay = record.transfer.delay;
             }
             auto& graph = arc.get_graph_delay_map()[native_analysis][native_input];

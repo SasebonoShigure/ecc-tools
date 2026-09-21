@@ -95,7 +95,7 @@ void appendLibraryCheck(Writer& writer, const LibraryTimingCheckArcModel& check)
   writer.appendEnum(check.kind);
   writer.appendFiniteDouble(check.check_time);
   writer.appendEnum(check.clock_transition);
-  writer.appendVector(check.children, appendChild);
+  writer.appendVector(check.children(), appendChild);
 }
 
 void appendParasiticNode(Writer& writer, const ParasiticNodeModel& node)
@@ -133,7 +133,7 @@ void appendTransfer(Writer& writer, const CellTransferModel& transfer)
   writer.appendBool(transfer.is_clock_arc);
   writer.appendBool(transfer.is_disabled);
   writer.appendBool(transfer.is_clear_or_preset);
-  writer.appendVector(transfer.children, appendChild);
+  writer.appendVector(transfer.children(), appendChild);
 }
 
 void appendClock(Writer& writer, const ClockConstraintModel& clock)

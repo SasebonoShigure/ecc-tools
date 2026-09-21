@@ -110,7 +110,6 @@ nlohmann::json functionalTimingToJson(
           {"level_offsets", scalarArray(timing.level_offsets)},
           {"level_nodes", arrayOf(timing.level_nodes, nodeKey)},
           {"node_to_level", scalarArray(timing.node_to_level)},
-          {"timing_order", arrayOf(timing.timing_order, nodeKey)},
           {"nodes", nodeTiming(timing.nodes)},
           {"effective_clock", clockTiming(timing.effective_clock)},
           {"physical_clock", clockTiming(timing.physical_clock)},

@@ -22,14 +22,9 @@ void appendTransition(OptionalSoa<Transition>& result, std::uint8_t value, bool 
 void unpackNodes(DownloadData& data, const ResultLayout& layout, CsrTimingValues& result)
 {
 
-  result.level_offsets = std::move(data.level_offsets);
-  result.node_to_level = std::move(data.node_levels);
-  result.level_nodes.reserve(data.order.size());
-  for (Index node : data.order)
-    result.level_nodes.emplace_back(node);
-  result.timing_order = result.level_nodes;
   for (std::size_t i = 0; i < data.nodes.size(); ++i) {
     const auto& node = data.nodes[i];
+    result.nodes.is_clock_point.values[i] = node.clock_point;
     result.nodes.arrivals.values[i] = node.arrival;
     result.nodes.requireds.values[i] = node.required;
     result.nodes.slacks.values[i] = node.slack;
@@ -45,6 +40,11 @@ void unpackNodes(DownloadData& data, const ResultLayout& layout, CsrTimingValues
     for (std::size_t lane = 0; lane < 4; ++lane) {
       result.data_slews.presence[i * 4 + lane] = node.slew[lane].present ? 1 : 0;
       result.data_slews.values[i * 4 + lane] = node.slew[lane].present ? node.slew[lane].value : 0.0;
+      append(result.effective_clock.arrivals, node.effective_arrival[lane].value, node.effective_arrival[lane].present);
+      append(result.effective_clock.slews, node.effective_slew[lane].value, node.effective_slew[lane].present);
+      append(result.effective_clock.predecessor_nodes, NodeId{}, false);
+      append(result.effective_clock.predecessor_arc_delays, 0.0, false);
+      appendTransition(result.effective_clock.predecessor_transitions, 2, false);
       const auto& clock = node.physical_clock[lane];
       append(result.physical_clock.arrivals, clock.arrival.value, clock.arrival.present);
       append(result.physical_clock.slews, clock.slew.value, clock.slew.present);
@@ -56,7 +56,7 @@ void unpackNodes(DownloadData& data, const ResultLayout& layout, CsrTimingValues
   }
 }
 
-void unpackPaths(DownloadData& data, const ResultLayout& layout, CsrTimingValues& result)
+void unpackPaths(DownloadData& data, const PathDomain& domain, CsrTimingValues& result)
 {
   auto& paths = result.paths;
   paths.row_offsets.clear();
@@ -64,8 +64,9 @@ void unpackPaths(DownloadData& data, const ResultLayout& layout, CsrTimingValues
   paths.row_offsets.reserve(row_count + 1);
   for (std::size_t row = 0; row < row_count; ++row) {
     paths.row_offsets.push_back(paths.arrivals.values.size());
-    for (Index tag = 0; tag < layout.clock_tags.size(); ++tag) {
-      const auto& path = data.paths[row * layout.clock_tags.size() + tag];
+    for (Index slot = domain.offsets[row]; slot < domain.offsets[row + 1]; ++slot) {
+      const Index tag = domain.tags[slot];
+      const auto& path = data.paths[slot];
       if (!path.present)
         continue;
       append(paths.clock_tags, ClockTagId{tag});
@@ -117,7 +118,7 @@ void unpackArcs(DownloadData& data, const ResultLayout& layout, CsrTimingValues&
 
 }  // namespace
 
-CsrTimingValues unpackValues(DownloadData&& data, const ResultLayout& layout)
+CsrTimingValues unpackValues(DownloadData&& data, const ResultLayout& layout, const PathDomain& domain)
 {
   CsrTimingValues result;
   const auto count = data.nodes.size();
@@ -126,7 +127,6 @@ CsrTimingValues unpackValues(DownloadData&& data, const ResultLayout& layout)
     soa.presence.assign(count, present ? 1 : 0);
   };
   initialize(result.nodes.is_clock_point, true);
-  result.nodes.is_clock_point.values = layout.is_clock_point;
   initialize(result.nodes.arrivals, true);
   initialize(result.nodes.requireds, true);
   initialize(result.nodes.slacks, true);
@@ -136,19 +136,9 @@ CsrTimingValues unpackValues(DownloadData&& data, const ResultLayout& layout)
   initialize(result.nodes.predecessor_arcs, false);
   result.data_slews.values.resize(count * 4);
   result.data_slews.presence.resize(count * 4);
-  result.effective_clock = layout.effective_clock;
   unpackNodes(data, layout, result);
-  unpackPaths(data, layout, result);
+  unpackPaths(data, domain, result);
   unpackArcs(data, layout, result);
-  return result;
-}
-
-CsrTimingResult unpack(HostData&& data)
-{
-  CsrTimingResult result;
-  result.schema_version = std::move(data.schema);
-  result.source_identity = std::move(data.identity);
-  static_cast<CsrTimingValues&>(result) = unpackValues(std::move(data), data.layout);
   return result;
 }
 

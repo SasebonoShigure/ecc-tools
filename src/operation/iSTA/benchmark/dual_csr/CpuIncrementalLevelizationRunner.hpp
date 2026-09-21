@@ -43,7 +43,7 @@ class CpuIncrementalLevelizationRunner final
 {
  public:
   [[nodiscard]] static CpuIncrementalLevelizationRunResult run(
-      const CommittedDualCsrAnalysisState& committed,
+      DualCsrTransactionCoordinator& coordinator,
       VerifiedStructuredBatch&& verified_batch);
 };
 

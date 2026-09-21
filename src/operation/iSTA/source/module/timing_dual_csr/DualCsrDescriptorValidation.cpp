@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 #include "DualCsrValidationInternal.hpp"
+#include "DualCsrReferenceValidationInternal.hpp"
 #include "TimingSemanticKey.hpp"
 namespace ista::timing_dual_csr {
 namespace {
@@ -48,14 +49,7 @@ std::vector<csr::ArcId> auxRow(const DualCsrState& state,
   if (mapped < 0)
     return {};
   const auto row = static_cast<std::size_t>(mapped);
-  if (row + 1 >= state.aux_out.row_offsets.size())
-    return {};
-  const auto begin = state.aux_out.row_offsets[row];
-  const auto end = state.aux_out.row_offsets[row + 1];
-  if (begin > end || end > state.aux_out.arc_ids.size())
-    return {};
-  return {state.aux_out.arc_ids.begin() + static_cast<std::ptrdiff_t>(begin),
-          state.aux_out.arc_ids.begin() + static_cast<std::ptrdiff_t>(end)};
+  return row < state.aux_out.row_arcs.size() ? state.aux_out.row_arcs[row] : std::vector<csr::ArcId>{};
 }
 std::vector<csr::ArcId> committedOutgoingRow(
     const DualCsrState& state, csr::NodeId source)
@@ -175,84 +169,6 @@ std::set<std::uint64_t> postPhysicalIncomingIds(
         add(row.sink, id, "affected_base_in_rows");
   return ids;
 }
-template <typename T>
-void validateExpected(const std::optional<ValueReplacement<T>>& change,
-                      const T& current, const std::string& field,
-                      DualCsrViolations& violations)
-{
-  if (change && !(change->expected == current))
-    reject(violations, DualCsrViolationCode::kExpectedValue, field,
-           "expected-before value does not match committed payload");
-}
-void validateReferenceDelta(const DualCsrState& committed,
-                            const DualCsrBatchDescriptor& descriptor,
-                            DualCsrViolations& violations)
-{
-  const auto& delta = descriptor.reference_payload;
-  const auto& current = committed.reference_payload;
-  validateExpected(delta.schema_version, current.schema_version,
-                   "reference_payload.schema_version", violations);
-  validateExpected(delta.source_identity, current.source_identity,
-                   "reference_payload.source_identity", violations);
-  validateExpected(delta.analysis_context, current.analysis_context,
-                   "reference_payload.analysis_context", violations);
-  validateExpected(delta.analysis_order, current.analysis_order,
-                   "reference_payload.analysis_order", violations);
-  validateExpected(delta.path_source_order, current.path_source_order,
-                   "reference_payload.path_source_order", violations);
-  validateExpected(delta.transition_order, current.transition_order,
-                   "reference_payload.transition_order", violations);
-  validateExpected(delta.instances, current.instances,
-                   "reference_payload.instances", violations);
-  validateExpected(delta.ordered_root_ids, current.ordered_root_ids,
-                   "reference_payload.ordered_root_ids", violations);
-  validateExpected(delta.ordered_start_ids, current.ordered_start_ids,
-                   "reference_payload.ordered_start_ids", violations);
-  validateExpected(delta.ordered_end_ids, current.ordered_end_ids,
-                   "reference_payload.ordered_end_ids", violations);
-  validateExpected(delta.clock_tags, current.clock_tags,
-                   "reference_payload.clock_tags", violations);
-  validateExpected(delta.clocks, current.clocks,
-                   "reference_payload.clocks", violations);
-  validateExpected(delta.clock_owner_by_node, current.clock_owner_by_node,
-                   "reference_payload.clock_owner_by_node", violations);
-  validateExpected(delta.port_constraints, current.port_constraints,
-                   "reference_payload.port_constraints", violations);
-  validateExpected(delta.case_analysis_constraints,
-                   current.case_analysis_constraints,
-                   "reference_payload.case_analysis_constraints", violations);
-  validateExpected(delta.timing_check_endpoints,
-                   current.timing_check_endpoints,
-                   "reference_payload.timing_check_endpoints", violations);
-  validateExpected(delta.referenced_library_cells,
-                   current.referenced_library_cells,
-                   "reference_payload.referenced_library_cells", violations);
-  validateExpected(delta.parasitics, current.parasitics,
-                   "reference_payload.parasitics", violations);
-  validateExpected(delta.start_seeds, current.start_seeds,
-                   "reference_payload.start_seeds", violations);
-  validateExpected(delta.endpoint_required, current.endpoint_required,
-                   "reference_payload.endpoint_required", violations);
-  validateExpected(delta.cell_pin_capacitances,
-                   current.cell_pin_capacitances,
-                   "reference_payload.cell_pin_capacitances", violations);
-  validateExpected(delta.unsupported_reasons, current.unsupported_reasons,
-                   "reference_payload.unsupported_reasons", violations);
-  if (!delta.source_identity) {
-    reject(violations, DualCsrViolationCode::kGeneration,
-           "reference_payload.source_identity",
-           "every batch must declare the expected and replacement identity");
-  } else {
-    const auto& replacement = delta.source_identity->replacement;
-    if (replacement.session_token != descriptor.session_token.value()
-        || replacement.graph_generation
-               != descriptor.target_generation.value())
-      reject(violations, DualCsrViolationCode::kGeneration,
-             "reference_payload.source_identity.replacement",
-             "replacement identity must bind target session/generation");
-  }
-}
-
 void validateAppends(const DualCsrState& committed,
                      const DualCsrBatchDescriptor& descriptor,
                      DualCsrViolations& violations)
@@ -412,7 +328,7 @@ DualCsrViolations validateDualCsrDescriptor(
     reject(violations, DualCsrViolationCode::kHighWater, "after",
            "append-only high-water cannot move backwards");
   validateAppends(committed, descriptor, violations);
-  validateReferenceDelta(committed, descriptor, violations);
+  detail::validateReferenceDelta(committed, descriptor, violations);
   std::set<PhysicalKey> out_writes;
   std::set<PhysicalKey> in_writes;
   std::set<std::uint64_t> required_deactivations;

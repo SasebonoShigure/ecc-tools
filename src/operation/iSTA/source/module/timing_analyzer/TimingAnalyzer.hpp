@@ -116,7 +116,6 @@ class TimingAnalyzer
   void propagateRequiredArc(Arc& arc);
   void updateSlack();
   void analyzeEndPointList(TAModel& ta_model);
-  void uploadTimingPathGroupList(TAModel& ta_model);
   TimingPathGroup& getTimingPathGroup(TAModel& ta_model, TimingPath& timing_path);
   std::string getTimingPathGroupName(TimingPath& timing_path);
   TimingPathGroup initTimingPathGroup(std::string& group_name);
@@ -161,7 +160,6 @@ class TimingAnalyzer
   void updateViolation(TAModel& ta_model, TimingPath& timing_path);
   std::size_t getTimingPathNum(std::map<std::string, TimingPathGroup>& timing_path_group_map);
   std::size_t getTimingPathNum(TimingPathGroup& timing_path_group);
-  void updateSummary(TAModel& ta_model);
 };
 
 }  // namespace ista

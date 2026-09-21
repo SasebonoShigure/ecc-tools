@@ -40,6 +40,7 @@ class Database
   ~Database() = default;
   // getter
   std::string& get_design_name() { return _design_name; }
+  const std::string& get_design_name() const { return _design_name; }
   std::map<std::string, Instance>& get_instance_map() { return _instance_map; }
   const std::map<std::string, Instance>& get_instance_map() const { return _instance_map; }
   std::map<std::string, Pin>& get_pin_map() { return _pin_map; }

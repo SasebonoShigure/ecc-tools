@@ -18,7 +18,7 @@
 #include "CsrSessionSnapshotAdapter.hpp"
 #include "Database.hpp"
 #include "NativeCandidateExecutor.hpp"
-#include "NativeDatabaseCandidate.hpp"
+#include "NativeEditTransaction.hpp"
 #include "NativeDesignEditTranslator.hpp"
 #include "NativeTimingEditPreparer.hpp"
 #include "TimingGraphCsrAdapter.hpp"
@@ -48,33 +48,10 @@ decltype(auto) invokeTypedPhase(BufferReplayFailureCode code,
   }
 }
 
-bool noOpRollback(void*) noexcept
-{
-  return true;
-}
-
-bool failedRollback(void*) noexcept
-{
-  return false;
-}
-
-timing_edit::TransactionStatus rollbackCoordinator(
-    timing_edit::TimingEditCoordinator& coordinator,
-    bool rollback_succeeded) noexcept
-{
-  if (coordinator.state() == timing_edit::TimingEditCoordinatorState::kPrepared) {
-    return coordinator.cancelPrepared();
-  }
-  bool marker = rollback_succeeded;
-  const timing_edit::PrecommitRollbackSignal signal{
-      &marker, rollback_succeeded ? &noOpRollback : &failedRollback};
-  return coordinator.rollbackPrecommit(signal);
-}
-
-const std::vector<timing_edit::DesignEditPlan>& batches(const ReplayProgram& program)
+const std::vector<timing_edit::EditBatch>& batches(const ReplayProgram& program)
 {
   return std::visit(
-      [](const auto& payload) -> const std::vector<timing_edit::DesignEditPlan>& {
+      [](const auto& payload) -> const std::vector<timing_edit::EditBatch>& {
         return payload.batches;
       },
       program.workload);
@@ -174,15 +151,6 @@ std::unique_ptr<csr::CsrCommittedSessionSnapshot> buildHostSnapshot(
   return std::move(*snapshot);
 }
 
-void requireOk(timing_edit::TransactionStatus status,
-               BufferReplayFailureCode code, const char* operation)
-{
-  if (!status.ok()) {
-    fail(code, std::string(operation) + " returned transaction status "
-                   + std::to_string(static_cast<std::uint32_t>(status.code)));
-  }
-}
-
 }  // namespace
 
 const char* token(BufferReplayFailureCode code) noexcept
@@ -220,207 +188,62 @@ BufferReplayError::BufferReplayError(BufferReplayFailureCode code,
 }
 
 FunctionalBatchReceipt BufferTraceReplayer::applyNextBatch(
-    BufferReplayContext& context, const timing_edit::DesignEditPlan& plan,
+    BufferReplayContext& context, const timing_edit::EditBatch& plan,
     std::size_t batch_ordinal)
 {
-  invokeTypedPhase(BufferReplayFailureCode::kContextMismatch,
-                   "BufferReplayContext::requireActive", [&] {
-                     context.requireActive();
-                   });
-  auto& coordinator = context.coordinator();
-  if (coordinator.state() != timing_edit::TimingEditCoordinatorState::kIdle
-      || plan.baseline != coordinator.baseline()
-      || plan.expected_generation != coordinator.committedIdentity().generation) {
+  context.requireActive();
+  if (plan.expected_generation != context._identity.generation)
     fail(BufferReplayFailureCode::kGenerationMismatch,
-         "batch baseline/generation differs before the first write");
-  }
-
+         "batch generation differs before the first write");
   const timing_edit::TimingEditPrepareContext prepare_context{
-      coordinator.sessionToken(), coordinator.baseline(),
-      coordinator.committedIdentity(), context.analysisContext()};
-  timing_edit::PreparedBatch prepared = invokeTypedPhase(
-      BufferReplayFailureCode::kPrepareRejected,
-      "NativeTimingEditPreparer::prepare", [&] {
+      context.authority().sessionToken(), context._baseline,
+      context._identity, context.analysisContext()};
+  auto prepared = invokeTypedPhase(
+      BufferReplayFailureCode::kPrepareRejected, "prepare", [&] {
         return timing_edit::NativeTimingEditPreparer::prepare(
-            context.database(), plan, prepare_context,
-            coordinator.resolverState());
+            context.database(), plan, prepare_context, context._resolver);
       });
-
-  timing_edit::TimingEditResolverState staged;
-  try {
-    invokeTypedPhase(BufferReplayFailureCode::kPrepareRejected,
-                     "beginPrepare", [&] {
-                       requireOk(coordinator.beginPrepare(prepared),
-                                 BufferReplayFailureCode::kPrepareRejected,
-                                 "beginPrepare");
-                     });
-    invokeTypedPhase(BufferReplayFailureCode::kPrepareRejected,
-                     "resolver staging", [&] {
-                       staged = coordinator.resolverState().stage(prepared);
-                     });
-    invokeTypedPhase(BufferReplayFailureCode::kPrepareRejected,
-                     "markStaged", [&] {
-                       requireOk(coordinator.markStaged(),
-                                 BufferReplayFailureCode::kPrepareRejected,
-                                 "markStaged");
-                     });
-    timing_edit::NativeDatabaseCandidate candidate = invokeTypedPhase(
-        BufferReplayFailureCode::kTranslationRejected,
-        "NativeDatabaseCandidate::create", [&] {
-          return timing_edit::NativeDatabaseCandidate::create(
-              context.database());
-        });
-    const timing_edit::NativeTranslationResult translated = invokeTypedPhase(
-        BufferReplayFailureCode::kTranslationRejected,
-        "NativeDesignEditTranslator::applyNormalizedBatch", [&] {
-          return timing_edit::NativeDesignEditTranslator::applyNormalizedBatch(
-              candidate.database(), prepared, staged);
-        });
-    if (!translated.applied() || !translated.reasons.empty()) {
-      rollbackCoordinator(coordinator, true);
-      fail(BufferReplayFailureCode::kTranslationRejected,
-           "normalized Stage 3 translation was not exactly supported");
-    }
-    invokeTypedPhase(BufferReplayFailureCode::kNativeExecutionFailed,
-                     "markExecuting", [&] {
-                       requireOk(coordinator.markExecuting(),
-                                 BufferReplayFailureCode::kNativeExecutionFailed,
-                                 "markExecuting");
-                     });
-
-    timing_edit::InstalledNativeDatabase installed = invokeTypedPhase(
-        BufferReplayFailureCode::kNativeExecutionFailed,
-        "NativeCandidateExecutor::installAndExecute", [&] {
-          return timing_edit::NativeCandidateExecutor::installAndExecute(
-              context.authority(), std::move(candidate));
-        });
-    bool installed_ownership_transferred = false;
-    try {
-      auto host_snapshot = buildHostSnapshot(
-          installed.database(), context.analysisContext(),
-          coordinator.sessionToken());
-      CsrFunctionalState csr_state = computeFunctionalState(*host_snapshot);
-      const timing_edit::CommittedEditIdentity post_identity = invokeTypedPhase(
-          BufferReplayFailureCode::kCsrSnapshotFailed,
-          "captureCurrentIdentity", [&] {
-            return timing_edit::NativeTimingEditPreparer::captureCurrentIdentity(
-                installed.database(), prepared.targetGeneration(),
-                context.analysisContext(), coordinator.sessionToken());
-          });
-
-      FunctionalBatchReceipt receipt = invokeTypedPhase(
-          BufferReplayFailureCode::kPublishRejected,
-          "functional receipt capture", [&] {
-            return FunctionalBatchReceipt{
-                .batch_ordinal = batch_ordinal,
-                .expected_generation = prepared.expectedGeneration(),
-                .target_generation = prepared.targetGeneration(),
-                .normalized_edits = prepared.normalizedEdits(),
-                .forward = prepared.forwardDelta(),
-                .reverse = prepared.reverseDelta(),
-                .materializations = prepared.tokenMaterializations(),
-                .post_identity = post_identity,
-                .csr_input = std::move(csr_state.input),
-                .csr_timing = std::move(csr_state.timing),
-                .native_database = captureNativeDatabase(installed.database())};
-          });
-      timing_edit::CumulativeEditTrace cumulative = invokeTypedPhase(
-          BufferReplayFailureCode::kPublishRejected,
-          "cumulative trace construction", [&] {
-            timing_edit::CumulativeEditTrace value = coordinator.cumulativeTrace();
-            value.batches.push_back(timing_edit::DesignEditPlan{
-                .baseline = coordinator.baseline(),
-                .expected_generation = prepared.expectedGeneration(),
-                .edits = prepared.normalizedEdits()});
-            return value;
-          });
-      PendingVerifiedBatch pending(
-          std::move(installed), std::move(host_snapshot), post_identity,
-          std::move(prepared), std::move(cumulative), std::move(staged));
-      installed_ownership_transferred = true;
-      invokeTypedPhase(BufferReplayFailureCode::kPublishRejected,
-                       "proveSealAndPublish", [&] {
-                         context.proveSealAndPublish(std::move(pending));
-                       });
-      if (coordinator.state() != timing_edit::TimingEditCoordinatorState::kIdle
-          || coordinator.committedIdentity() != receipt.post_identity) {
-        fail(BufferReplayFailureCode::kPublishRejected,
-             "verified publish did not install the exact post identity");
-      }
-      return receipt;
-    } catch (...) {
-      // Before PendingVerifiedBatch takes ownership, InstalledNativeDatabase
-      // must be rolled back explicitly; its destructor is diagnostic only.
-      if (installed_ownership_transferred) {
-        throw;
-      }
-      const std::exception_ptr primary_failure = std::current_exception();
-      const bool native_rollback_succeeded = installed.rollback();
-      const timing_edit::TransactionStatus transaction_rollback
-          = rollbackCoordinator(coordinator, native_rollback_succeeded);
-      if (!native_rollback_succeeded) {
-        if (transaction_rollback.code
-                != timing_edit::TransactionStatusCode::kRollbackFailed
-            || transaction_rollback.state
-                   != timing_edit::TimingEditCoordinatorState::kPoisoned
-            || coordinator.state()
-                   != timing_edit::TimingEditCoordinatorState::kPoisoned) {
-          fail(BufferReplayFailureCode::kNativeExecutionFailed,
-               "prepublish native rollback failure did not poison the coordinator exactly");
-        }
-        fail(BufferReplayFailureCode::kNativeExecutionFailed,
-             "post-execution verification failed; exact native rollback failed and session was poisoned");
-      }
-      if (!transaction_rollback.ok()
-          || transaction_rollback.state
-                 != timing_edit::TimingEditCoordinatorState::kIdle
-          || coordinator.state() != timing_edit::TimingEditCoordinatorState::kIdle) {
-        fail(BufferReplayFailureCode::kNativeExecutionFailed,
-             "successful native rollback did not restore the idle coordinator");
-      }
-      std::rethrow_exception(primary_failure);
-    }
-  } catch (const timing_edit::NativeExecutionRollbackError& error) {
-    const timing_edit::TransactionStatus rollback
-        = rollbackCoordinator(coordinator, false);
-    if (rollback.code != timing_edit::TransactionStatusCode::kRollbackFailed
-        || rollback.state != timing_edit::TimingEditCoordinatorState::kPoisoned
-        || coordinator.state()
-               != timing_edit::TimingEditCoordinatorState::kPoisoned) {
-      fail(BufferReplayFailureCode::kNativeExecutionFailed,
-           "native rollback failure did not poison the coordinator exactly");
-    }
-    fail(BufferReplayFailureCode::kNativeExecutionFailed,
-         std::string("native execution failed; exact rollback failed and session was poisoned: ")
-             + error.what());
-  } catch (const BufferReplayError&) {
-    if (coordinator.state() == timing_edit::TimingEditCoordinatorState::kPrepared
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kStaged
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kExecuting
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kVerified) {
-      rollbackCoordinator(coordinator, true);
-    }
-    throw;
-  } catch (const std::exception& error) {
-    if (coordinator.state() == timing_edit::TimingEditCoordinatorState::kPrepared
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kStaged
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kExecuting
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kVerified) {
-      rollbackCoordinator(coordinator, true);
-    }
-    fail(BufferReplayFailureCode::kPublishRejected,
-         std::string("unclassified post-prepare replay failure: ")
-             + error.what());
-  } catch (...) {
-    if (coordinator.state() == timing_edit::TimingEditCoordinatorState::kPrepared
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kStaged
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kExecuting
-        || coordinator.state() == timing_edit::TimingEditCoordinatorState::kVerified) {
-      rollbackCoordinator(coordinator, true);
-    }
-    fail(BufferReplayFailureCode::kPublishRejected,
-         "unclassified post-prepare replay failure was non-standard");
-  }
+  timing_edit::PreparedTimingEditResolverPatch resolver_patch(
+      context._resolver, context._resolver.prepare(prepared));
+  auto installed = invokeTypedPhase(
+      BufferReplayFailureCode::kTranslationRejected, "prepareFull", [&] {
+        return timing_edit::NativeEditTransaction::prepareFull(
+            context.authority(), prepared, resolver_patch.view());
+      });
+  invokeTypedPhase(BufferReplayFailureCode::kNativeExecutionFailed,
+                   "executeFull", [&] {
+                     timing_edit::NativeCandidateExecutor::executeFull(installed);
+                   });
+  resolver_patch.apply();
+  auto host = buildHostSnapshot(installed.database(), context.analysisContext(),
+                                context.authority().sessionToken());
+  CsrFunctionalState csr_state = computeFunctionalState(*host);
+  invokeTypedPhase(BufferReplayFailureCode::kCsrComputationFailed,
+                   "native/CSR comparison", [&] {
+                     context._compare_timing(csr_state.input, csr_state.timing,
+                                             installed.database());
+                   });
+  auto post_identity = timing_edit::NativeTimingEditPreparer::captureCurrentIdentity(
+      installed.database(), prepared.targetGeneration(),
+      context.analysisContext(), context.authority().sessionToken());
+  const auto& batch = prepared;
+  FunctionalBatchReceipt receipt{
+      .batch_ordinal = batch_ordinal,
+      .expected_generation = batch.expectedGeneration(),
+      .target_generation = batch.targetGeneration(),
+      .normalized_edits = batch.normalizedEdits(),
+      .forward = batch.forwardDelta(),
+      .reverse = batch.reverseDelta(),
+      .materializations = batch.tokenMaterializations(),
+      .post_identity = post_identity,
+      .csr_input = std::move(csr_state.input),
+      .csr_timing = std::move(csr_state.timing),
+      .native_database = captureNativeDatabase(installed.database())};
+  // All diagnostic allocations finish before these no-throw publications.
+  installed.commit();
+  resolver_patch.commit();
+  std::swap(context._identity, post_identity);
+  return receipt;
 }
 
 ReplayReceipt BufferTraceReplayer::replayPrefix(
@@ -436,15 +259,13 @@ ReplayReceipt BufferTraceReplayer::replayPrefix(
                    "BufferReplayContext::requireActive", [&] {
                      context.requireActive();
                    });
-  const auto& coordinator = context.coordinator();
-  if (coordinator.state() != timing_edit::TimingEditCoordinatorState::kIdle
-      || coordinator.committedIdentity().generation
-             != timing_edit::TransactionGeneration{0}
-      || !coordinator.cumulativeTrace().batches.empty()
-      || coordinator.sessionToken() != context.authority().sessionToken()) {
+  if (context._identity.generation != timing_edit::TransactionGeneration{0}) {
     fail(BufferReplayFailureCode::kContextMismatch,
-         "replay requires an idle generation-zero context from the fresh runner");
+         "replay requires a generation-zero context from the fresh runner");
   }
+  if (program.baseline() != *context._baseline)
+    fail(BufferReplayFailureCode::kContextMismatch,
+         "replay baseline differs from the fresh context before the first write");
   const auto& trace_batches = batches(program);
   if (prefix_batches > trace_batches.size()) {
     fail(BufferReplayFailureCode::kPrefixOutsideTrace,
@@ -472,22 +293,20 @@ ReplayReceipt BufferTraceReplayer::finishCurrent(
          "finished prefix exceeds the fixed trace");
   }
   if (receipts.size() != expected_prefix
-      || context.coordinator().committedIdentity().generation.value() != expected_prefix
-      || context.coordinator().cumulativeTrace().batches.size() != expected_prefix) {
+      || context._identity.generation.value() != expected_prefix) {
     fail(BufferReplayFailureCode::kGenerationMismatch,
          "functional batch receipts differ from the committed trace prefix");
   }
   auto final_snapshot = buildHostSnapshot(
       context.database(), context.analysisContext(),
-      context.coordinator().sessionToken());
+      context.authority().sessionToken());
   CsrFunctionalState final_csr = computeFunctionalState(*final_snapshot);
   return ReplayReceipt{
       .header = program.header,
       .prefix_batches = expected_prefix,
       .batches = std::move(receipts),
-      .committed_identity = context.coordinator().committedIdentity(),
-      .cumulative_trace = context.coordinator().cumulativeTrace(),
-      .resolver_state = context.coordinator().resolverState(),
+      .committed_identity = context._identity,
+      .resolver_state = context._resolver,
       .final_database = captureNativeDatabase(context.database()),
       .final_csr_input = std::move(final_csr.input),
       .final_csr_timing = std::move(final_csr.timing)};

@@ -200,7 +200,7 @@ bool validResolvedTimingShapes(const CsrTimingValues& result, std::size_t node_c
   const auto child_count = arcs.timing_arc_indices.size();
   if (child_count > maximum / 8)
     return false;
-  return result.node_to_level.size() == node_count && result.timing_order.size() == node_count
+  return result.node_to_level.size() == node_count && result.level_nodes.size() == node_count
          && matchingSoaSizes(node_count, nodes.is_clock_point, nodes.arrivals, nodes.requireds, nodes.slacks, nodes.launches, nodes.clock_names,
                              nodes.predecessor_nodes, nodes.predecessor_arcs)
          && matchingClockSizes(result.effective_clock, node_count * 4) && matchingClockSizes(result.physical_clock, node_count * 4)
@@ -495,6 +495,23 @@ TimingResultPreparationResult prepareTimingResultScatter(ista::Database& databas
       *targets, {committed_input.analysis_order, committed_input.path_source_order, committed_input.transition_order, committed_input.clock_tags}, result);
 }
 
+TimingResultPreparationResult prepareStableTimingResult(
+    Database& database, const std::vector<std::string>& node_names,
+    const std::vector<std::optional<std::size_t>>& arc_native_ranks,
+    const TimingScatterLayout& layout, const CsrTimingValues& values)
+{
+  StableScatterTargets targets;
+  targets.nodes.reserve(node_names.size());
+  targets.arcs.resize(arc_native_ranks.size());
+  for (const auto& name : node_names)
+    targets.nodes.push_back({&database.get_timing_point_map().at(name), &name});
+  for (std::size_t id = 0; id < arc_native_ranks.size(); ++id)
+    if (arc_native_ranks[id])
+      targets.arcs[id] = {&database.get_arc_list().at(*arc_native_ranks[id]), *arc_native_ranks[id]};
+  targets.timing_order = &database.get_timing_order_list();
+  return prepareResolvedTimingResult(targets, layout, values);
+}
+
 TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTargets& targets, const TimingScatterLayout& layout, const CsrTimingValues& result)
 {
   if (targets.timing_order == nullptr || !validResolvedTimingShapes(result, targets.nodes.size(), targets.arcs.size()))
@@ -503,7 +520,7 @@ TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTar
   prepared.nodes.resize(targets.nodes.size());
   prepared.arcs.reserve(targets.arcs.size());
   prepared.timing_order_target = targets.timing_order;
-  prepared.timing_order.reserve(result.timing_order.size());
+  prepared.timing_order.reserve(result.level_nodes.size());
 
   for (std::size_t node = 0; node < prepared.nodes.size(); ++node) {
     if (resolvedNode(targets, NodeId{node}) == nullptr)
@@ -521,7 +538,7 @@ TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTar
     if (const auto failure = prepareArcState(result, layout, targets, arc, prepared.arcs.back()))
       return TimingResultPreparationFailure{*failure};
   }
-  for (NodeId node : result.timing_order) {
+  for (NodeId node : result.level_nodes) {
     const auto* target = resolvedNode(targets, node);
     if (target == nullptr)
       return TimingResultPreparationFailure{CsrScatterCode::kIdMappingMismatch};

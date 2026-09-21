@@ -33,6 +33,7 @@ namespace ista::timing_edit {
 [[nodiscard]] std::vector<std::uint8_t> canonicalLibraryCellRefBytes(const LibraryCellRef& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalBufferInsertionMutationBytes(const BufferInsertionMutation& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalDesignEditPlanBytes(const DesignEditPlan& value);
+[[nodiscard]] std::vector<std::uint8_t> canonicalDesignEditPlanBytes(const BaselineSemanticIdentity& baseline, const EditBatch& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalTimingGraphEditBytes(const TimingGraphEdit& value);
 [[nodiscard]] std::uint8_t timingGraphEditCanonicalRank(const TimingGraphEdit& value);
 [[nodiscard]] std::vector<std::uint8_t> canonicalTimingGraphDeltaBytes(const TimingGraphDelta& value);

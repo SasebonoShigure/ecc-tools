@@ -105,15 +105,12 @@ void requireExactAdjacencyExtents(const DualCsrState& state,
   require(exactExtent(state.base_in.edge_extent,
                       state.base_in.physical_slots),
           "resource_observation.base_in_slots");
-  require(exactExtent(state.aux_out.offsets_extent,
-                      state.aux_out.row_offsets),
-          "resource_observation.aux_offsets");
+  require(exactExtent(state.aux_out.rows_extent,
+                      state.aux_out.row_arcs),
+          "resource_observation.aux_rows");
   require(exactExtent(state.aux_out.source_extent,
                       state.aux_out.row_sources),
           "resource_observation.aux_sources");
-  require(exactExtent(state.aux_out.edge_extent,
-                      state.aux_out.arc_ids),
-          "resource_observation.aux_arcs");
   require(exactExtent(state.aux_out.mapping_extent,
                       state.aux_out.source_to_aux_row),
           "resource_observation.aux_source_map");
@@ -188,18 +185,34 @@ DualCsrResourceObservationAttempt observeDualCsrResources(
                          state.base_in.physical_slots,
                          "resource_observation.base_in_slots",
                          attempt.violations);
-  valid &= observeVector(buffers[6], DualCsrBufferKind::kAuxOffsets,
-                         state.aux_out.row_offsets,
-                         "resource_observation.aux_offsets",
+  valid &= observeVector(buffers[6], DualCsrBufferKind::kAuxRows,
+                         state.aux_out.row_arcs,
+                         "resource_observation.aux_rows",
                          attempt.violations);
   valid &= observeVector(buffers[7], DualCsrBufferKind::kAuxSources,
                          state.aux_out.row_sources,
                          "resource_observation.aux_sources",
                          attempt.violations);
-  valid &= observeVector(buffers[8], DualCsrBufferKind::kAuxArcs,
-                         state.aux_out.arc_ids,
-                         "resource_observation.aux_arcs",
-                         attempt.violations);
+  auto& edges = buffers[8];
+  edges.buffer = DualCsrBufferKind::kAuxArcs;
+  edges.element_size_bytes = sizeof(csr::ArcId);
+  for (const auto& row : state.aux_out.row_arcs) {
+    if (row.capacity() > std::numeric_limits<std::uint64_t>::max() - edges.capacity_elements) {
+      reject(attempt.violations, DualCsrViolationCode::kCapacity, "resource_observation.aux_arcs", "Aux row capacity total overflows");
+      valid = false;
+      break;
+    }
+    edges.logical_elements += row.size();
+    edges.capacity_elements += row.capacity();
+  }
+  const auto bytes = detail::checkedShallowVectorStorageBytes(edges.capacity_elements, edges.element_size_bytes);
+  if (bytes)
+    edges.estimated_reserved_bytes = *bytes;
+  else {
+    reject(attempt.violations, DualCsrViolationCode::kCapacity,
+           "resource_observation.aux_arcs", "Aux row storage bytes overflow");
+    valid = false;
+  }
   valid &= observeVector(buffers[9], DualCsrBufferKind::kAuxSourceMap,
                          state.aux_out.source_to_aux_row,
                          "resource_observation.aux_source_map",

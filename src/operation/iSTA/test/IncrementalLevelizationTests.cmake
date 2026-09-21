@@ -91,7 +91,6 @@ set(ISTA_STAGE6_PRODUCTION_FRESH_PROBE_LINKS
     ista_dual_csr_trace_runtime
     ista_timing_dual_csr
     ista_buffer_trace_runtime
-    ista_timing_edit_transaction
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
@@ -200,9 +199,8 @@ set(ISTA_STAGE6_RECOVERY_SOURCES
 )
 set(ISTA_STAGE6_RECOVERY_LINKS
     ista_dual_csr_trace_runtime
-    ista_timing_edit_transaction
-    ista_timing_dual_csr_native
     ista_timing_edit_native
+    ista_timing_dual_csr_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
     ista_interface
@@ -255,9 +253,8 @@ set(ISTA_STAGE6_ACTIVE_PAYLOAD_SOURCES
 )
 set(ISTA_STAGE6_ACTIVE_PAYLOAD_LINKS
     ista_dual_csr_trace_runtime
-    ista_timing_edit_transaction
-    ista_timing_dual_csr_native
     ista_timing_edit_native
+    ista_timing_dual_csr_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
     ista_interface

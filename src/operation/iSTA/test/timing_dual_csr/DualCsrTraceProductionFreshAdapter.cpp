@@ -51,8 +51,7 @@ FunctionalSemanticReceipt normalizeFresh(
     fail(std::move(message));
   }
   DualCsrTimingResult projected_timing{
-      .values = std::move(timing),
-      .active_arc_mask = std::vector<std::uint8_t>(input.arcs.size(), 1U)};
+      .values = std::move(timing)};
   FunctionalSemanticReceiptAttempt projected
       = projectDualCsrFunctionalSemanticReceipt(
           *baseline.state, projected_timing);
@@ -78,7 +77,6 @@ ProductionFreshSemanticPrefix runProductionFreshSemanticPrefix(
       });
   if (replay.prefix_batches != prefix_batches
       || replay.batches.size() != prefix_batches
-      || replay.cumulative_trace.batches.size() != prefix_batches
       || replay.committed_identity.generation.value() != prefix_batches) {
     fail("Stage 4 replay returned the wrong cumulative prefix");
   }

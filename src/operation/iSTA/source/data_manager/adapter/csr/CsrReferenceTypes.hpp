@@ -190,7 +190,6 @@ struct CsrTimingValues
   std::vector<std::uint64_t> level_offsets;
   std::vector<NodeId> level_nodes;
   std::vector<std::uint64_t> node_to_level;
-  std::vector<NodeId> timing_order;
   NodeResultSoa nodes;
   ClockResultSoa effective_clock;
   ClockResultSoa physical_clock;

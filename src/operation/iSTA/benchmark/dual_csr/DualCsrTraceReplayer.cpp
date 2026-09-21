@@ -21,7 +21,8 @@
 #include "CpuIncrementalLevelizationRunner.hpp"
 #include "CsrReferenceInputAdapterInternal.hpp"
 #include "DualCsrBaselineFactoryInstrumentationInternal.hpp"
-#include "DualCsrNativeCandidateCarrierInternal.hpp"
+#include "NativeTargetedEditPreparer.hpp"
+#include "NativeCandidateExecutor.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "DualCsrTraceBaselineInternal.hpp"
 #include "DualCsrTransactionCoordinator.hpp"
@@ -29,12 +30,13 @@
 #include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowTimingRecordReader.hpp"
 #include "TimingEditDualCsrDescriptorBuilder.hpp"
+#include "TimingResultScatterInternal.hpp"
+#include "StaProductionLifecycle.hpp"
+#include "DelayCalculator.hpp"
+#include "TimingAnalyzer.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
-
-using detail::CandidateLifecycleSnapshot;
-using detail::DualCsrNativeCandidateCarrier;
 
 using SteadyClock = std::chrono::steady_clock;
 
@@ -157,12 +159,12 @@ std::string narrowCaptureFailureMessage(const CandidateBoundCapture& capture)
       code, "Dual-CSR targeted trace: " + std::move(message));
 }
 
-const std::vector<timing_edit::DesignEditPlan>& batches(
+const std::vector<timing_edit::EditBatch>& batches(
     const buffer_trace::ReplayProgram& program)
 {
   return std::visit(
       [](const auto& workload)
-          -> const std::vector<timing_edit::DesignEditPlan>& {
+          -> const std::vector<timing_edit::EditBatch>& {
         return workload.batches;
       },
       program.workload);
@@ -187,41 +189,13 @@ void checkedAdd(std::uint64_t& value, std::uint64_t increment,
   value += increment;
 }
 
-void requireRollback(timing_edit::InstalledNativeDatabase& installed)
-{
-  if (!installed.active()
-      || !DualCsrNativeCandidateCarrier::rollback(installed))
-    fail(DualCsrTraceFailureCode::kRollbackRejected,
-         "native candidate rollback did not restore the baseline");
-}
-
-timing_edit::NativeDatabaseCandidate nextCandidate(
-    Database& baseline,
-    std::optional<timing_edit::InstalledNativeDatabase>& installed)
-{
-  if (!installed)
-    return DualCsrNativeCandidateCarrier::create(baseline);
-  if (!installed->active())
-    fail(DualCsrTraceFailureCode::kCandidateRejected,
-         "cumulative installed candidate is not active");
-  timing_edit::NativeDatabaseCandidate candidate
-      = DualCsrNativeCandidateCarrier::clone(*installed);
-  requireRollback(*installed);
-  installed.reset();
-  return candidate;
-}
-
 DualCsrOperationCounters measuredCounters(
     const csr::detail::NativeFullExportCounters& full_before,
     const csr::detail::NativeFullExportCounters& full_after,
     std::uint64_t baseline_before,
     std::uint64_t baseline_after,
-    CandidateLifecycleSnapshot lifecycle_before,
-    CandidateLifecycleSnapshot lifecycle_after,
     std::uint64_t fallback_calls)
 {
-  const auto lifecycle = detail::candidateLifecycleDelta(
-      lifecycle_before, lifecycle_after);
   const std::uint64_t graph_exports = counterDelta(
       full_before.graph_exports, full_after.graph_exports,
       "native full graph export");
@@ -234,17 +208,10 @@ DualCsrOperationCounters measuredCounters(
       .host_snapshot_rebuilds = reference_exports,
       .baseline_factory_calls = counterDelta(
           baseline_before, baseline_after, "baseline factory"),
-      .fallback_calls = fallback_calls,
-      .candidate_creates = lifecycle.creates,
-      .candidate_clones = lifecycle.clones,
-      .candidate_applies = lifecycle.applies,
-      .candidate_executes = lifecycle.executes,
-      .candidate_installs = lifecycle.installs,
-      .candidate_rollbacks = lifecycle.rollbacks};
+.fallback_calls = fallback_calls};
 }
 
-void requireTargetedCounters(const DualCsrOperationCounters& counters,
-                             std::uint64_t generation)
+void requireTargetedCounters(const DualCsrOperationCounters& counters)
 {
   if (counters.native_full_graph_exports != 0
       || counters.native_full_reference_exports != 0
@@ -253,15 +220,7 @@ void requireTargetedCounters(const DualCsrOperationCounters& counters,
       || counters.fallback_calls != 0)
     fail(DualCsrTraceFailureCode::kForbiddenOperationObserved,
          "targeted interval observed a full, baseline, or fallback path");
-  if (generation == 0
-      || counters.candidate_creates != 1
-      || counters.candidate_clones != generation - 1
-      || counters.candidate_applies != generation
-      || counters.candidate_executes != generation
-      || counters.candidate_installs != generation
-      || counters.candidate_rollbacks != generation)
-    fail(DualCsrTraceFailureCode::kCandidateRejected,
-         "measured cumulative candidate lifecycle differs");
+
 }
 
 DualCsrPublishedObservation observe(
@@ -320,9 +279,9 @@ void requireResourceDeclarations(
         structural.base_out.edge_extent,
         structural.base_in.offsets_extent,
         structural.base_in.edge_extent,
-        structural.aux_out.offsets_extent,
+        structural.aux_out.rows_extent,
         structural.aux_out.source_extent,
-        structural.aux_out.edge_extent,
+        structural.aux_edge_extent,
         structural.aux_out.mapping_extent};
     bool memory_matches
         = resource.vector_memory.estimate_kind
@@ -394,10 +353,9 @@ DualCsrTraceRunResult replayPrefixWithMode(
          "generation-zero baseline did not call its factory exactly once");
 
   const auto full_before = incregpusta_debug_checks_enabled ? csr::detail::currentNativeFullExportCounters() : csr::detail::NativeFullExportCounters{};
-  const CandidateLifecycleSnapshot lifecycle_before
-      = incregpusta_debug_checks_enabled ? detail::currentCandidateLifecycleSnapshot() : CandidateLifecycleSnapshot{};
   DualCsrTransactionCoordinator coordinator(std::move(baseline));
-  std::optional<timing_edit::InstalledNativeDatabase> installed;
+  auto native_state = timing_edit::NativeTargetedEditPreparer::bindBaseline(
+      context.baseline_database, context.baseline_reference_input, program.baseline(), context.models);
   std::vector<DualCsrPublishedObservation> observations;
   if constexpr (incregpusta_debug_checks_enabled)
     observations.reserve(prefix_batches);
@@ -409,8 +367,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
   DualCsrTransactionEvidence evidence;
   std::uint64_t fallback_calls = 0;
 
-  try {
-    for (std::size_t index = 0; index < prefix_batches; ++index) {
+  for (std::size_t index = 0; index < prefix_batches; ++index) {
       const auto& committed = coordinator.committed();
       DualCsrBatchPhaseTimings batch_timing{
           .generation_before = committed.generation.value()};
@@ -421,33 +378,23 @@ DualCsrTraceRunResult replayPrefixWithMode(
       const auto prepare_started = SteadyClock::now();
       DualSemanticReadView committed_view(committed.graph);
       PendingStructuredBatch pending
-          = DualCsrStructuredBatchPreparer::prepare(
-              trace_batches[index], committed.resolver, committed_view,
-              committed.graph, committed.identity,
-              committed.arc_group_index);
+          = coordinator.prepareBatch(trace_batches[index]);
       batch_timing.pre_candidate_prepare_ms
           = elapsedMilliseconds(prepare_started);
       if constexpr (incregpusta_debug_checks_enabled)
         evidence.phase_trace.push_back(DualCsrReceiptPhase::kPreCandidatePrepare);
 
       const auto candidate_started = SteadyClock::now();
-      timing_edit::NativeDatabaseCandidate candidate
-          = nextCandidate(context.baseline_database, installed);
-      const auto translated = DualCsrNativeCandidateCarrier::apply(
-          candidate, pending.preparedBatch(), pending.stagedResolver());
-      if (!translated.applied())
-        fail(DualCsrTraceFailureCode::kCandidateRejected,
-             "native translation rejected a prepared frozen batch");
-      installed.emplace(DualCsrNativeCandidateCarrier::installAndExecute(
-          context.authority, std::move(candidate)));
+      auto native_batch = timing_edit::NativeTargetedEditPreparer::prepare(
+          context.baseline_database, context.authority, trace_batches[index], native_state);
       batch_timing.candidate_apply_execute_ms
           = elapsedMilliseconds(candidate_started);
       if constexpr (incregpusta_debug_checks_enabled)
         evidence.phase_trace.push_back(DualCsrReceiptPhase::kCandidateApplyExecute);
 
       const auto capture_started = SteadyClock::now();
-      CandidateBoundCapture capture = NarrowTimingRecordReader{}.read(
-          installed->database(), committed_view,
+      CandidateBoundCapture capture = NarrowTimingRecordReader{context.models}.read(
+          native_batch.transaction.database(), committed_view,
           committed.arc_group_index, pending.stagedResolver(),
           pending.preparedBatch(), pending.capturePlan());
       if (!capture.success())
@@ -467,7 +414,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
       DualCsrStageTimings stage_timings;
       if (mode == LevelizationExecutionMode::kMixedStage6) {
         auto staged = CpuIncrementalLevelizationRunner::run(
-            committed, std::move(verified));
+            coordinator, std::move(verified));
         if (!staged.success() || !staged.phase_timings)
           fail(DualCsrTraceFailureCode::kStageRejected,
                "Dual-CSR update or mixed levelization failed");
@@ -475,7 +422,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
         verified_stage.emplace(std::move(*staged.staged()));
       } else {
         DualCsrStageAttempt staged = makeStagedDualCsrAnalysisState(
-            committed, std::move(verified));
+            coordinator, std::move(verified));
         if (!staged.success())
           fail(DualCsrTraceFailureCode::kStageRejected,
                "Dual-CSR update or direct-view CPU/full timing failed");
@@ -507,6 +454,37 @@ DualCsrTraceRunResult replayPrefixWithMode(
       if (!status.ok() || !status.published || status.poisoned)
         fail(DualCsrTraceFailureCode::kPublishRejected,
              "atomic aggregate publish rejected the verified stage");
+      native_batch.transaction.commit();
+      batch_timing.session_step_ms = elapsedMilliseconds(prepare_started);
+      // This runner requests current timing and summary/path analysis each batch.
+      // Publication has completed; a consumer failure cannot undo that commit.
+      const auto& current = coordinator.committed();
+      if (!context.authority.readyForQuery() || native_state.generation != current.generation
+          || native_state.session_token != current.graph.session_token)
+        fail(DualCsrTraceFailureCode::kPublishRejected, "CPU consumer lost its committed generation binding");
+      const auto materialize_started = SteadyClock::now();
+      const auto& layout = context.baseline_reference_input;
+      {
+        auto prepared_timing = csr::detail::prepareStableTimingResult(
+            context.baseline_database, native_state.node_names, native_state.arc_native_ranks,
+            {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, current.timing.values);
+        auto* timing = std::get_if<csr::detail::PreparedTimingResult>(&prepared_timing);
+        if (!timing)
+          fail(DualCsrTraceFailureCode::kPublishRejected, "CPU committed timing cannot be mapped to native state");
+        csr::detail::publishPreparedTimingResult(*timing);
+      }
+      batch_timing.query_materialization_ms = elapsedMilliseconds(materialize_started);
+      const auto report_started = SteadyClock::now();
+      const auto report = executeStaLifecyclePipeline(
+          {{"TimingAnalyzer", [] { TimingAnalyzer::initInst(); },
+            [] { STATA.analyzePropagatedTiming(); }, [] { TimingAnalyzer::destroyInst(); }}},
+          StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+      if (report.cleanup_failed)
+        context.authority.poison();
+      if (!report.succeeded)
+        fail(DualCsrTraceFailureCode::kPublishRejected, "CPU propagated timing report failed: " + report.message);
+      batch_timing.report_ms = elapsedMilliseconds(report_started);
+      batch_timing.consumer_step_ms = elapsedMilliseconds(prepare_started);
       if constexpr (incregpusta_debug_checks_enabled)
         evidence.phase_trace.push_back(DualCsrReceiptPhase::kPublish);
       if constexpr (incregpusta_debug_checks_enabled)
@@ -521,22 +499,6 @@ DualCsrTraceRunResult replayPrefixWithMode(
       phase_timings.push_back(batch_timing);
     }
 
-    if (!installed)
-      fail(DualCsrTraceFailureCode::kRollbackRejected,
-           "successful prefix has no cumulative installed candidate");
-    requireRollback(*installed);
-    installed.reset();
-    if constexpr (incregpusta_debug_checks_enabled)
-      evidence.phase_trace.push_back(DualCsrReceiptPhase::kNativeFinalRollback);
-    evidence.native_final_rollback_completed = true;
-  } catch (...) {
-    if (installed && installed->active()
-        && !DualCsrNativeCandidateCarrier::rollback(*installed))
-      fail(DualCsrTraceFailureCode::kRollbackRejected,
-           "failure cleanup could not restore the native baseline");
-    throw;
-  }
-
   const auto& committed_result = coordinator.committed();
   const DualCsrWorkloadResult actual{.input_node_slots = context.baseline_reference_input.nodes.size(),
                                      .input_arc_slots = context.baseline_reference_input.arcs.size(),
@@ -545,8 +507,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
                                      .node_slots = committed_result.graph.nodes.size(),
                                      .arc_slots = committed_result.graph.arc_slots.size(),
                                      .fallback_count = fallback_calls,
-                                     .executed_mode = committed_result.execution_trace.back().mode(),
-                                     .native_final_rollback_completed = true};
+                                     .executed_mode = committed_result.execution_trace.back().mode()};
   if constexpr (!incregpusta_debug_checks_enabled) {
     return {.transaction_receipt = std::nullopt,
             .result = actual,
@@ -556,25 +517,21 @@ DualCsrTraceRunResult replayPrefixWithMode(
 
   const auto full_after = incregpusta_debug_checks_enabled ? csr::detail::currentNativeFullExportCounters() : csr::detail::NativeFullExportCounters{};
   const std::uint64_t targeted_baseline_after = incregpusta_debug_checks_enabled ? detail::currentBaselineFactoryCallCount() : 0;
-  const CandidateLifecycleSnapshot lifecycle_after
-      = incregpusta_debug_checks_enabled ? detail::currentCandidateLifecycleSnapshot() : CandidateLifecycleSnapshot{};
   evidence.operation_counters = measuredCounters(
       full_before, full_after, targeted_baseline_before,
-      targeted_baseline_after, lifecycle_before, lifecycle_after,
-      fallback_calls);
+      targeted_baseline_after, fallback_calls);
   evidence.incremental_batch_executed = true;
   evidence.propagation_scope = DualCsrPropagationScope::kFullGraph;
   requireResourceDeclarations(resource_observations, observations,
                               evidence);
-  requireTargetedCounters(evidence.operation_counters,
-                          prefix_batches);
+  requireTargetedCounters(evidence.operation_counters);
 
   auto exact = finalizeDualCsrExactReceipt(
       coordinator.committed(), std::move(observations.back()),
       context.baseline_reference_input, std::move(evidence));
   if (!exact.success())
     fail(DualCsrTraceFailureCode::kReceiptRejected,
-         "final rollback evidence could not seal the exact receipt");
+         "committed execution evidence could not seal the exact receipt");
   observations.back() = std::move(exact.receipt->published);
   return {.transaction_receipt = std::move(exact.receipt->transaction),
           .result = actual,

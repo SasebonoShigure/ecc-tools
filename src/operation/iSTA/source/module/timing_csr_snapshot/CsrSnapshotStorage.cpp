@@ -18,6 +18,7 @@
 
 #include <array>
 #include <limits>
+#include <set>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -160,7 +161,16 @@ class StorageWalker
       visit(table, field);
   }
 
-  void visit(const CellTransferModel& value, std::string_view field) { visitVector(value.children, field); }
+  void visitChildren(const std::shared_ptr<const std::vector<ChildTimingArcModel>>& owner, std::string_view field)
+  {
+    if (owner && _models.insert(owner.get()).second) {
+      // Count each reachable immutable allocation once. Allocator/control-block
+      // overhead remains outside this modeled payload-byte report.
+      addRoot(sizeof(*owner), field);
+      visitVector(*owner, field);
+    }
+  }
+  void visit(const CellTransferModel& value, std::string_view field) { visitChildren(value.childrenOwner(), field); }
 
   void visit(const NodeRecord& value, std::string_view field)
   {
@@ -226,7 +236,7 @@ class StorageWalker
   {
     visit(value.clock_port, field);
     visit(value.data_port, field);
-    visitVector(value.children, field);
+    visitChildren(value.childrenOwner(), field);
   }
 
   void visit(const ReferencedLibraryCellModel& value, std::string_view field)
@@ -272,6 +282,7 @@ class StorageWalker
   void visit(ArcId, std::string_view) {}
   void visit(std::uint64_t, std::string_view) {}
 
+  std::set<const std::vector<ChildTimingArcModel>*> _models;
   std::uint64_t _logical{0};
   std::uint64_t _capacity{0};
   std::vector<CsrContractViolation> _errors;

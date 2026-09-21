@@ -12,7 +12,7 @@
 #include <memory>
 #include <stdexcept>
 
-#include "NativeDatabaseCandidate.hpp"
+#include "NativeEditTransaction.hpp"
 #include "TimingEditTypes.hpp"
 
 namespace ista {
@@ -115,7 +115,7 @@ class NativeExecutionRollbackError final : public std::runtime_error
 };
 
 // A capability created only by the operation-guard owner. Merely reaching the
-// native adapter is insufficient authority to exchange the global Database.
+// native adapter is insufficient authority to mutate the canonical Database.
 class NativeExecutionAuthority final
 {
  public:
@@ -127,6 +127,8 @@ class NativeExecutionAuthority final
 
   [[nodiscard]] TimingEditSessionToken sessionToken() const noexcept { return _session_token; }
   [[nodiscard]] bool active() const noexcept;
+  [[nodiscard]] bool readyForQuery() const noexcept;
+  void poison() const noexcept;
 
  private:
   NativeExecutionAuthority(TimingEditSessionToken session_token,
@@ -136,33 +138,22 @@ class NativeExecutionAuthority final
   std::shared_ptr<NativeExecutionScopeState> _scope_state;
 
   friend class ::ista::StaTimingEditSessionProbeAccess;
-  friend class InstalledNativeDatabase;
+  friend class NativeEditTransaction;
   friend class NativeCandidateExecutor;
 };
 
 class NativeCandidateExecutor final
 {
  public:
-  [[nodiscard]] static InstalledNativeDatabase installPreparedGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate);
-
-  // Prepare canonical graph/library state without executing CPU timing.
-  [[nodiscard]] static InstalledNativeDatabase installAndPrepareGraph(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate);
-
-  [[nodiscard]] static InstalledNativeDatabase installAndExecute(
-      const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate,
-      NativeExecutionFailpoint failpoint = NativeExecutionFailpoint::kNone,
-      NativeRollbackFailpoint rollback_failpoint = NativeRollbackFailpoint::kNone);
+  static void executeFull(NativeEditTransaction& transaction,
+                         NativeExecutionFailpoint failpoint = NativeExecutionFailpoint::kNone,
+                         NativeRollbackFailpoint rollback_failpoint = NativeRollbackFailpoint::kNone);
+  static void prepareFullGraph(NativeEditTransaction& transaction);
 
  private:
-  enum class Execution
-  {
-    kCpuTiming,
-    kGraphPreparation,
-    kPreparedGraph
-  };
-  [[nodiscard]] static InstalledNativeDatabase installAndRun(const NativeExecutionAuthority& authority, NativeDatabaseCandidate&& candidate,
-                                                             Execution execution, NativeExecutionFailpoint failpoint,
-                                                             NativeRollbackFailpoint rollback_failpoint);
+  static void runTransaction(NativeEditTransaction& transaction, bool cpu_timing,
+                             NativeExecutionFailpoint failpoint, NativeRollbackFailpoint rollback_failpoint);
+
 };
 
 }  // namespace ista::timing_edit

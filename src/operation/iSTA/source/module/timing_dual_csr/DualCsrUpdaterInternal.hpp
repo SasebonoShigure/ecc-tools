@@ -6,26 +6,49 @@
 // ***************************************************************************************
 #pragma once
 
-#include "DualCsrUpdater.hpp"
+#include <memory>
+#include "DualCsrArcGroupIndex.hpp"
+#include "DualCsrDescriptors.hpp"
 
 namespace ista::timing_dual_csr::detail {
 
-void initializeUpdateTelemetry(DualCsrState& staged,
-                               const DualCsrState& committed,
-                               const DualCsrBatchDescriptor& descriptor);
-void growDetachedCapacity(DualCsrState& staged,
-                          const DualCsrBatchDescriptor& descriptor);
-void applyLogicalDeactivations(DualCsrState& staged,
-                               const DualCsrBatchDescriptor& descriptor);
-void applyBaseChanges(DualCsrState& staged,
-                      const DualCsrBatchDescriptor& descriptor);
-void appendLogicalRecordsAndRows(DualCsrState& staged,
-                                 const DualCsrBatchDescriptor& descriptor);
-void rebuildAffectedAuxRows(DualCsrState& staged,
-                            const DualCsrBatchDescriptor& descriptor);
-void applyPayloadChanges(DualCsrState& staged,
-                         const DualCsrBatchDescriptor& descriptor);
-void finalizeUpdateState(DualCsrState& staged,
-                         const DualCsrBatchDescriptor& descriptor);
+// Preparation allocates new values and capacity. Apply/rollback only move,
+// swap, or write reserved storage. Undo always captures the actual old values.
+class PreparedDualCsrGraphPatch final
+{
+ public:
+  PreparedDualCsrGraphPatch(DualCsrState& state, const DualCsrBatchDescriptor& descriptor);
+  PreparedDualCsrGraphPatch(const PreparedDualCsrGraphPatch&) = delete;
+  PreparedDualCsrGraphPatch& operator=(const PreparedDualCsrGraphPatch&) = delete;
+  PreparedDualCsrGraphPatch(PreparedDualCsrGraphPatch&&) noexcept;
+  PreparedDualCsrGraphPatch& operator=(PreparedDualCsrGraphPatch&&) = delete;
+  ~PreparedDualCsrGraphPatch();
+  void apply() noexcept;
+  void rollback() noexcept;
+  void commit() noexcept;
+
+ private:
+  struct Data;
+  std::unique_ptr<Data> _data;
+};
+
+class PreparedDualCsrIndexPatch final
+{
+ public:
+  PreparedDualCsrIndexPatch(const DualCsrState& graph, DualCsrArcGroupIndex& index,
+                           const DualCsrBatchDescriptor& descriptor);
+  PreparedDualCsrIndexPatch(const PreparedDualCsrIndexPatch&) = delete;
+  PreparedDualCsrIndexPatch& operator=(const PreparedDualCsrIndexPatch&) = delete;
+  PreparedDualCsrIndexPatch(PreparedDualCsrIndexPatch&&) noexcept;
+  PreparedDualCsrIndexPatch& operator=(PreparedDualCsrIndexPatch&&) = delete;
+  ~PreparedDualCsrIndexPatch();
+  void apply() noexcept;
+  void rollback() noexcept;
+  void commit() noexcept;
+
+ private:
+  struct Data;
+  std::unique_ptr<Data> _data;
+};
 
 }  // namespace ista::timing_dual_csr::detail

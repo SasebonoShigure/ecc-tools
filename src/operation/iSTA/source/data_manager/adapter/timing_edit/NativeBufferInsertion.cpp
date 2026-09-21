@@ -49,24 +49,19 @@ const PlacedInputs* placedInputs(const PlacementInputs& inputs)
   return placed;
 }
 
-std::string requireSingleDriver(const Database& database, const Net& net)
+template <class PinLookup>
+std::string requireSingleDriver(const Net& net, const PinLookup& pin_for)
 {
   std::string driver;
-  for (const auto& pin_name : net.get_pin_name_list()) {
-    const auto pin = database.get_pin_map().find(pin_name);
-    if (pin == database.get_pin_map().end()) {
-      invalid("source net contains a missing pin");
-    }
-    if (isDriver(pin->second)) {
-      if (!driver.empty()) {
+  for (const auto& name : net.get_pin_name_list()) {
+    if (isDriver(pin_for(name))) {
+      if (!driver.empty())
         invalid("source net has multiple drivers");
-      }
-      driver = pin_name;
+      driver = name;
     }
   }
-  if (driver.empty()) {
+  if (driver.empty())
     invalid("source net has no driver");
-  }
   return driver;
 }
 
@@ -195,75 +190,172 @@ std::uint64_t nextNativeInstanceId(const Database& database)
   return nextInstanceIdImpl(database);
 }
 
-void applyNativeBufferInsertion(Database& database, const BufferInsertionMutation& edit, const TimingEditResolverState& resolver, std::uint64_t instance_id)
+PreparedNativeBufferInsertions prepareNativeBufferInsertions(
+    Database& database, std::span<const BufferInsertionMutation> edits,
+    TimingEditResolverView resolver, std::uint64_t instance_id)
 {
-  const auto& materialization = resolver.materialization(edit.creation_token);
-  requireAbsentMaterialization(database, materialization);
-  if (materialization.input_pin_name != materialization.instance_name + ":" + edit.library_cell.input_port
-      || materialization.output_pin_name != materialization.instance_name + ":" + edit.library_cell.output_port) {
-    invalid("materialized pin names do not match the selected library ports");
-  }
+  PreparedNativeBufferInsertions prepared;
+  prepared.database = &database;
+  const auto pin_for = [&](const std::string& name) -> const Pin& {
+    const auto added = prepared.pins.find(name);
+    if (added != prepared.pins.end())
+      return added->second;
+    const auto existing = database.get_pin_map().find(name);
+    if (existing == database.get_pin_map().end())
+      invalid("source net contains a missing pin");
+    return existing->second;
+  };
+  for (const auto& edit : edits) {
+    const auto& names = resolver.materialization(edit.creation_token);
+    requireAbsentMaterialization(database, names);
+    if (prepared.instances.contains(names.instance_name) || prepared.nets.contains(names.output_net_name)
+        || prepared.pins.contains(names.input_pin_name) || prepared.pins.contains(names.output_pin_name))
+      invalid("batch materialized name collision");
+    if (names.input_pin_name != names.instance_name + ":" + edit.library_cell.input_port
+        || names.output_pin_name != names.instance_name + ":" + edit.library_cell.output_port)
+      invalid("materialized pin names do not match the selected library ports");
 
-  const std::string source_net_name = resolver.resolveNet(edit.original_net);
-  auto source_net = database.get_net_map().find(source_net_name);
-  if (source_net == database.get_net_map().end()) {
-    invalid("source net does not exist: " + source_net_name);
-  }
-  if (database.get_parasitic_library().get_net_map().contains(source_net_name)) {
-    invalid("NoParasitic input disagrees with the candidate parasitic library");
-  }
-  const std::string source_driver = requireSingleDriver(database, source_net->second);
+    const std::string source_name = resolver.resolveNet(edit.original_net);
+    const auto added_net = prepared.nets.find(source_name);
+    const auto original_net = database.get_net_map().find(source_name);
+    if (added_net == prepared.nets.end() && original_net == database.get_net_map().end())
+      invalid("source net does not exist: " + source_name);
+    if (database.get_parasitic_library().get_net_map().contains(source_name))
+      invalid("NoParasitic input disagrees with the candidate parasitic library");
+    const Net& source_net = added_net != prepared.nets.end() ? added_net->second : original_net->second;
+    const std::string driver = requireSingleDriver(source_net, pin_for);
+    if (edit.moved_sinks.empty())
+      invalid("buffer insertion must move at least one sink");
 
-  if (edit.moved_sinks.empty()) {
-    invalid("buffer insertion must move at least one sink");
-  }
-  std::vector<std::string> moved_sinks;
-  moved_sinks.reserve(edit.moved_sinks.size());
-  std::set<std::string> unique_sinks;
-  for (const auto& sink_ref : edit.moved_sinks) {
-    const std::string sink_name = resolver.resolveNode(sink_ref);
-    if (!unique_sinks.insert(sink_name).second) {
-      invalid("moved sink list contains a duplicate");
+    const auto& cell = requireLegalNativeBufferCell(database, edit.library_cell);
+    const auto* placement = placedInputs(edit.placement_inputs);
+    Instance instance = makeInstance(edit.library_cell, cell, names, instance_id);
+    Pin input = makePin(names.input_pin_name, edit.library_cell.input_port, names.instance_name,
+                        requirePortDirection(cell.get_port_map().at(edit.library_cell.input_port), "input"), placement);
+    Pin output = makePin(names.output_pin_name, edit.library_cell.output_port, names.instance_name,
+                         requirePortDirection(cell.get_port_map().at(edit.library_cell.output_port), "output"), placement);
+    input.set_net_name(source_name);
+    output.set_net_name(names.output_net_name);
+
+    auto& members = added_net != prepared.nets.end()
+                        ? added_net->second.get_pin_name_list()
+                        : prepared.memberships.try_emplace(source_name, source_net.get_pin_name_list()).first->second;
+    std::vector<std::string> output_members{names.output_pin_name};
+    std::set<std::string> unique;
+    for (const auto& ref : edit.moved_sinks) {
+      const std::string name = resolver.resolveNode(ref);
+      const auto& pin = pin_for(name);
+      const auto changed = prepared.connections.find(name);
+      const auto& current_net = changed == prepared.connections.end() ? pin.get_net_name() : changed->second;
+      if (!unique.insert(name).second || current_net != source_name || isDriver(pin) || name == driver)
+        invalid("moved sink is not a unique load on the source net");
+      if (prepared.pins.contains(name)) {
+        if (pin.get_direction() != PinDirection::kInput)
+          invalid("new moved buffer pin is not an input");
+      } else {
+        requireSupportedMovedSink(database, pin);
+      }
+      eraseExactlyOnce(members, name);
+      output_members.push_back(name);
+      if (auto added_pin = prepared.pins.find(name); added_pin != prepared.pins.end())
+        added_pin->second.set_net_name(names.output_net_name);
+      else
+        prepared.connections[name] = names.output_net_name;
     }
-    const auto sink = database.get_pin_map().find(sink_name);
-    if (sink == database.get_pin_map().end() || sink->second.get_net_name() != source_net_name || isDriver(sink->second) || sink_name == source_driver) {
-      invalid("moved sink is not a load on the source net");
-    }
-    requireSupportedMovedSink(database, sink->second);
-    moved_sinks.push_back(sink_name);
+    members.push_back(names.input_pin_name);
+    Net net;
+    net.set_net_name(names.output_net_name);
+    net.get_pin_name_list() = std::move(output_members);
+    prepared.instances.emplace(names.instance_name, std::move(instance));
+    prepared.pins.emplace(names.input_pin_name, std::move(input));
+    prepared.pins.emplace(names.output_pin_name, std::move(output));
+    prepared.nets.emplace(names.output_net_name, std::move(net));
+    prepared.instance_keys.push_back(names.instance_name);
+    prepared.pin_keys.push_back(names.input_pin_name);
+    prepared.pin_keys.push_back(names.output_pin_name);
+    prepared.net_keys.push_back(names.output_net_name);
+    if (instance_id == std::numeric_limits<std::uint64_t>::max() && &edit != &edits.back())
+      invalid("native instance ID capacity is exhausted within the batch");
+    ++instance_id;
   }
-
-  const TimingCell& cell = requireLegalNativeBufferCell(database, edit.library_cell);
-  const auto input_port = cell.get_port_map().find(edit.library_cell.input_port);
-  const auto output_port = cell.get_port_map().find(edit.library_cell.output_port);
-  const PlacedInputs* placement = placedInputs(edit.placement_inputs);
-
-  Instance instance = makeInstance(edit.library_cell, cell, materialization, instance_id);
-  Pin input_pin = makePin(materialization.input_pin_name, edit.library_cell.input_port, materialization.instance_name,
-                          requirePortDirection(input_port->second, "input"), placement);
-  Pin output_pin = makePin(materialization.output_pin_name, edit.library_cell.output_port, materialization.instance_name,
-                           requirePortDirection(output_port->second, "output"), placement);
-  input_pin.set_net_name(source_net_name);
-  output_pin.set_net_name(materialization.output_net_name);
-
-  for (const auto& sink_name : moved_sinks) {
-    eraseExactlyOnce(source_net->second.get_pin_name_list(), sink_name);
-  }
-  source_net->second.get_pin_name_list().push_back(materialization.input_pin_name);
-
-  Net output_net;
-  output_net.set_net_name(materialization.output_net_name);
-  std::vector<std::string> output_members{materialization.output_pin_name};
-  output_members.insert(output_members.end(), moved_sinks.begin(), moved_sinks.end());
-  output_net.set_pin_name_list(output_members);
-
-  database.get_instance_map().emplace(materialization.instance_name, std::move(instance));
-  database.get_pin_map().emplace(materialization.input_pin_name, std::move(input_pin));
-  database.get_pin_map().emplace(materialization.output_pin_name, std::move(output_pin));
-  database.get_net_map().emplace(materialization.output_net_name, std::move(output_net));
-  for (const auto& sink_name : moved_sinks) {
-    database.get_pin_map().at(sink_name).set_net_name(materialization.output_net_name);
-  }
+  return prepared;
 }
 
+void PreparedNativeBufferInsertions::apply() noexcept
+{
+  for (auto& [name, members] : memberships)
+    database->get_net_map().at(name).get_pin_name_list().swap(members);
+  for (auto& [name, net] : connections)
+    database->get_pin_map().at(name).get_net_name().swap(net);
+  database->get_instance_map().merge(instances);
+  database->get_pin_map().merge(pins);
+  database->get_net_map().merge(nets);
+}
+
+void PreparedNativeBufferInsertions::undo() noexcept
+{
+  for (auto& [name, members] : memberships)
+    database->get_net_map().at(name).get_pin_name_list().swap(members);
+  for (auto& [name, net] : connections)
+    database->get_pin_map().at(name).get_net_name().swap(net);
+  for (const auto& name : instance_keys)
+    database->get_instance_map().erase(name);
+  for (const auto& name : pin_keys)
+    database->get_pin_map().erase(name);
+  for (const auto& name : net_keys)
+    database->get_net_map().erase(name);
+}
+
+void applyNativeBufferInsertion(Database& database, const BufferInsertionMutation& edit,
+                                TimingEditResolverView resolver, std::uint64_t instance_id)
+{
+  auto prepared = prepareNativeBufferInsertions(database, {&edit, 1}, resolver, instance_id);
+  prepared.apply();
+}
+
+void PreparedNetDriverLoad::swap() noexcept
+{
+  net->get_driver_pin().swap(driver);
+  net->get_driver_pin_list().swap(drivers);
+  net->get_load_pin_list().swap(loads);
+}
+
+void PreparedNativeGraphPatch::apply(Database& database) noexcept
+{
+  auto apply_rows = [](auto& current, auto& patch) {
+    for (auto& [name, row] : patch)
+      if (const auto found = current.find(name); found != current.end())
+        found->second.swap(row);
+    current.merge(patch);
+  };
+  apply_rows(database.get_outgoing_arc_list_map(), outgoing);
+  apply_rows(database.get_incoming_arc_list_map(), incoming);
+  for (auto& [slot, arc] : replacements)
+    std::swap(database.get_arc_list()[slot], arc);
+  // Capacity was reserved before the transaction took ownership.
+  for (auto& arc : appends)
+    database.get_arc_list().push_back(std::move(arc));
+  database.get_timing_point_map().merge(points);
+  for (auto& cache : net_caches)
+    cache.swap();
+}
+
+void PreparedNativeGraphPatch::undo(Database& database) noexcept
+{
+  for (auto& cache : net_caches)
+    cache.swap();
+  for (const auto& name : new_points)
+    database.get_timing_point_map().erase(name);
+  database.get_arc_list().resize(arc_count_before);
+  for (auto& [slot, arc] : replacements)
+    std::swap(database.get_arc_list()[slot], arc);
+  auto restore_rows = [](auto& current, auto& saved, const auto& appended) {
+    for (auto& [name, row] : saved)
+      current.at(name).swap(row);
+    for (const auto& name : appended)
+      current.erase(name);
+  };
+  restore_rows(database.get_outgoing_arc_list_map(), outgoing, new_outgoing);
+  restore_rows(database.get_incoming_arc_list_map(), incoming, new_incoming);
+}
 }  // namespace ista::timing_edit::detail

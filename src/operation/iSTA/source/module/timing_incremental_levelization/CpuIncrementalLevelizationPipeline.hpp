@@ -30,4 +30,10 @@ using MixedLevelizationAttempt =
     const csr::CsrFifoLevelization& previous,
     const MixedLevelizationRequest& request);
 
+namespace detail {
+struct PreviousLevels;
+[[nodiscard]] MixedLevelizationAttempt runOwnedCpuIncrementalLevelization(
+    const csr::ActiveCsrEdgeView& edges, const PreviousLevels& previous, const MixedLevelizationRequest& request);
+}
+
 }  // namespace ista::timing_incremental_levelization

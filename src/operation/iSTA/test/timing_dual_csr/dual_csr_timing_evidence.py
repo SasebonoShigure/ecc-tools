@@ -3,7 +3,8 @@
 
 import copy
 import math
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 Require = Callable[[bool, str], None]
 
@@ -13,11 +14,12 @@ PHASE_TIMING_KEYS = {
     "dual_csr_update_ms", "full_levelization_ms", "full_propagation_ms",
     "mixed_build_ms", "mixed_kahn_ms", "reconstruct_ms",
     "invariant_ms", "verify_ms", "publish_ms",
+    "session_step_ms", "query_materialization_ms", "report_ms", "consumer_step_ms",
 }
 DURATION_KEYS = PHASE_TIMING_KEYS - {"generation_before", "generation_after"}
 BUFFER_ORDER = [
     "nodes", "arc_slots", "base_out_offsets", "base_out_slots",
-    "base_in_offsets", "base_in_slots", "aux_offsets", "aux_sources",
+    "base_in_offsets", "base_in_slots", "aux_rows", "aux_sources",
     "aux_arcs", "aux_source_map",
 ]
 REQUESTED_STRATEGY = {
@@ -42,7 +44,7 @@ def _count(value: object, label: str, require: Require) -> int:
     return value if type(value) is int else 0
 
 
-def duration_ms(value: object, label: str, require: Require,
+def duration_ms(value: object, label: str, require: Require, *,
                 positive: bool = False) -> float:
     valid = (not isinstance(value, bool) and isinstance(value, (int, float))
              and math.isfinite(float(value)) and float(value) >= 0.0)
@@ -53,8 +55,9 @@ def duration_ms(value: object, label: str, require: Require,
     return result
 
 
-def validate_batch_phase_timings(value: object, generation: int, label: str,
-                                 require: Require) -> list[dict[str, Any]]:
+def validate_batch_phase_timings(
+    value: object, generation: int, label: str, require: Require, *, debug_checks: bool = True,
+) -> list[dict[str, Any]]:
     require(isinstance(value, list) and len(value) == generation,
             f"{label} must contain one timing record per batch")
     if not isinstance(value, list):
@@ -64,8 +67,16 @@ def validate_batch_phase_timings(value: object, generation: int, label: str,
         require(item.get("generation_before") == index
                 and item.get("generation_after") == index + 1,
                 f"{label}[{index}] generation chain differs")
+        durations = {}
         for key in DURATION_KEYS:
-            duration_ms(item.get(key), f"{label}[{index}].{key}", require)
+            if not debug_checks and key in {"invariant_ms", "verify_ms"}:
+                require(item.get(key) == "not_run",
+                        f"{label}[{index}].{key} must be not_run in performance output")
+            else:
+                durations[key] = duration_ms(item.get(key), f"{label}[{index}].{key}", require)
+        require(durations["consumer_step_ms"] >= durations["session_step_ms"]
+                + durations["query_materialization_ms"] + durations["report_ms"],
+                f"{label}[{index}] consumer interval omits a completed phase")
     return value
 
 
@@ -75,7 +86,7 @@ def _extent(structural: dict[str, Any], buffer: str) -> tuple[int, int]:
         "base_out_slots": ("base_out", "edge_extent"),
         "base_in_offsets": ("base_in", "offsets_extent"),
         "base_in_slots": ("base_in", "edge_extent"),
-        "aux_offsets": ("aux_out", "offsets_extent"),
+        "aux_rows": ("aux_out", "rows_extent"),
         "aux_sources": ("aux_out", "source_extent"),
         "aux_arcs": ("aux_out", "edge_extent"),
         "aux_source_map": ("aux_out", "mapping_extent"),

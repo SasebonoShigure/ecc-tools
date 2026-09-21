@@ -3,9 +3,11 @@
 
 import copy
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from dual_csr_baseline_reference_validator import validate_baseline_reference_input
+from dual_csr_typed_json_validator import REFERENCE_APPEND_KEYS
 
 Require = Callable[[bool, str], None]
 
@@ -196,6 +198,8 @@ def _anchor_final_reference(descriptors: list[dict[str, Any]],
                             shadow: dict[str, object], label: str,
                             require: Require) -> None:
     for field in shadow:
+        if field in REFERENCE_APPEND_KEYS:
+            continue
         replacement = None
         replacement_index = -1
         for descriptor_index, descriptor in enumerate(descriptors):
@@ -222,6 +226,31 @@ def _reverse_reference(descriptors: list[dict[str, Any]],
                 continue
             field_label = (f"{label}.descriptor_trace[{descriptor_index}]"
                            f".reference_payload.{field}")
+            if field in REFERENCE_APPEND_KEYS:
+                values = record["values"]
+                current = shadow[field]
+                require(isinstance(current, list), f"{field_label} published shadow is not a list")
+                if not isinstance(current, list):
+                    return
+                require(len(current) == record["expected_size"] + len(values),
+                        f"{field_label} append extent differs from published shadow")
+                if field == "clock_owner_by_node":
+                    require(current[record["expected_size"]:] == values,
+                            f"{field_label} appended owners differ from published shadow")
+                    shadow[field] = current[:record["expected_size"]]
+                else:
+                    key = {"instances": "instance_name",
+                           "referenced_library_cells": "cell_name",
+                           "cell_pin_capacitances": "node"}[field]
+                    appended = {value[key]: value for value in values}
+                    published = {value[key]: value for value in current}
+                    require(len(appended) == len(values) and len(published) == len(current),
+                            f"{field_label} contains duplicate record identities")
+                    require(all(published.get(identity) == value
+                                for identity, value in appended.items()),
+                            f"{field_label} appended values differ from published shadow")
+                    shadow[field] = [value for value in current if value[key] not in appended]
+                continue
             require(field in shadow and shadow[field] == record["replacement"],
                     f"{field_label}.replacement differs from published shadow")
             shadow[field] = copy.deepcopy(record["expected"])
@@ -271,7 +300,9 @@ def validate_reference_replay(descriptors: list[dict[str, Any]],
     anchor = validate_baseline_reference_input(
         baseline_reference_input, baseline, session,
         f"{label}.baseline_reference_input", require)
-    require(shadow == anchor,
+    require(shadow.keys() == anchor.keys()
+            and all(_field_equal(field, value, anchor[field])
+                    for field, value in shadow.items()),
             f"{label} generation-zero reference differs from full anchor")
     fingerprints = baseline["fingerprints"]
     expected_identity = {
@@ -304,26 +335,41 @@ def validate_reference_replay(descriptors: list[dict[str, Any]],
 
 
 def run_reference_replay_self_test(require: Require) -> None:
+    capacitances = [{"node": 5, "rise_capacitance": 0.25, "fall_capacitance": 0.5},
+                    {"node": 2, "rise_capacitance": 0.5, "fall_capacitance": 0.75}]
+    require(_field_equal("cell_pin_capacitances", capacitances, capacitances[::-1]),
+            "semantic capacitance ordering was treated as a value change")
+    changed = copy.deepcopy(capacitances)
+    changed[0]["fall_capacitance"] = 0.125
+    for invalid in (changed, capacitances[:1], [capacitances[0], capacitances[0]]):
+        require(not _field_equal("cell_pin_capacitances", capacitances, invalid),
+                "capacitance value or exact coverage tamper was accepted")
+    require(not _field_equal("ordered_start_ids", [5, 2], [2, 5]),
+            "reference anchor lost order-sensitive start identities")
+
     expected = [{"instance_name": "u0", "cell_name": "OR2"}]
     replacement = [{"instance_name": "b0", "cell_name": "BUF"}, *expected]
-    descriptor = {"reference_payload": {
-        "instances": {"expected": expected, "replacement": replacement}}}
+    descriptor: dict[str, Any] = {"reference_payload": {
+        "instances": {"expected_size": len(expected), "values": replacement[:1]}}}
     shadow: dict[str, object] = {"instances": copy.deepcopy(replacement)}
     errors: list[str] = []
+
+    def collect_error(ok: object, message: str) -> None:
+        if not ok:
+            errors.append(message)
+
     _reverse_reference([descriptor], shadow, "reference-replay-canary",
-                       lambda ok, message: errors.append(message)
-                       if not ok else None)
+                       collect_error)
     require(not errors and shadow["instances"] == expected,
             f"valid reference replay was rejected: {errors}")
     tampered = copy.deepcopy(descriptor)
-    tampered["reference_payload"]["instances"]["replacement"][-1][
+    tampered["reference_payload"]["instances"]["values"][0][
         "cell_name"] = "WRONG_CELL"
     errors = []
     _reverse_reference([tampered], {"instances": copy.deepcopy(replacement)},
                        "reference-replay-tamper",
-                       lambda ok, message: errors.append(message)
-                       if not ok else None)
-    require(errors, "same-size reference replacement tamper was accepted")
+                       collect_error)
+    require(errors, "same-size reference append tamper was accepted")
 
     before = {"liberty_corner": "c0", "temperature": "25",
               "rc_corner": "r0"}
@@ -343,7 +389,7 @@ def run_reference_replay_self_test(require: Require) -> None:
     errors = []
     _reverse_reference(
         context_descriptors, context_shadow, "analysis-context-wire-canary",
-        lambda ok, message: errors.append(message) if not ok else None)
+        collect_error)
     require(not errors and context_shadow["analysis_context"] == before,
             f"valid analysis-context wire replay was rejected: {errors}")
 
@@ -360,7 +406,7 @@ def run_reference_replay_self_test(require: Require) -> None:
     errors = []
     reordered = _ordered_node_records(
         [seed(second), seed(first)], [first, second], "seed_node", "seed-order-canary",
-        lambda ok, message: errors.append(message) if not ok else None)
+        collect_error)
     require(not errors
             and [item["seed_node"] for item in reordered] == [first, second],
             f"projected start seeds did not recover ordered_starts: {errors}")
@@ -373,7 +419,7 @@ def run_reference_replay_self_test(require: Require) -> None:
         errors = []
         _ordered_node_records(
             candidate, [first, second], "seed_node", f"seed-{label}-canary",
-            lambda ok, message: errors.append(message) if not ok else None)
+            collect_error)
         require(errors, f"{label} projected start-seed tamper was accepted")
 
 
@@ -382,12 +428,12 @@ def run_reference_replay_self_test(require: Require) -> None:
     errors = []
     ordered_required = _ordered_node_records(
         [required_second, required_first], [first, second], "node", "required-order-canary",
-        lambda ok, message: errors.append(message) if not ok else None)
+        collect_error)
     require(not errors and ordered_required == [required_first, required_second],
             "endpoint ordering changed payload values or failed to recover ordered ends")
     for candidate in ([required_first], [required_first, required_first]):
         errors = []
         _ordered_node_records(
             candidate, [first, second], "node", "required-cover-canary",
-            lambda ok, message, errors=errors: errors.append(message) if not ok else None)
+            collect_error)
         require(bool(errors), "endpoint order reconstruction accepted missing/duplicate records")

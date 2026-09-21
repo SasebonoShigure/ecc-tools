@@ -8,6 +8,7 @@
 #pragma once
 
 #include <map>
+#include <memory>
 #include <string>
 
 #include "TimingEditTypes.hpp"
@@ -17,6 +18,10 @@ class Database;
 }
 
 namespace ista::timing_edit {
+namespace detail { struct PreparedNativeTargetedMetadata; }
+class TimingEditResolverDelta;
+class TimingEditResolverView;
+class PreparedTimingEditResolverPatch;
 
 struct NativeSlotBinding
 {
@@ -36,6 +41,7 @@ class TimingEditResolverState final
 
   [[nodiscard]] static TimingEditResolverState bindBaseline(const Database& database);
   [[nodiscard]] TimingEditResolverState stage(const PreparedBatch& batch) const;
+  [[nodiscard]] TimingEditResolverDelta prepare(const PreparedBatch& batch) const;
 
   [[nodiscard]] const std::string& resolveNode(const StableNodeRef& ref) const;
   [[nodiscard]] const std::string& resolveNet(const StableNetRef& ref) const;
@@ -58,14 +64,76 @@ class TimingEditResolverState final
   [[nodiscard]] static TimingEditResolverState bindReferenceBaseline(const Database& database, const csr::CsrReferenceInput& input);
   [[nodiscard]] TimingEditResolverState stageAssignments(const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const;
   friend class NativeTargetedEditPreparer;
-  [[nodiscard]] std::string materializedNodeName(const StableNodeRef& ref) const;
-  [[nodiscard]] std::string materializedNetName(const StableNetRef& ref) const;
+  friend struct detail::PreparedNativeTargetedMetadata;
+  friend class TimingEditResolverView;
+  friend class PreparedTimingEditResolverPatch;
+  [[nodiscard]] TimingEditResolverDelta prepareAssignmentsDelta(const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const;
 
   AppendOnlyHighWater _high_water;
   std::map<StableNodeRef, NativeSlotBinding> _nodes;
   std::map<StableNetRef, NativeSlotBinding> _nets;
   std::map<StableArcRef, NativeSlotBinding> _arcs;
   std::map<CreationToken, TokenMaterialization> _materializations;
+};
+
+// Only touched bindings and new map nodes; no committed history prefix.
+class TimingEditResolverDelta final
+{
+ public:
+  TimingEditResolverDelta(TimingEditResolverDelta&&) noexcept = default;
+  TimingEditResolverDelta& operator=(TimingEditResolverDelta&&) noexcept = default;
+  TimingEditResolverDelta(const TimingEditResolverDelta&) = delete;
+  TimingEditResolverDelta& operator=(const TimingEditResolverDelta&) = delete;
+  [[nodiscard]] const AppendOnlyHighWater& highWater() const noexcept { return _changes.highWater(); }
+
+ private:
+  TimingEditResolverDelta() = default;
+  TimingEditResolverState _expected;
+  TimingEditResolverState _changes;
+  friend class TimingEditResolverState;
+  friend class TimingEditResolverView;
+  friend class PreparedTimingEditResolverPatch;
+};
+
+// Short-lived borrowed lookup during capture/preparation; never stored across apply.
+class TimingEditResolverView final
+{
+ public:
+  TimingEditResolverView(const TimingEditResolverState& base) noexcept : _base(base) {}
+  TimingEditResolverView(const TimingEditResolverState& base, const TimingEditResolverDelta& delta) noexcept
+      : _base(base), _delta(&delta) {}
+  [[nodiscard]] const NativeSlotBinding* findNodeBinding(const StableNodeRef& ref) const;
+  [[nodiscard]] const NativeSlotBinding* findNetBinding(const StableNetRef& ref) const;
+  [[nodiscard]] const NativeSlotBinding* findArcBinding(const StableArcRef& ref) const;
+  [[nodiscard]] const std::string& resolveNode(const StableNodeRef& ref) const;
+  [[nodiscard]] const std::string& resolveNet(const StableNetRef& ref) const;
+  [[nodiscard]] AppendOnlySlot resolveArcSlot(const StableArcRef& ref) const;
+  [[nodiscard]] const TokenMaterialization* findMaterialization(const CreationToken& token) const;
+  [[nodiscard]] const TokenMaterialization& materialization(const CreationToken& token) const;
+  [[nodiscard]] const AppendOnlyHighWater& highWater() const noexcept
+  { return _delta ? _delta->highWater() : _base.highWater(); }
+
+ private:
+  const TimingEditResolverState& _base;
+  const TimingEditResolverDelta* _delta{};
+};
+
+class PreparedTimingEditResolverPatch final
+{
+ public:
+  PreparedTimingEditResolverPatch(TimingEditResolverState& state, TimingEditResolverDelta delta);
+  PreparedTimingEditResolverPatch(PreparedTimingEditResolverPatch&&) noexcept;
+  PreparedTimingEditResolverPatch(const PreparedTimingEditResolverPatch&) = delete;
+  PreparedTimingEditResolverPatch& operator=(const PreparedTimingEditResolverPatch&) = delete;
+  ~PreparedTimingEditResolverPatch();
+  [[nodiscard]] TimingEditResolverView view() const;
+  void apply() noexcept;
+  void rollback() noexcept;
+  void commit() noexcept;
+
+ private:
+  struct Data;
+  std::unique_ptr<Data> _data;
 };
 
 }  // namespace ista::timing_edit

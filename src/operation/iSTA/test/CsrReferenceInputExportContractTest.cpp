@@ -161,10 +161,10 @@ void verifyRichChain()
   const auto& cell = first.referenced_library_cells[0];
   require(focused == cell, "focused cell projector differs from full ReferenceInput export");
   require(cell.cell_arcs.size() == 2 && cell.timing_checks.size() == 1, "referenced Liberty arc/check closure has the wrong shape");
-  const auto& present_empty = cell.cell_arcs[0].transfer.children[0].delay_tables[0];
+  const auto& present_empty = cell.cell_arcs[0].transfer.children()[0].delay_tables[0];
   require(present_empty.present && present_empty.values.empty(), "present-empty table collapsed into missing");
-  require(cell.cell_arcs[1].transfer.children[0].delay_tables[0].axes.size() == 2, "2D Liberty table was not detached completely");
-  require(cell.timing_checks[0].children[0].check_tables[0].axes.size() == 1, "timing-check table was not detached completely");
+  require(cell.cell_arcs[1].transfer.children()[0].delay_tables[0].axes.size() == 2, "2D Liberty table was not detached completely");
+  require(cell.timing_checks[0].children()[0].check_tables[0].axes.size() == 1, "timing-check table was not detached completely");
   require(first.timing_check_endpoints.size() == 2 && first.instances[0].has_timing_checks && first.instances[1].has_timing_checks,
           "per-instance timing-check ordinal records are incomplete");
 
@@ -229,6 +229,53 @@ void verifyParasiticAllOrNoneAndPathExclusion()
           "SPEF source path leaked into the detached candidate or identity");
 }
 
+void verifyImmutableSessionModels()
+{
+  CsrReferenceInput retained;
+  {
+    auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
+    detail::NativeLibraryModels models(fixture.database());
+    retained = requireInput(exportCsrReferenceInputCandidate(fixture.database(), referenceInputTestContext(), 71, models), "shared models");
+    const auto repeated = requireInput(exportCsrReferenceInputCandidate(fixture.database(), referenceInputTestContext(), 71, models), "shared models repeat");
+    for (std::size_t i = 0; i < retained.arcs.size(); ++i) {
+      const auto& arc = retained.arcs[i];
+      require(arc.transfer.childrenOwner() == repeated.arcs[i].transfer.childrenOwner(), "same-session export repeated a model allocation");
+      if (!arc.transfer.children().empty()) {
+        const auto& cell = models.cell(retained.nodes[arc.source.value()].instance_cell);
+        require(std::ranges::any_of(cell.cell_arcs, [&](const auto& candidate) {
+                  return candidate.transfer.childrenOwner() == arc.transfer.childrenOwner();
+                }), "graph transfer did not reuse its referenced Liberty model");
+      }
+    }
+    // Instance-only table changes must not silently use the Liberty value.
+    auto& native_child = fixture.database().get_instance_map().at("ff0").get_check_arc_list().front().get_timing_arc_list().front();
+    auto& native_value = native_child.get_check_table_map().begin()->second.get_value_list().front();
+    const auto original_value = native_value;
+    native_value += 0.25;
+    const auto malformed = exportCsrReferenceInputCandidate(fixture.database(), referenceInputTestContext(), 71, models);
+    require(std::holds_alternative<CsrReferenceInputExportFailure>(malformed), "instance-only check table change escaped the public boundary");
+    native_value = original_value;
+    auto foreign = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
+    bool rejected = false;
+    try {
+      static_cast<void>(exportCsrReferenceInputCandidate(foreign.database(), referenceInputTestContext(), 72, models));
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    require(rejected, "foreign Database reused the session model store");
+  }
+  require(validateReferenceInputForSession(retained, 71).empty(), "exported models did not outlive their session");
+  const auto arc = std::ranges::find_if(retained.arcs, [](const auto& value) { return !value.transfer.children().empty(); });
+  require(arc != retained.arcs.end(), "model lifetime fixture is empty");
+  auto editable = arc->transfer.children();
+  auto& retained_alias = editable.front().time_unit_scale;
+  auto detached = arc->transfer;
+  detached.setChildren(editable);
+  retained_alias = 9.0;
+  require(detached == arc->transfer && detached.childrenOwner() != arc->transfer.childrenOwner(),
+          "external mutable storage changed a frozen model");
+}
+
 void verifyIdentityAndSessionBinding()
 {
   auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kDiamond);
@@ -262,6 +309,7 @@ int main()
     verifyEmptyDiamondAndCycle();
     verifyParasiticAllOrNoneAndPathExclusion();
     verifyIdentityAndSessionBinding();
+    verifyImmutableSessionModels();
   } catch (const std::exception& error) {
     std::cerr << "CsrReferenceInputExportContractTest: " << error.what() << '\n';
     return 1;

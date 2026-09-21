@@ -39,15 +39,15 @@ template <typename Errors>
   invalid(errors.front().field + ": " + errors.front().message);
 }
 
-timing_edit::DesignEditPlan normalizePlan(
-    timing_edit::DesignEditPlan plan)
+timing_edit::EditBatch normalizePlan(
+    timing_edit::EditBatch plan)
 {
-  auto normalized = timing_edit::normalizeDesignEditPlan(std::move(plan));
+  auto normalized = timing_edit::normalizeEditBatch(std::move(plan));
   if (const auto* errors
       = std::get_if<timing_edit::TimingEditContractViolations>(
           &normalized))
     invalidFirst(*errors);
-  return std::get<timing_edit::DesignEditPlan>(std::move(normalized));
+  return std::get<timing_edit::EditBatch>(std::move(normalized));
 }
 
 timing_edit::TimingGraphDelta normalizeDelta(
@@ -89,24 +89,24 @@ void canonicalizeRefs(std::vector<Ref>& values, Encoder encode)
 }
 
 const timing_edit::NativeSlotBinding& nodeBinding(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const timing_edit::StableNodeRef& ref)
 {
-  const auto found = resolver.nodeBindings().find(ref);
-  if (found == resolver.nodeBindings().end() || found->second.tombstone)
+  const auto* found = resolver.findNodeBinding(ref);
+  if (found == nullptr || found->tombstone)
     invalid("node reference is not a live committed resolver binding");
-  return found->second;
+  return *found;
 }
 
 const timing_edit::NativeSlotBinding& arcBinding(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const timing_edit::StableArcRef& ref, bool require_live)
 {
-  const auto found = resolver.arcBindings().find(ref);
-  if (found == resolver.arcBindings().end()
-      || (require_live && found->second.tombstone))
+  const auto* found = resolver.findArcBinding(ref);
+  if (found == nullptr
+      || (require_live && found->tombstone))
     invalid("arc reference is not a compatible resolver binding");
-  return found->second;
+  return *found;
 }
 
 std::string pinPort(const timing_edit::TokenMaterialization& value,
@@ -123,7 +123,7 @@ std::string pinPort(const timing_edit::TokenMaterialization& value,
 
 csr::NodeKey nodeKeyFor(
     const timing_edit::StableNodeRef& ref,
-    const timing_edit::TimingEditResolverState& resolver)
+    timing_edit::TimingEditResolverView resolver)
 {
   if (const auto* existing
       = std::get_if<timing_edit::ExistingNodeRef>(&ref))
@@ -139,7 +139,7 @@ csr::NodeKey nodeKeyFor(
 
 csr::ArcKey arcKeyFor(
     const timing_edit::StableArcRef& ref,
-    const timing_edit::TimingEditResolverState& resolver)
+    timing_edit::TimingEditResolverView resolver)
 {
   return std::visit(
       [&](const auto& value) -> csr::ArcKey {
@@ -242,7 +242,7 @@ timing_edit::StableNodeRef driverOf(
 }
 
 timing_edit::StableArcRef findCurrentNetArc(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const DualSemanticReadView& view,
     const DualCsrArcGroupIndex& index,
     const timing_edit::StableNetRef& net,
@@ -258,11 +258,11 @@ timing_edit::StableArcRef findCurrentNetArc(
   if (indexed == nullptr || !indexed->current_active_key.has_value()
       || !sameNetAndSink(indexed->ref, net, sink))
     invalid("directed net/sink index has an invalid stable ref");
-  const auto binding = resolver.arcBindings().find(indexed->ref);
+  const auto* binding = resolver.findArcBinding(indexed->ref);
   const auto payload = view.arcById(id);
-  if (binding == resolver.arcBindings().end()
-      || binding->second.tombstone
-      || binding->second.slot.value() != id.value() || !payload
+  if (binding == nullptr
+      || binding->tombstone
+      || binding->slot.value() != id.value() || !payload
       || payload.value().key != *indexed->current_active_key
       || payload.value().key.base.kind != csr::ArcKind::kNet
       || payload.value().key.base.owner_name != owner_name
@@ -273,7 +273,7 @@ timing_edit::StableArcRef findCurrentNetArc(
 
 void requireDataOnlyNet(
     const timing_edit::StableNetRef& net,
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const DualSemanticReadView& view,
     const DualCsrArcGroupIndex& index)
 {
@@ -370,11 +370,11 @@ struct Expansion
 };
 
 void requireFreshMaterialization(
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const timing_edit::TokenMaterialization& value,
     std::set<std::string>& batch_names)
 {
-  if (resolver.materializations().contains(value.creation_token))
+  if (resolver.findMaterialization(value.creation_token) != nullptr)
     invalid("creation token was already materialized");
   for (const auto* name : {&value.instance_name, &value.output_net_name,
                            &value.input_pin_name,
@@ -386,7 +386,7 @@ void requireFreshMaterialization(
 
 void expandEdit(
     Expansion& result, const timing_edit::BufferInsertionMutation& edit,
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const DualSemanticReadView& view,
     const DualCsrArcGroupIndex& arc_group_index,
     std::set<std::string>& materialized_names)
@@ -518,21 +518,21 @@ void expandEdit(
 
 csr::NodeKey detail::stableNodeKey(
     const timing_edit::StableNodeRef& ref,
-    const timing_edit::TimingEditResolverState& resolver)
+    timing_edit::TimingEditResolverView resolver)
 {
   return nodeKeyFor(ref, resolver);
 }
 
 csr::ArcKey detail::materializedArcKey(
     const timing_edit::StableArcRef& ref,
-    const timing_edit::TimingEditResolverState& resolver)
+    timing_edit::TimingEditResolverView resolver)
 {
   return arcKeyFor(ref, resolver);
 }
 
 csr::ArcKey detail::committedArcKey(
     const timing_edit::StableArcRef& ref,
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const DualSemanticReadView& view)
 {
   const auto& binding = arcBinding(resolver, ref, true);
@@ -543,11 +543,35 @@ csr::ArcKey detail::committedArcKey(
 }
 
 PendingStructuredBatch DualCsrStructuredBatchPreparer::prepare(
-    timing_edit::DesignEditPlan plan,
+    const timing_edit::DesignEditPlan& plan,
     const timing_edit::TimingEditResolverState& committed_resolver,
     const DualSemanticReadView& committed_view,
     const DualCsrState& exact_committed_graph,
-    const timing_edit::CommittedEditIdentity& exact_committed_identity,
+    const std::optional<timing_edit::CommittedEditIdentity>& exact_committed_identity,
+    const DualCsrArcGroupIndex& committed_arc_group_index)
+{
+  if (plan.schema_version != timing_edit::kDesignEditPlanSchema)
+    invalid("unknown design plan schema");
+  auto baseline = std::make_shared<const timing_edit::BaselineSemanticIdentity>(plan.baseline);
+  if (const auto errors = timing_edit::validateBaselineSemanticIdentity(*baseline); !errors.empty())
+    invalidFirst(errors);
+  if (plan.expected_generation.value() == 0
+      && (!exact_committed_identity || baseline->fingerprints
+              != exact_committed_identity->current_fingerprints
+          || baseline->canonical_pre_state
+                 != exact_committed_identity->canonical_pre_state))
+    invalid("generation-zero plan baseline does not match committed state");
+  return prepareBound({plan.expected_generation, plan.edits}, std::move(baseline), committed_resolver,
+                      committed_view, exact_committed_graph, exact_committed_identity, committed_arc_group_index);
+}
+
+PendingStructuredBatch DualCsrStructuredBatchPreparer::prepareBound(
+    timing_edit::EditBatch plan,
+    std::shared_ptr<const timing_edit::BaselineSemanticIdentity> baseline,
+    const timing_edit::TimingEditResolverState& committed_resolver,
+    const DualSemanticReadView& committed_view,
+    const DualCsrState& exact_committed_graph,
+    const std::optional<timing_edit::CommittedEditIdentity>& exact_committed_identity,
     const DualCsrArcGroupIndex& committed_arc_group_index)
 {
   detail::requireStructuredExactBefore(exact_committed_graph,
@@ -558,12 +582,7 @@ PendingStructuredBatch DualCsrStructuredBatchPreparer::prepare(
   auto normalized = normalizePlan(std::move(plan));
   if (normalized.expected_generation != committed_view.generation())
     invalid("plan generation does not match committed generation");
-  if (normalized.expected_generation.value() == 0
-      && (normalized.baseline.fingerprints
-              != exact_committed_identity.current_fingerprints
-          || normalized.baseline.canonical_pre_state
-                 != exact_committed_identity.canonical_pre_state))
-    invalid("generation-zero plan baseline does not match committed state");
+
 
   Expansion expansion(committed_resolver.highWater());
   std::set<std::string> materialized_names;
@@ -594,8 +613,9 @@ PendingStructuredBatch DualCsrStructuredBatchPreparer::prepare(
   data.expected_generation = normalized.expected_generation;
   data.target_generation = timing_edit::TransactionGeneration{
       normalized.expected_generation.value() + 1};
-  data.baseline = normalized.baseline;
-  data.expected_pre_committed_identity = exact_committed_identity;
+  data.baseline = std::move(baseline);
+  if constexpr (incregpusta_debug_checks_enabled)
+    data.expected_pre_committed_identity = exact_committed_identity;
   data.normalized_edits = std::move(normalized.edits);
   data.normalized_forward = std::move(expansion.forward);
   data.normalized_reverse = std::move(expansion.reverse);
@@ -604,15 +624,17 @@ PendingStructuredBatch DualCsrStructuredBatchPreparer::prepare(
   data.invalidation_closure = closureFrom(data.normalized_forward);
   data.policy_receipt = std::move(policy);
 
-  auto prepared = timing_edit::PreparedBatch::create(std::move(data));
-  auto staged = committed_resolver.stage(prepared);
+  // Plan, local expansion, slots and policy were checked while constructing
+  // them above. Full arbitrary PreparedBatch validation remains at create().
+  auto prepared = timing_edit::PreparedBatch(std::move(data));
+  auto staged = committed_resolver.prepare(prepared);
   auto capture_plan = detail::makeStructuredCapturePlan(
-      prepared, committed_resolver, staged, committed_arc_group_index,
+      prepared, committed_resolver, timing_edit::TimingEditResolverView{committed_resolver, staged}, committed_arc_group_index,
       committed_view);
   detail::requireStructuredSelectedBefore(
       exact_committed_graph, committed_resolver,
       committed_arc_group_index, committed_view, capture_plan);
-  ExpectedBeforeBinding binding{exact_committed_graph, committed_resolver, exact_committed_identity, committed_arc_group_index};
+  ExpectedBeforeBinding binding{exact_committed_graph, committed_resolver, committed_arc_group_index};
   return PendingStructuredBatch{std::move(prepared), std::move(staged),
                                 std::move(capture_plan),
                                 std::move(binding)};

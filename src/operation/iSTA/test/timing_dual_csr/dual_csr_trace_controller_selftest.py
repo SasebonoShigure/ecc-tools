@@ -2,7 +2,7 @@
 """Executable canaries for the Stage 5 Dual-CSR trace controller."""
 
 import json
-from typing import Callable
+from collections.abc import Callable
 
 from dual_csr_timing_evidence import run_timing_evidence_self_test
 from dual_csr_transaction_validator import (
@@ -34,10 +34,10 @@ def run_controller_self_test(require: Require, difference: Difference,
     require(difference(equal, changed_presence, "$")
             == "$.x[0].negative_zero: False != True",
             "structural boolean mismatch was hidden by numeric tolerance")
-    timing_order = {"timing_order": [["u0:A", "u0:B"]]}
-    swapped_order = {"timing_order": [["u0:B", "u0:A"]]}
-    require(difference(timing_order, swapped_order, "$")
-            == "$.timing_order[0][0]: 'u0:A' != 'u0:B'",
+    level_nodes = {"level_nodes": [["u0:A", "u0:B"]]}
+    swapped_order = {"level_nodes": [["u0:B", "u0:A"]]}
+    require(difference(level_nodes, swapped_order, "$")
+            == "$.level_nodes[0][0]: 'u0:A' != 'u0:B'",
             "same-level timing-order swap was hidden by the comparator")
     same_size_semantic_edit = {"edits": [{"original_net": "n0"}]}
     tampered_semantic_edit = {"edits": [{"original_net": "n1"}]}
@@ -47,11 +47,12 @@ def run_controller_self_test(require: Require, difference: Difference,
         validate_transaction(
             {}, 1, {}, {}, [], "signature-canary", require, difference,
         )
-        require(False, "malformed transaction signature canary was accepted")
     except error_type:
         pass
     except TypeError as error:
-        require(False, f"transaction validator call signature drifted: {error}")
+        raise AssertionError(f"transaction validator call signature drifted: {error}") from error
+    else:
+        raise AssertionError("malformed transaction signature canary was accepted")
 
     port = {"kind": "port", "full_name": "very_long_port_name",
             "instance_name": "", "pin_name": ""}
@@ -75,7 +76,7 @@ def run_controller_self_test(require: Require, difference: Difference,
 
     structural_visits = {
         "base_out": {"physical_slots": [0, None]},
-        "aux_out": {"arc_ids": [1]},
+        "aux_out": {"row_arcs": [[1]]},
     }
     valid_visits = {
         "levelization": {"base_out": 1, "aux_out": 1, "base_in": 2},
@@ -98,6 +99,12 @@ def run_controller_self_test(require: Require, difference: Difference,
         "mixed-traversal-canary",
         lambda ok, message: mixed_errors.append(message) if not ok else None)
     require(not mixed_errors, "valid mixed traversal was rejected")
+    errors: list[str] = []
+
+    def collect_error(ok: object, message: str) -> None:
+        if not ok:
+            errors.append(message)
+
     for name, tampered in (
         ("all-zero", {stage: {key: 0 for key in visits}
                       for stage, visits in valid_visits.items()}),
@@ -106,11 +113,11 @@ def run_controller_self_test(require: Require, difference: Difference,
     ):
         if name == "plus-one":
             tampered["forward_propagation"]["base_out"] += 1
-        errors: list[str] = []
+        errors.clear()
         validate_traversal_counts(
             tampered, structural_visits, "full_stage5",
             f"traversal-{name}-canary",
-            lambda ok, message: errors.append(message) if not ok else None)
+            collect_error)
         require(errors, f"{name} traversal tamper was accepted")
     mixed_full_errors: list[str] = []
     validate_traversal_counts(

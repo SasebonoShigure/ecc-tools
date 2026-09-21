@@ -89,7 +89,7 @@ MixedGraphBuildAttempt buildGraph(const detail::TopologyTraversal& edges, const 
 
   std::string previous_detail;
   const bool previous_valid = ValidatePrevious ? detail::validatePreviousLevelizationShape(previous, request.n_last_nodes, previous_detail)
-                                               : detail::validatePreviousLevelizationDimensions(previous, request.n_last_nodes, previous_detail);
+                                               : detail::validatePreviousLevelMappingDimensions(previous, request.n_last_nodes, previous_detail);
   if (!previous_valid)
     return makeFailure(MixedGraphBuildFailureCode::kMalformedPreviousLevels,
                        std::move(previous_detail), telemetry);
@@ -250,7 +250,7 @@ MixedGraphBuildAttempt buildMixedLevelizationGraph(const csr::ActiveCsrEdgeView&
 MixedGraphBuildAttempt detail::buildOwnedMixedGraph(const TopologyTraversal& edges, const detail::PreviousLevels& previous,
                                                     const MixedLevelizationRequest& request)
 {
-  return buildGraph<incregpusta_debug_checks_enabled>(edges, previous, request);
+  return buildGraph<false>(edges, previous, request);
 }
 
 }  // namespace ista::timing_incremental_levelization

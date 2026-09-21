@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "CsrCudaBackend.hpp"
+#include "StaCudaSessionState.hpp"
 #include "DataManager.hpp"
 #include "DelayCalculator.hpp"
 #include "GraphBuilder.hpp"
@@ -38,32 +39,28 @@ StaStatus STAInterface::runSessionCudaBaseline(std::uint64_t token, StaCsrSessio
     csr::CsrCudaBackend::requireDevice();
     bool unsupported_input = false;
     const auto compute = [&] {
-      auto built = csr::exportCsrReferenceInputCandidate(STADM.getDatabase(), context->analysisContext(), token);
+      auto built = csr::exportCsrReferenceInputCandidate(STADM.getDatabase(), context->analysisContext(), token, context->libraryModels(STADM.getDatabase()));
       if (const auto* error = std::get_if<csr::CsrReferenceInputExportFailure>(&built))
         throw std::runtime_error("CUDA CSR capture failed: " + std::string(csr::token(error->code)));
       auto input = std::move(std::get<csr::CsrReferenceInput>(built));
-      const auto output = csr::CsrCudaBackend{}.computeWithTelemetry(input);
-      const auto* timing = std::get_if<csr::CsrTimingResult>(&output.computation.outcome);
-      if (timing == nullptr) {
-        if (const auto* support = std::get_if<csr::CsrReferenceSupportResult>(&output.computation.outcome)) {
-          unsupported_input = true;
-          std::string message = "CUDA STA does not support analysis features:";
-          for (auto reason : support->unsupported_reasons)
-            message += " " + std::string(csr::token(reason));
-          throw std::runtime_error(message);
-        }
-        throw std::runtime_error("CUDA STA computation failed: " + std::string(csr::token(std::get<csr::CsrComputationCode>(output.computation.outcome))));
+      if (!input.unsupported_reasons.empty()) {
+        unsupported_input = true;
+        std::string message = "CUDA STA does not support analysis features:";
+        for (auto reason : input.unsupported_reasons)
+          message += " " + std::string(csr::token(reason));
+        throw std::runtime_error(message);
       }
-      if (const auto code = csr::detail::publishComputedTimingResult(STADM.getDatabase(), input, *timing, token); code != csr::CsrScatterCode::kSuccess)
-        throw std::runtime_error("CUDA timing scatter failed: " + std::string(csr::token(code)));
-      STALOG.info(Loc::current(), "CUDA full H2D bytes=", output.telemetry.h2d_bytes, " D2H bytes=", output.telemetry.d2h_bytes,
-                  " kernels=", output.telemetry.kernel_launches, " synchronized_ms=", output.telemetry.end_to_end_ms);
+      context->_cuda.reset(new StaCudaSessionState(STADM.getDatabase(), input));
+      const auto& telemetry = context->_cuda->device.telemetry().cuda;
+      STALOG.info(Loc::current(), "CUDA full H2D bytes=", telemetry.h2d_bytes, " D2H bytes=", telemetry.d2h_bytes,
+                  " kernels=", telemetry.kernel_launches, " synchronized_ms=", telemetry.end_to_end_ms);
     };
     const auto result = executeStaLifecyclePipeline(
         {{"GraphBuilder", [] { GraphBuilder::initInst(); }, [] { STAGB.buildStructure(); }, [] { GraphBuilder::destroyInst(); }},
          {"CUDA full timing", [] {}, compute, [] {}},
+         {"CUDA timing consumer", [] {}, [&] { context->_cuda->materialize(STADM.getDatabase()); }, [] {}},
          {"PowerPropagator", [] { PowerPropagator::initInst(); }, [] { STAPP.propagate(); }, [] { PowerPropagator::destroyInst(); }},
-         {"TimingAnalyzer", [] { TimingAnalyzer::initInst(); }, [] { STATA.analyzePropagatedTiming(); }, [] { TimingAnalyzer::destroyInst(); }},
+         {"CUDA report preparation", [] {}, [&] { context->_cuda->prepareReport(STADM.getDatabase()); }, [] {}},
          {"PowerAnalyzer", [] { PowerAnalyzer::initInst(); }, [] { STAPA.analyze(); }, [] { PowerAnalyzer::destroyInst(); }},
          {"TimingReporter", [] { TimingReporter::initInst(); }, [] { STATR.report(); }, [] { TimingReporter::destroyInst(); }},
          {"PowerReporter", [] { PowerReporter::initInst(); }, [] { STAPR.report(); }, [] { PowerReporter::destroyInst(); }},

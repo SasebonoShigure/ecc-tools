@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -28,7 +29,8 @@ enum class DualCsrTransactionCode : std::uint8_t
   kPostSwapPoisoned,
   kPoisoned,
   kRecoveryNotPoisoned,
-  kUnknownFailpoint
+  kUnknownFailpoint,
+  kPending
 };
 
 enum class DualCsrPublishFailpoint : std::uint8_t
@@ -55,7 +57,6 @@ struct DualCsrTransactionStatus
 
 enum class DualCsrStageFailureOrigin : std::uint8_t
 {
-  kExactBefore,
   kCapability,
   kIndexDelta,
   kUpdater,
@@ -65,7 +66,7 @@ enum class DualCsrStageFailureOrigin : std::uint8_t
 
 struct DualCsrStageFailure
 {
-  DualCsrStageFailureOrigin origin{DualCsrStageFailureOrigin::kExactBefore};
+  DualCsrStageFailureOrigin origin{DualCsrStageFailureOrigin::kCapability};
   DualCsrViolations violations;
 
   friend bool operator==(const DualCsrStageFailure&,
@@ -88,32 +89,27 @@ class DualCsrTransactionCoordinator;
 class DualCsrStageFactoryAccess;
 struct DualCsrStageAttempt;
 class VerifiedStructuredBatch;
+class PendingStructuredBatch;
 
-// Session, generation and committed identity bind a stage. Aggregate comparison is
-// supplementary diagnostics, with no graph copy in the default build.
+// A stage belongs to one stable committed owner and generation.
 class DualCsrCommitBinding final
 {
  public:
   explicit DualCsrCommitBinding(const CommittedDualCsrAnalysisState& state)
-      : _session(state.graph.session_token), _generation(state.generation), _identity(state.identity)
+      : _owner(&state), _session(state.graph.session_token), _generation(state.generation)
   {
-    if constexpr (incregpusta_debug_checks_enabled)
-      _exact.emplace(state);
   }
   [[nodiscard]] bool matches(const CommittedDualCsrAnalysisState& state) const
   {
-    if (_session != state.graph.session_token || _generation != state.generation || _identity != state.identity)
+    if (_owner != &state || _session != state.graph.session_token || _generation != state.generation)
       return false;
-    if constexpr (incregpusta_debug_checks_enabled)
-      return *_exact == state;
     return true;
   }
 
  private:
+  const CommittedDualCsrAnalysisState* _owner;
   timing_edit::TimingEditSessionToken _session;
   timing_edit::TransactionGeneration _generation;
-  timing_edit::CommittedEditIdentity _identity;
-  std::optional<CommittedDualCsrAnalysisState> _exact;
 };
 
 class DualCsrVerifiedStage final
@@ -124,27 +120,13 @@ class DualCsrVerifiedStage final
   DualCsrVerifiedStage(DualCsrVerifiedStage&&) noexcept = default;
   DualCsrVerifiedStage& operator=(DualCsrVerifiedStage&&) noexcept = default;
 
-  [[nodiscard]] const CommittedDualCsrAnalysisState& state() const noexcept
-  {
-    return _state;
-  }
-  [[nodiscard]] const DualCsrStageTimings& timings() const noexcept
-  {
-    return _timings;
-  }
+  [[nodiscard]] const DualCsrPendingBatch& batch() const noexcept;
+  [[nodiscard]] const DualCsrStageTimings& timings() const noexcept;
 
  private:
-  DualCsrVerifiedStage(const CommittedDualCsrAnalysisState& expected_committed, CommittedDualCsrAnalysisState state, DualCsrStageTimings timings)
-      : _expected_committed(expected_committed), _state(std::move(state)), _timings(timings)
-  {
-  }
-
-  DualCsrCommitBinding _expected_committed;
-  CommittedDualCsrAnalysisState _state;
-  DualCsrStageTimings _timings;
-
-  friend DualCsrStageAttempt makeStagedDualCsrAnalysisState(
-      const CommittedDualCsrAnalysisState&, VerifiedStructuredBatch&&);
+  struct Data;
+  explicit DualCsrVerifiedStage(std::shared_ptr<Data> data) noexcept : _data(std::move(data)) {}
+  std::shared_ptr<Data> _data;
   friend class DualCsrStageFactoryAccess;
   friend class DualCsrTransactionCoordinator;
 };
@@ -167,7 +149,7 @@ struct DualCsrStageAttempt
 };
 
 [[nodiscard]] DualCsrStageAttempt makeStagedDualCsrAnalysisState(
-    const CommittedDualCsrAnalysisState& committed,
+    DualCsrTransactionCoordinator& coordinator,
     VerifiedStructuredBatch&& verified_batch);
 
 using MixedDualCsrStageAttempt = std::variant<
@@ -176,7 +158,7 @@ using MixedDualCsrStageAttempt = std::variant<
 
 [[nodiscard]] MixedDualCsrStageAttempt
 makeMixedLevelizedDualCsrAnalysisState(
-    const CommittedDualCsrAnalysisState& exact_committed_before,
+    DualCsrTransactionCoordinator& coordinator,
     VerifiedStructuredBatch&& verified_batch);
 
 struct DualCsrRecoveredAggregateRebindAttempt
@@ -204,6 +186,7 @@ class DualCsrTransactionCoordinator final
  public:
   explicit DualCsrTransactionCoordinator(
       CommittedDualCsrAnalysisState initial);
+  explicit DualCsrTransactionCoordinator(DualCsrVerifiedModeRecovery recovered);
 
   DualCsrTransactionCoordinator(const DualCsrTransactionCoordinator&) = delete;
   DualCsrTransactionCoordinator& operator=(
@@ -212,11 +195,10 @@ class DualCsrTransactionCoordinator final
   DualCsrTransactionCoordinator& operator=(
       DualCsrTransactionCoordinator&&) = delete;
 
-  [[nodiscard]] const CommittedDualCsrAnalysisState& committed() const
-      noexcept
-  {
-    return _committed;
-  }
+  // Borrow only until the next stage/publish. A pending transaction owns
+  // exclusive access to graph/index and must finish before any query.
+  [[nodiscard]] const CommittedDualCsrAnalysisState& committed() const;
+  [[nodiscard]] PendingStructuredBatch prepareBatch(timing_edit::EditBatch edits) const;
   [[nodiscard]] bool poisoned() const noexcept { return _poisoned; }
 
   [[nodiscard]] DualCsrTransactionStatus publish(
@@ -232,7 +214,10 @@ class DualCsrTransactionCoordinator final
   friend DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(const CommittedDualCsrAnalysisState&, CommittedDualCsrAnalysisState,
                                                                         DualCsrModeRecoveryBatchSource&);
 
-  CommittedDualCsrAnalysisState _committed;
+  void reserveHistory();
+  std::shared_ptr<CommittedDualCsrAnalysisState> _committed;
+  std::weak_ptr<DualCsrVerifiedStage::Data> _pending;
+  friend class DualCsrStageFactoryAccess;
   bool _poisoned{false};
 };
 

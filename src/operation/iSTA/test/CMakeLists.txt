@@ -109,9 +109,9 @@ if(BUILD_TESTING)
   add_executable(ista_incremental_session_test
       IncrementalStaSessionTest.cpp
   )
-  target_link_libraries(ista_incremental_session_test PRIVATE ista_interface ista_timing_graph_csr_adapter)
+  target_link_libraries(ista_incremental_session_test PRIVATE ista_interface ista_timing_graph_csr_adapter Threads::Threads)
   add_test(NAME ista_incremental_session_test COMMAND ista_incremental_session_test)
-  set_tests_properties(ista_incremental_session_test PROPERTIES LABELS "ista_unit")
+  set_tests_properties(ista_incremental_session_test PROPERTIES LABELS "ista_unit" TIMEOUT 120)
 
   add_executable(ista_production_lifecycle_test
       StaProductionLifecycleTest.cpp
@@ -275,9 +275,6 @@ endif()
 
 if(BUILD_TESTING)
   ista_diagnostic_tests(
-      ista_timing_edit_receipt_test
-      ista_timing_edit_fresh_recovery_test
-      ista_incremental_session_test
       ista_timing_edit_fresh_oracle_differential
       ista_timing_edit_production_oracle_derived_tamper_rollback
       ista_buffer_trace_one_shot_reuse_reject
@@ -292,7 +289,6 @@ if(BUILD_TESTING)
       ista_stage6_active_payload_microcase_test
       ista_csr_session_snapshot_adapter_contract_test
       ista_csr_session_context_test
-      ista_csr_session_lifecycle_test
       ista_csr_session_fresh_process
       ista_csr_real_differential_fresh_process
       ista_full_baseline

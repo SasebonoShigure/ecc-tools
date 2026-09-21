@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 namespace ista::timing_edit {
 struct CommittedEditIdentity;
@@ -24,7 +25,7 @@ namespace detail {
 void requireStructuredExactBefore(
     const DualCsrState& graph,
     const timing_edit::TimingEditResolverState& resolver,
-    const timing_edit::CommittedEditIdentity& identity,
+    const std::optional<timing_edit::CommittedEditIdentity>& identity,
     const DualCsrArcGroupIndex& arc_group_index,
     const DualSemanticReadView& view);
 

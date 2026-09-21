@@ -74,6 +74,8 @@ struct RawNode
   bool is_port{false};
   RawDirection direction{RawDirection::kNone};
   std::string instance_name;
+  std::vector<std::uint64_t> outgoing_arc_ranks;
+  std::vector<std::uint64_t> incoming_arc_ranks;
 
   friend bool operator==(const RawNode&, const RawNode&) = default;
 };

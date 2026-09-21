@@ -28,13 +28,12 @@ struct BaseCsrState
 
 struct AuxOutCsrState
 {
-  std::vector<std::uint64_t> row_offsets;
+  // Stable row slots retain their allocation when a row becomes empty.
+  std::vector<std::vector<csr::ArcId>> row_arcs;
   std::vector<csr::NodeId> row_sources;
-  std::vector<csr::ArcId> arc_ids;
   std::vector<std::int64_t> source_to_aux_row;
-  csr::CsrBufferExtent offsets_extent;
+  csr::CsrBufferExtent rows_extent;
   csr::CsrBufferExtent source_extent;
-  csr::CsrBufferExtent edge_extent;
   csr::CsrBufferExtent mapping_extent;
 
   friend bool operator==(const AuxOutCsrState&, const AuxOutCsrState&) = default;
@@ -51,7 +50,6 @@ struct DualCsrArcSlot
 struct DualCsrTimingResult
 {
   csr::CsrTimingResult values;
-  std::vector<std::uint8_t> active_arc_mask;
 
   friend bool operator==(const DualCsrTimingResult&,
                          const DualCsrTimingResult&) = default;

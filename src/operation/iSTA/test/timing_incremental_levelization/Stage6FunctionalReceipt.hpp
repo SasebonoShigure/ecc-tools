@@ -44,7 +44,6 @@ struct Stage6LevelizationReceipt
   std::vector<std::uint64_t> level_offsets;
   std::vector<csr::NodeKey> level_nodes;
   std::vector<std::uint64_t> node_to_level;
-  std::vector<csr::NodeKey> timing_order;
 
   friend bool operator==(const Stage6LevelizationReceipt&,
                          const Stage6LevelizationReceipt&) = default;
@@ -63,7 +62,6 @@ enum class Stage6LevelizationViolationCode : std::uint8_t
   kOffsets,
   kPermutation,
   kInverse,
-  kTimingOrder,
   kEligibleEdgeOrder
 };
 

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "Database.hpp"
+#include "../AllocationFailureSupport.hpp"
 #include "TimingClock.hpp"
 #include "TimingEditNativeFixture.hpp"
 #include "TimingEditResolver.hpp"
@@ -109,7 +110,40 @@ void testPreparedBatchStagesExistingAndCreatedRefsAppendOnly()
   const CreatedNodeRef output{creation_token, CreatedNodeRole::kOutput};
   const CreatedNetRef output_net{creation_token, CreatedNetRole::kOutputNet};
   const TokenMaterialization materialization = defaultTokenMaterialization(creation_token, plan.edits.front().library_cell);
-  TimingEditResolverState staged = resolver.stage(batch);
+  const auto original = resolver;
+  auto delta = resolver.prepare(batch);
+  TimingEditResolverView projected(resolver, delta);
+  require(projected.resolveNode(StableNodeRef{input}) == materialization.input_pin_name && resolver == original,
+          "resolver projection copied changes into the committed owner");
+  const auto* old_node = &resolver.nodeBindings().begin()->second;
+  {
+    PreparedTimingEditResolverPatch patch(resolver, std::move(delta));
+    ista_test_allocation::armFailure(1);
+    patch.apply();
+    patch.rollback();
+    const auto allocations = ista_test_allocation::disable();
+    require(allocations == 0 && resolver == original && &resolver.nodeBindings().begin()->second == old_node,
+            "resolver apply/undo allocated or changed an existing map node");
+  }
+  // A locally changed owner with the same high-water must reject the old delta.
+  auto stale_delta = resolver.prepare(batch);
+  const auto touched = std::ranges::find_if(batch.slotPlan().arcs, [](const auto& item) { return item.tombstone; });
+  require(touched != batch.slotPlan().arcs.end(), "fixture has no changed arc");
+  auto& old_arc = const_cast<NativeSlotBinding&>(resolver.arcBindings().at(touched->ref));
+  old_arc.native_name = "different old value";
+  requireInvalid([&] { PreparedTimingEditResolverPatch stale(resolver, std::move(stale_delta)); },
+                 "resolver patch accepted a different local old value");
+  old_arc.native_name.clear();
+  require(resolver == original, "local stale-value canary did not restore its input");
+  {
+    PreparedTimingEditResolverPatch abandoned(resolver, resolver.prepare(batch));
+    abandoned.apply();
+  }
+  require(resolver == original, "abandoned resolver patch did not undo");
+  PreparedTimingEditResolverPatch patch(resolver, resolver.prepare(batch));
+  patch.apply();
+  patch.commit();
+  const auto& staged = resolver;
   require(staged.resolveNode(StableNodeRef{input}) == materialization.input_pin_name,
           "created input ref did not resolve to canonical materialization");
   require(staged.resolveNode(StableNodeRef{output}) == materialization.output_pin_name,

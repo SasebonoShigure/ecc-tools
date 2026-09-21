@@ -154,7 +154,7 @@ CsrReferenceInput dividerInput()
   selected_child.signature.library_name = "slow.lib";
   CellTransferModel selected_transfer;
   selected_transfer.is_clock_arc = true;
-  selected_transfer.children = {selected_child};
+  selected_transfer.setChildren({selected_child});
   ReferencedLibraryCellModel cell;
   cell.cell_name = "DFF_X1";
   cell.present = true;
@@ -167,7 +167,7 @@ CsrReferenceInput dividerInput()
                 LibraryPortModel{.name = "D", .direction = PinDirection::kInput, .default_capacitance = 0.1},
                 LibraryPortModel{.name = "Q", .direction = PinDirection::kOutput, .is_output = true, .default_capacitance = 0.1}};
   cell.cell_arcs = {LibraryCellArcModel{"CK", "Q", selected_transfer}};
-  cell.timing_checks = {LibraryTimingCheckArcModel{"CK", "D", TimingCheckKind::kSetup, 0.0, Transition::kRise, {}}};
+  cell.timing_checks = {[] { LibraryTimingCheckArcModel check; check.clock_port = "CK"; check.data_port = "D"; check.kind = TimingCheckKind::kSetup; return check; }()};
   input.referenced_library_cells = {cell};
   input.timing_check_endpoints = {{"u1", 0, TimingCheckKind::kSetup, "CK", "D", "u1:CK", "u1:D", u1_ck, std::nullopt},
                                   {"u2", 0, TimingCheckKind::kSetup, "CK", "D", "u2:CK", "u2:D", u2_ck, std::nullopt}};

@@ -37,7 +37,12 @@ DualCsrStructuralReceipt structuralReceipt(
       .base_out = graph.base_out,
       .base_in = graph.base_in,
       .aux_out = graph.aux_out,
+      .aux_edge_extent = {},
       .update_telemetry = graph.telemetry};
+  for (const auto& row : graph.aux_out.row_arcs) {
+    receipt.aux_edge_extent.logical_size += row.size();
+    receipt.aux_edge_extent.capacity += row.capacity();
+  }
   receipt.inactive_arcs.reserve(graph.arc_slots.size());
   for (std::size_t index = 0; index < graph.arc_slots.size(); ++index)
     if (!graph.arc_slots[index].active)
@@ -87,17 +92,15 @@ DualCsrViolations validateEvidence(
   constexpr std::uint64_t kBatchPhaseCount = kBatchPhases.size();
   const bool phase_count_valid
       = generation
-        <= (std::numeric_limits<std::uint64_t>::max() - 1)
+        <= std::numeric_limits<std::uint64_t>::max()
                / kBatchPhaseCount;
   const std::uint64_t expected_phases
-      = phase_count_valid ? generation * kBatchPhaseCount + 1 : 0;
+      = phase_count_valid ? generation * kBatchPhaseCount : 0;
   if (generation == 0 || !phase_count_valid
-      || evidence.phase_trace.size() != expected_phases
-      || evidence.phase_trace.back()
-             != DualCsrReceiptPhase::kNativeFinalRollback) {
+      || evidence.phase_trace.size() != expected_phases) {
     reject(errors, DualCsrViolationCode::kGeneration,
            "transaction.phase_trace",
-           "successful run must contain eight phases per batch and one final rollback");
+           "successful run must contain the execution phases of each committed batch");
   } else if (committed.execution_trace.size() != generation) {
     reject(errors, DualCsrViolationCode::kGeneration,
            "transaction.execution_trace",
@@ -136,23 +139,12 @@ DualCsrViolations validateEvidence(
     reject(errors, DualCsrViolationCode::kConflict,
            "transaction.operation_counters",
            "targeted batch interval observed a forbidden full/fallback operation");
-  if (generation == 0
-      || counters.candidate_creates != 1
-      || counters.candidate_clones != generation - 1
-      || counters.candidate_applies != generation
-      || counters.candidate_executes != generation
-      || counters.candidate_installs != generation
-      || counters.candidate_rollbacks != generation)
-    reject(errors, DualCsrViolationCode::kExpectedValue,
-           "transaction.candidate_lifecycle",
-           "successful cumulative native carrier lifecycle counts are not exact");
   if (!evidence.incremental_batch_executed
       || evidence.propagation_scope
-             != DualCsrPropagationScope::kFullGraph
-      || !evidence.native_final_rollback_completed)
+             != DualCsrPropagationScope::kFullGraph)
     reject(errors, DualCsrViolationCode::kConflict,
            "transaction.run_completion",
-           "receipt cannot finalize before full propagation and final rollback");
+           "receipt requires successful committed full propagation");
   return errors;
 }
 
@@ -167,7 +159,7 @@ DualCsrViolations validateBaselineReferenceInput(
     reject(errors, DualCsrViolationCode::kExpectedValue,
            "transaction.baseline_reference_input",
            "generation-zero reference input is not strict-valid for the committed session");
-  if (committed.semantic_trace.empty()) {
+  if (committed.semantic_trace.empty() || !committed.baseline) {
     reject(errors, DualCsrViolationCode::kGeneration,
            "transaction.semantic_trace",
            "successful receipt requires a semantic batch trace");
@@ -175,7 +167,7 @@ DualCsrViolations validateBaselineReferenceInput(
   }
   const auto& identity = baseline.source_identity;
   const auto& expected
-      = committed.semantic_trace.front().baseline.fingerprints;
+      = committed.baseline->fingerprints;
   if (identity.fingerprint_schema_version != expected.schema_version
       || identity.topology_fingerprint != expected.topology
       || identity.clock_constraint_fingerprint
@@ -234,6 +226,12 @@ DualCsrExactReceiptAttempt finalizeDualCsrExactReceipt(
     DualCsrTransactionEvidence evidence)
 {
   DualCsrExactReceiptAttempt attempt;
+  if (!incregpusta_debug_checks_enabled || !committed.identity
+      || committed.descriptor_trace.size() != committed.generation.value()) {
+    reject(attempt.violations, DualCsrViolationCode::kConflict, "receipt.diagnostics",
+           "full receipt requires debug checks and complete identity/descriptor evidence");
+    return attempt;
+  }
   auto expected = makeDualCsrPublishedObservation(committed);
   attempt.violations = std::move(expected.violations);
   if (!expected.success() || published != *expected.observation)
@@ -256,15 +254,19 @@ DualCsrExactReceiptAttempt finalizeDualCsrExactReceipt(
   if (!attempt.violations.empty())
     return attempt;
 
+  std::vector<timing_edit::DesignEditPlan> semantic_trace;
+  semantic_trace.reserve(committed.semantic_trace.size());
+  for (const auto& record : committed.semantic_trace)
+    semantic_trace.push_back({.baseline = *committed.baseline, .expected_generation = record.expected_generation, .edits = record.edits});
   DualCsrTransactionReceipt transaction{
       .session_token = committed.graph.session_token,
       .generation = committed.generation,
       .baseline_reference_input = std::move(baseline_reference_input),
       .resolver = committed.resolver,
       .arc_group_index = committed.arc_group_index,
-      .identity = committed.identity,
+      .identity = committed.identity.value(),
       .descriptor_trace = committed.descriptor_trace,
-      .semantic_trace = committed.semantic_trace,
+      .semantic_trace = std::move(semantic_trace),
       .traversal_telemetry = committed.traversal_telemetry,
       .execution_trace = committed.execution_trace,
       .update_telemetry = committed.graph.telemetry,

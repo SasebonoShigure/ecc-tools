@@ -18,6 +18,7 @@
 
 #include <compare>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -27,6 +28,8 @@
 
 #include "CsrReferencePrimitives.hpp"
 #include "TimingSemanticKey.hpp"
+
+namespace ista::timing_dual_csr { class DualCsrStructuredBatchPreparer; }
 
 namespace ista::timing_edit {
 
@@ -275,6 +278,16 @@ struct BufferInsertionMutation
   friend bool operator==(const BufferInsertionMutation&, const BufferInsertionMutation&) = default;
 };
 
+// Per-generation semantic edits. Session baseline ownership stays with the
+// session/coordinator rather than being repeated in every prepared batch.
+struct EditBatch
+{
+  TransactionGeneration expected_generation;
+  std::vector<BufferInsertionMutation> edits;
+
+  friend bool operator==(const EditBatch&, const EditBatch&) = default;
+};
+
 struct DesignEditPlan
 {
   std::string schema_version{kDesignEditPlanSchema};
@@ -436,8 +449,8 @@ struct PreparedBatchData
   TimingEditSessionToken session_token;
   TransactionGeneration expected_generation;
   TransactionGeneration target_generation;
-  BaselineSemanticIdentity baseline;
-  CommittedEditIdentity expected_pre_committed_identity;
+  std::shared_ptr<const BaselineSemanticIdentity> baseline;
+  std::optional<CommittedEditIdentity> expected_pre_committed_identity;
   std::vector<BufferInsertionMutation> normalized_edits;
   TimingGraphDelta normalized_forward;
   TimingGraphDelta normalized_reverse;
@@ -447,7 +460,6 @@ struct PreparedBatchData
   PolicyReceipt policy_receipt;
 };
 
-class TimingEditCoordinator;
 
 class PreparedBatch
 {
@@ -462,8 +474,9 @@ class PreparedBatch
   [[nodiscard]] TimingEditSessionToken sessionToken() const { return _data.session_token; }
   [[nodiscard]] TransactionGeneration expectedGeneration() const { return _data.expected_generation; }
   [[nodiscard]] TransactionGeneration targetGeneration() const { return _data.target_generation; }
-  [[nodiscard]] const BaselineSemanticIdentity& baseline() const { return _data.baseline; }
-  [[nodiscard]] const CommittedEditIdentity& expectedPreCommittedIdentity() const { return _data.expected_pre_committed_identity; }
+  [[nodiscard]] const BaselineSemanticIdentity& baseline() const { return *_data.baseline; }
+  [[nodiscard]] const std::shared_ptr<const BaselineSemanticIdentity>& baselineOwner() const { return _data.baseline; }
+  [[nodiscard]] const std::optional<CommittedEditIdentity>& expectedPreCommittedIdentity() const { return _data.expected_pre_committed_identity; }
   [[nodiscard]] const std::vector<BufferInsertionMutation>& normalizedEdits() const { return _data.normalized_edits; }
   [[nodiscard]] const TimingGraphDelta& forwardDelta() const { return _data.normalized_forward; }
   [[nodiscard]] const TimingGraphDelta& reverseDelta() const { return _data.normalized_reverse; }
@@ -471,17 +484,14 @@ class PreparedBatch
   [[nodiscard]] const std::vector<TokenMaterialization>& tokenMaterializations() const { return _data.token_materializations; }
   [[nodiscard]] const InvalidationClosure& invalidationClosure() const { return _data.invalidation_closure; }
   [[nodiscard]] const PolicyReceipt& policyReceipt() const { return _data.policy_receipt; }
-  [[nodiscard]] bool sealed() const { return _target_post_committed_identity.has_value(); }
-  [[nodiscard]] const std::optional<CommittedEditIdentity>& targetPostCommittedIdentity() const { return _target_post_committed_identity; }
 
  private:
   explicit PreparedBatch(PreparedBatchData data) : _data(std::move(data)) {}
-  void seal(CommittedEditIdentity target_post_identity);
 
   PreparedBatchData _data;
-  std::optional<CommittedEditIdentity> _target_post_committed_identity;
 
-  friend class TimingEditCoordinator;
+  friend class NativeTimingEditPreparer;
+  friend class ista::timing_dual_csr::DualCsrStructuredBatchPreparer;
 };
 
 }  // namespace ista::timing_edit

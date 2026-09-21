@@ -22,7 +22,7 @@ from dual_csr_timing_evidence import (
 from dual_csr_trace_controller_selftest import run_controller_self_test
 from dual_csr_transaction_validator import validate_transaction as validate_full_transaction
 
-WIRE_SCHEMA = "ista-dual-csr-trace-process/2.0.0"
+WIRE_SCHEMA = "ista-dual-csr-trace-process/4.0.0"
 ABS_TOLERANCE = 1.0e-9
 REL_TOLERANCE = 1.0e-9
 
@@ -136,32 +136,34 @@ def validate_base(value: object, node_slots: int, label: str) -> set[int]:
 
 def validate_aux(value: object, node_slots: int, label: str) -> set[int]:
     keys = {
-        "row_offsets", "row_sources", "arc_ids", "source_to_aux_row",
-        "offsets_extent", "source_extent", "edge_extent", "mapping_extent",
+        "row_arcs", "row_sources", "source_to_aux_row", "rows_extent",
+        "source_extent", "edge_extent", "mapping_extent",
     }
     item = require_exact_keys(value, keys, label)
     sources = item["row_sources"]
-    arcs = item["arc_ids"]
+    rows = item["row_arcs"]
     mapping = item["source_to_aux_row"]
-    require(isinstance(sources, list) and isinstance(arcs, list)
+    require(isinstance(sources, list) and isinstance(rows, list)
             and isinstance(mapping, list), f"{label} arrays are malformed")
-    validate_offsets(item["row_offsets"], len(sources), len(arcs),
-                     f"{label}.row_offsets")
+    require(len(rows) == len(sources) and all(isinstance(row, list) for row in rows),
+            f"{label}.row_arcs shape differs")
+    require(all(type(source) is int and 0 <= source < node_slots for source in sources),
+            f"{label} has an invalid source")
     require(len(mapping) == node_slots, f"{label}.source_to_aux_row size differs")
     require(len(set(sources)) == len(sources), f"{label} repeats a source row")
+    expected_mapping = [-1] * node_slots
     for row, source in enumerate(sources):
-        require(0 <= source < node_slots and mapping[source] == row,
-                f"{label} source mapping is not inverse")
-    require(all(value == -1 or 0 <= value < len(sources) for value in mapping),
-            f"{label} source mapping has an invalid row")
+        expected_mapping[source] = row
+    require(mapping == expected_mapping,
+            f"{label} source mapping is not the exact inverse")
+    arcs = [arc for row in rows for arc in row]
+    require(all(type(arc) is int and arc >= 0 for arc in arcs),
+            f"{label} contains an invalid ArcId")
     require(len(set(arcs)) == len(arcs), f"{label} repeats an ArcId")
-    validate_extent(item["offsets_extent"], len(sources) + 1,
-                    f"{label}.offsets_extent")
-    validate_extent(item["source_extent"], len(sources),
-                    f"{label}.source_extent")
+    validate_extent(item["rows_extent"], len(rows), f"{label}.rows_extent")
+    validate_extent(item["source_extent"], len(sources), f"{label}.source_extent")
     validate_extent(item["edge_extent"], len(arcs), f"{label}.edge_extent")
-    validate_extent(item["mapping_extent"], len(mapping),
-                    f"{label}.mapping_extent")
+    validate_extent(item["mapping_extent"], len(mapping), f"{label}.mapping_extent")
     return set(arcs)
 
 
@@ -420,7 +422,7 @@ def replay(args: argparse.Namespace) -> None:
         del targeted, fresh, targeted_functional, fresh_functional
         del target_source, fresh_source
     write_json(root / "controller-summary.json", {
-        "schema_version": "ista-dual-csr-differential-verdict/1.0.0",
+        "schema_version": "ista-dual-csr-differential-verdict/3.0.0",
         "trace": str(trace),
         "controller_pid": os.getpid(),
         "all_process_ids_distinct": True,

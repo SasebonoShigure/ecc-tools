@@ -11,6 +11,7 @@
 
 #include "ActiveCsrEdgeView.hpp"
 #include "CsrFifoLevelization.hpp"
+#include "CsrReferenceTypes.hpp"
 #include "TimingEditTypes.hpp"
 #include "MixedLevelizationTelemetry.hpp"
 
@@ -83,7 +84,7 @@ class LevelizationExecutionTrace final
                          const LevelizationExecutionTrace&) = default;
 
  private:
-  LevelizationExecutionTrace(timing_edit::TransactionGeneration generation, LevelizationExecutionMode mode, const csr::CsrFifoLevelization& levels,
+  LevelizationExecutionTrace(timing_edit::TransactionGeneration generation, LevelizationExecutionMode mode, const csr::CsrTimingValues& levels,
                              csr::CsrTraversalTelemetry traversal, csr::CsrFullLevelizerEntryDelta&& full_levelizer_entry_delta, std::uint64_t fallback_count,
                              bool supplied_levels_validated, std::optional<MixedLevelizationDeterministicTrace> mixed);
 

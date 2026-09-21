@@ -86,52 +86,49 @@ bool targetedNoParasitic(const AffectedCapturePlan& plan)
 
 template <typename Ref>
 bool assignmentMatchesResolver(
-    const std::map<Ref, timing_edit::NativeSlotBinding>& bindings,
+    const timing_edit::NativeSlotBinding* binding,
     const timing_edit::SlotAssignment<Ref>& assignment)
 {
-  const auto found = bindings.find(assignment.ref);
-  return found != bindings.end()
-         && found->second.slot == assignment.slot
-         && found->second.tombstone == assignment.tombstone;
+  return binding && binding->slot == assignment.slot && binding->tombstone == assignment.tombstone;
 }
 
 bool exactResolverBinding(
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
   if (staged.highWater() != plan.after)
     return false;
   for (const auto& assignment : plan.slot_plan.nodes)
-    if (!assignmentMatchesResolver(staged.nodeBindings(), assignment))
+    if (!assignmentMatchesResolver(staged.findNodeBinding(assignment.ref), assignment))
       return false;
   for (const auto& assignment : plan.slot_plan.nets)
-    if (!assignmentMatchesResolver(staged.netBindings(), assignment))
+    if (!assignmentMatchesResolver(staged.findNetBinding(assignment.ref), assignment))
       return false;
   for (const auto& assignment : plan.slot_plan.arcs)
-    if (!assignmentMatchesResolver(staged.arcBindings(), assignment))
+    if (!assignmentMatchesResolver(staged.findArcBinding(assignment.ref), assignment))
       return false;
   for (const auto& item : plan.token_materializations) {
-    const auto found = staged.materializations().find(item.creation_token);
-    if (found == staged.materializations().end() || found->second != item)
+    const auto* found = staged.findMaterialization(item.creation_token);
+    if (found == nullptr || *found != item)
       return false;
   }
   for (const auto& request : plan.nodes) {
-    const auto found = staged.nodeBindings().find(request.ref);
-    if (found == staged.nodeBindings().end() || found->second.tombstone
-        || found->second.native_name != request.expected_key.full_name)
+    const auto* found = staged.findNodeBinding(request.ref);
+    if (found == nullptr || found->tombstone
+        || found->native_name != request.expected_key.full_name)
       return false;
   }
   for (const auto& request : plan.load_nets) {
-    const auto found = staged.netBindings().find(request.ref);
-    if (found == staged.netBindings().end() || found->second.tombstone
-        || found->second.native_name != request.expected_name)
+    const auto* found = staged.findNetBinding(request.ref);
+    if (found == nullptr || found->tombstone
+        || found->native_name != request.expected_name)
       return false;
   }
   for (const auto& request : plan.arcs) {
-    const auto found = staged.arcBindings().find(request.ref);
-    if (found == staged.arcBindings().end()
-        || found->second.slot.value() >= plan.after.arc_slots
-        || found->second.tombstone
+    const auto* found = staged.findArcBinding(request.ref);
+    if (found == nullptr
+        || found->slot.value() >= plan.after.arc_slots
+        || found->tombstone
                != (request.expected_post_multiplicity == 0))
       return false;
   }
@@ -200,7 +197,7 @@ bool exactIndexBoundary(const DualCsrArcGroupIndex& index,
 std::optional<NarrowCaptureError> validateModelRequest(
     const AffectedNodeModelCapture& request,
     const DualSemanticReadView& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
   if (request.expected_key.kind != csr::NodeKind::kInstancePin
@@ -209,14 +206,14 @@ std::optional<NarrowCaptureError> validateModelRequest(
       || request.expected_key.instance_name.empty()
       || request.expected_cell.empty())
     return NarrowCaptureError::kUnplannedDependency;
-  const auto binding = staged.nodeBindings().find(request.ref);
-  if (binding == staged.nodeBindings().end()
-      || binding->second.tombstone
-      || binding->second.native_name
+  const auto* binding = staged.findNodeBinding(request.ref);
+  if (binding == nullptr
+      || binding->tombstone
+      || binding->native_name
              != request.expected_key.full_name
-      || binding->second.slot.value() >= plan.after.node_slots)
+      || binding->slot.value() >= plan.after.node_slots)
     return NarrowCaptureError::kBatchBindingMismatch;
-  const auto id = csr::NodeId{binding->second.slot.value()};
+  const auto id = csr::NodeId{binding->slot.value()};
   if (id.value() < plan.before.node_slots) {
     const auto node = committed.nodeById(id);
     if (!node || node.value().key != request.expected_key
@@ -244,7 +241,7 @@ std::optional<NarrowCaptureError> validateModelRequest(
 
 std::optional<NarrowCaptureError> validateModelRequests(
     const DualSemanticReadView& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
   const auto validateSet = [&](const auto& requests) {
@@ -315,16 +312,16 @@ bool exactEndpointNode(
     const timing_edit::StableNodeRef& ref,
     const csr::NodeKey& key,
     const DualSemanticReadView& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
-  const auto binding = staged.nodeBindings().find(ref);
-  if (binding == staged.nodeBindings().end()
-      || binding->second.tombstone
-      || binding->second.native_name != key.full_name
-      || binding->second.slot.value() >= plan.after.node_slots)
+  const auto* binding = staged.findNodeBinding(ref);
+  if (binding == nullptr
+      || binding->tombstone
+      || binding->native_name != key.full_name
+      || binding->slot.value() >= plan.after.node_slots)
     return false;
-  const csr::NodeId id{binding->second.slot.value()};
+  const csr::NodeId id{binding->slot.value()};
   if (id.value() < plan.before.node_slots) {
     const auto node = committed.nodeById(id);
     return node && node.value().key == key;
@@ -340,7 +337,7 @@ bool exactEndpointNode(
 std::optional<NarrowCaptureError> validateArcRequests(
     const DualSemanticReadView& committed,
     const DualCsrArcGroupIndex& index,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
   std::vector<timing_edit::StableArcRef> refs;
@@ -359,11 +356,11 @@ std::optional<NarrowCaptureError> validateArcRequests(
                               committed, staged, plan))
       return NarrowCaptureError::kUnplannedDependency;
 
-    const auto binding = staged.arcBindings().find(request.ref);
-    if (binding == staged.arcBindings().end()
-        || binding->second.slot.value() >= plan.after.arc_slots)
+    const auto* binding = staged.findArcBinding(request.ref);
+    if (binding == nullptr
+        || binding->slot.value() >= plan.after.arc_slots)
       return NarrowCaptureError::kInvalidHighWater;
-    const auto id = csr::ArcId{binding->second.slot.value()};
+    const auto id = csr::ArcId{binding->slot.value()};
     if (id.value() < plan.before.arc_slots) {
       const auto* slot = index.slot(id);
       if (!request.expected_current_key.has_value()
@@ -380,7 +377,7 @@ std::optional<NarrowCaptureError> validateArcRequests(
     }
     const bool deactivated
         = request.expected_post_multiplicity == 0;
-    if (binding->second.tombstone != deactivated)
+    if (binding->tombstone != deactivated)
       return NarrowCaptureError::kBatchBindingMismatch;
     if (deactivated) {
       if (!request.expected_current_key.has_value()
@@ -493,7 +490,7 @@ const NarrowCaptureAudit* CandidateBoundCapture::audit() const noexcept
 CandidateBoundCapture NarrowTimingRecordReader::read(
     const ista::Database& database, const DualSemanticReadView& committed,
     const DualCsrArcGroupIndex& index,
-    const timing_edit::TimingEditResolverState& staged_resolver,
+    timing_edit::TimingEditResolverView staged_resolver,
     const timing_edit::PreparedBatch& batch,
     const AffectedCapturePlan& plan) const
 {
@@ -530,7 +527,7 @@ CandidateBoundCapture NarrowTimingRecordReader::read(
           committed, index, staged_resolver, plan))
     return bound(reject(plan, *error));
   return bound(detail::captureNativeDualCsrPayload(
-      database, committed, index, staged_resolver, plan));
+      database, _models, committed, index, staged_resolver, plan));
 }
 
 }  // namespace ista::timing_dual_csr

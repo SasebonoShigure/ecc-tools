@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "CsrCpuReferenceBackend.hpp"
+#include "Database.hpp"
 #include "DualCsrArcGroupIndex.hpp"
 #include "DualCsrArcGroupResolverValidation.hpp"
 #include "DualCsrBaselineFactory.hpp"
@@ -30,15 +31,6 @@ namespace {
   throw DualCsrTraceRuntimeError(
       DualCsrTraceFailureCode::kInvalidBaseline,
       "Dual-CSR trace baseline: " + std::move(message));
-}
-
-std::vector<std::uint8_t> activeMask(const DualCsrState& graph)
-{
-  std::vector<std::uint8_t> result;
-  result.reserve(graph.arc_slots.size());
-  for (const auto& slot : graph.arc_slots)
-    result.push_back(slot.active ? 1U : 0U);
-  return result;
 }
 
 }  // namespace
@@ -80,12 +72,13 @@ CommittedDualCsrAnalysisState makeTraceBaseline(
   if (values == nullptr)
     baselineFail("direct-view CPU/full timing failed");
   DualCsrTimingResult timing{
-      .values = std::move(*values),
-      .active_arc_mask = activeMask(graph)};
+      .values = std::move(*values)};
   graph.telemetry.traversal = computation.telemetry;
 
   timing_edit::CommittedEditIdentity identity
       = deriveDualCsrCommittedIdentity(graph, resolver);
+  auto semantic_baseline = std::make_shared<const timing_edit::BaselineSemanticIdentity>(
+      timing_edit::BaselineSemanticIdentity{database.get_design_name(), identity.current_fingerprints, identity.canonical_pre_state});
   CommittedDualCsrAnalysisState committed{
       .graph = std::move(graph),
       .timing = std::move(timing),
@@ -95,7 +88,8 @@ CommittedDualCsrAnalysisState makeTraceBaseline(
       .generation = timing_edit::TransactionGeneration{0},
       .descriptor_trace = {},
       .semantic_trace = {},
-      .traversal_telemetry = computation.telemetry};
+      .traversal_telemetry = computation.telemetry,
+      .baseline = std::move(semantic_baseline)};
   if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(committed).empty())
     baselineFail("generation-zero aggregate failed intrinsic validation");
   return committed;

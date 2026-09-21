@@ -6,6 +6,7 @@
 // iEDA is licensed under Mulan PSL v2.
 // You may use this software according to the terms and conditions of the Mulan PSL v2.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include "CsrCpuReferenceTestFixture.hpp"
 
 #include <algorithm>
@@ -116,7 +117,6 @@ CsrTimingResult comparatorCanary()
   result.level_offsets = {0, 2};
   result.level_nodes = {NodeId{0}, NodeId{1}};
   result.node_to_level = {1, 1};
-  result.timing_order = result.level_nodes;
 
   result.nodes.is_clock_point = canarySoa<std::uint8_t>(1, 0);
   result.nodes.arrivals = canarySoa(1.25, 0.0);
@@ -269,7 +269,8 @@ void configureCellTables(CsrReferenceInput& input)
   if (arc_it == input.arcs.end())
     throw std::runtime_error("CPU reference cell fixture has no cell arc");
   auto& arc = *arc_it;
-  auto& child = arc.transfer.children.front();
+  auto children = arc.transfer.children();
+  auto& child = children.front();
   child.signature.arc_index = 7;
   child.signature.sense = TimingSense::kPositiveUnate;
   child.signature.trigger_transition = Transition::kNone;
@@ -282,6 +283,7 @@ void configureCellTables(CsrReferenceInput& input)
   arc.key.base.library_arcs = {child.signature};
   arc.output_load = outputLoad(0.0);
   input.arc_ids_by_key[arc.id.value()].key = arc.key;
+  arc.transfer.setChildren(children);
   input.referenced_library_cells.front().cell_arcs.front().transfer = arc.transfer;
 }
 
@@ -335,13 +337,15 @@ CsrReferenceInput makeCpuReferencePropertyFixture(std::uint64_t seed)
     arc.key.parallel_ordinal = index;
     arc.native_traversal_rank = index + 1;
     const double bias = 0.03125 * static_cast<double>(1 + (seed % 13)) + 0.5 * static_cast<double>(index);
-    for (auto& child : arc.transfer.children)
+    ista::csr::test::mutateChildren(arc.transfer, [&](auto& children) {
+    for (auto& child : children)
       for (std::size_t output = 0; output < kTransitionCount; ++output) {
         for (double& value : child.delay_tables[output].values)
           value += bias;
         for (double& value : child.slew_tables[output].values)
           value += bias * 0.125;
       }
+  });
     if (index >= active_count) {
       arc.eligibility = {};
       if (add_disabled && index == active_count) {
@@ -407,8 +411,6 @@ bool exactTimingResultEqual(const CsrTimingResult& lhs, const CsrTimingResult& r
     return mismatchAt(mismatch, "level_nodes");
   if (!exactVector(lhs.node_to_level, rhs.node_to_level))
     return mismatchAt(mismatch, "node_to_level");
-  if (!exactVector(lhs.timing_order, rhs.timing_order))
-    return mismatchAt(mismatch, "timing_order");
 
 #define CSR_EXACT_SOA(FIELD)           \
   if (!exactSoa(lhs.FIELD, rhs.FIELD)) \
@@ -505,7 +507,6 @@ void runExactTimingResultComparatorCanaries()
   reject("source_identity.timing_input_fingerprint", [](auto& value) { value.source_identity.timing_input_fingerprint.push_back('x'); });
   reject("level_nodes", [](auto& value) { value.level_nodes.back() = NodeId{9}; });
   reject("node_to_level", [](auto& value) { ++value.node_to_level.back(); });
-  reject("timing_order", [](auto& value) { value.timing_order.back() = NodeId{9}; });
 
 #define CSR_CANARY(FIELD) exerciseSoaCanary(baseline, #FIELD, [](auto& value) -> auto& { return value.FIELD; })
   CSR_CANARY(nodes.is_clock_point);

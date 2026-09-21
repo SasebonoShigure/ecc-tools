@@ -24,5 +24,6 @@ target_include_directories(ista_interface
 )
 
 if(ISTA_ENABLE_CUDA)
-  target_link_libraries(ista_interface PRIVATE ista_cuda)
+  target_sources(ista_interface PRIVATE StaCudaSessionState.cpp)
+  target_link_libraries(ista_interface PRIVATE ista_cuda ista_timing_edit_native)
 endif()

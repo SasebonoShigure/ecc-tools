@@ -68,6 +68,8 @@ if(BUILD_TESTING)
     ista_add_incremental_levelization_test(
         ista_incremental_levelization_pipeline_test
         IncrementalLevelizationPipelineTest.cpp)
+    target_sources(ista_incremental_levelization_pipeline_test PRIVATE
+        ${ISTA_TEST}/AllocationFailureSupport.cpp)
     ista_add_incremental_levelization_test(
         ista_incremental_levelization_property_test
         IncrementalLevelizationPropertyTest.cpp)

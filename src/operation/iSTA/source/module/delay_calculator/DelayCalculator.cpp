@@ -103,7 +103,13 @@ double DelayCalculator::getPowerOutputLoad(std::string& output_pin, AnalysisType
 
 DelayCalculator* DelayCalculator::_dc_instance = nullptr;
 
-void DelayCalculator::clearParasiticCache()
+void DelayCalculator::resetForEditRollback() noexcept
+{
+  clearParasiticCache();
+  _timing_arc = nullptr;
+}
+
+void DelayCalculator::clearParasiticCache() noexcept
 {
   _parasitic_resistor_map_cache.clear();
   _parasitic_load_map_cache.clear();

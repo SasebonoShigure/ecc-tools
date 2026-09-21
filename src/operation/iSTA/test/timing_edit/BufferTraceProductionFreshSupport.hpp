@@ -14,7 +14,7 @@
 
 namespace ista::timing_edit {
 struct CommittedEditIdentity;
-class TimingEditCoordinator;
+class TimingEditResolverState;
 }
 
 namespace ista::timing_edit::oracle {
@@ -57,7 +57,8 @@ proveDerivedTimingFreshness(
 
 [[nodiscard]] bool proveFirstEmptyGenerationZero(
     const timing_edit::oracle::ProductionFreshSessionView& view,
-    const timing_edit::TimingEditCoordinator& coordinator,
+    const timing_edit::CommittedEditIdentity& current_identity,
+    const timing_edit::TimingEditResolverState& resolver,
     const timing_edit::CommittedEditIdentity& initial_identity);
 
 [[noreturn]] void rethrowTypedLoaderFailure(

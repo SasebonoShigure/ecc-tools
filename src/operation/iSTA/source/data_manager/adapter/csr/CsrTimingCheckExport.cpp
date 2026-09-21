@@ -39,17 +39,23 @@ void validateResolvedEndpoint(const ReferenceBuildState& state, const std::strin
     malformedReferenceInput();
 }
 
-void validateNativeCheck(const ista::TimingCheckArc& native_check, const LibraryTimingCheckArcModel& closure, const std::string& clock_full_name,
+void validateNativeCheck(const ista::TimingCheckArc& native_check, const ista::TimingCheckArc& library_check,
+                         const LibraryTimingCheckArcModel& closure, const std::string& clock_full_name,
                          const std::string& data_full_name)
 {
   const auto& native_children = native_check.get_timing_arc_list();
   if (native_check.get_clock_port() != clock_full_name || native_check.get_data_port() != data_full_name
       || convertReferenceTimingCheckKind(native_check.get_check_type()) != closure.kind || native_check.get_check_time() != closure.check_time
-      || convertReferenceTransition(native_check.get_clock_trans_type()) != closure.clock_transition || native_children.size() != closure.children.size())
+      || convertReferenceTransition(native_check.get_clock_trans_type()) != closure.clock_transition || native_children.size() != closure.children().size())
     malformedReferenceInput();
 
-  for (std::size_t child = 0; child < closure.children.size(); ++child)
-    if (!(exportReferenceChildTimingArc(native_children.at(child)) == closure.children.at(child)))
+  // Instance checks feed native CPU STA, whereas CSR consumes the Liberty
+  // closure. Compare the actual immutable source fields without projecting or
+  // copying tables. On malformed input retain the exporter's typed failure.
+  if (native_children == library_check.get_timing_arc_list())
+    return;
+  for (std::size_t child = 0; child < closure.children().size(); ++child)
+    if (!(exportReferenceChildTimingArc(native_children.at(child)) == closure.children().at(child)))
       malformedReferenceInput();
 }
 
@@ -81,7 +87,7 @@ void exportReferenceTimingChecks(ReferenceBuildState& state)
       endpoint.resolved_data_node = resolveNode(state, endpoint.data_pin_full_name);
       validateResolvedEndpoint(state, instance.instance_name, endpoint.resolved_clock_node);
       validateResolvedEndpoint(state, instance.instance_name, endpoint.resolved_data_node);
-      validateNativeCheck(native_checks.at(ordinal), check, endpoint.clock_pin_full_name, endpoint.data_pin_full_name);
+      validateNativeCheck(native_checks.at(ordinal), findNativeTimingCell(state, instance.cell_name)->get_check_arc_list().at(ordinal), check, endpoint.clock_pin_full_name, endpoint.data_pin_full_name);
       if (endpoint.resolved_data_node)
         state.timing_check_data_nodes[endpoint.resolved_data_node->value()] = 1;
       state.input.timing_check_endpoints.push_back(std::move(endpoint));

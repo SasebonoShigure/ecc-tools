@@ -225,8 +225,6 @@ inline bool validateAdjacency(const std::vector<std::uint64_t>& offsets, const s
     return false;
   std::vector<std::uint8_t> seen(arcs.size(), 0);
   for (std::size_t row = 0; row < node_count; ++row) {
-    std::uint64_t previous_rank = 0;
-    bool has_previous = false;
     for (std::uint64_t offset = offsets[row]; offset < offsets[row + 1]; ++offset) {
       const std::uint64_t arc_id = ids[offset].value();
       if (arc_id >= arcs.size()) {
@@ -238,10 +236,8 @@ inline bool validateAdjacency(const std::vector<std::uint64_t>& offsets, const s
       const auto& arc = arcs[arc_id];
       if ((outgoing ? arc.source : arc.sink).value() != row)
         reject(errors, field, "ArcId is stored under the wrong endpoint row");
-      if (has_previous && arc.native_traversal_rank <= previous_rank)
-        reject(errors, field, "row must preserve increasing native traversal rank");
-      previous_rank = arc.native_traversal_rank;
-      has_previous = true;
+      // The row defines candidate order. Native physical slots can remain
+      // stable across edits and need not increase in that order.
     }
   }
   if (std::ranges::any_of(seen, [](std::uint8_t count) { return count != 1; }))

@@ -22,7 +22,7 @@
 #include "Database.hpp"
 #include "Instance.hpp"
 #include "NativeBufferCellValidation.hpp"
-#include "NativeDatabaseCandidate.hpp"
+#include "NativeBufferInsertionInternal.hpp"
 #include "NativeDatabaseValidation.hpp"
 #include "NativeDesignEditTranslator.hpp"
 #include "Pin.hpp"
@@ -116,40 +116,6 @@ void installInstanceSink(Database& database, bool sequential, bool clock_port)
           "failed to install sink library cell");
 }
 
-void testRawClonePreservesInputsAndClearsEveryDerivedGraphContainer()
-{
-  NativeEditFixture fixture = makeNativeEditFixture();
-  Database& source = fixture.database();
-  require(source.get_arc_list().size() == 1 && source.get_timing_point_map().size() == 2,
-          "raw-clone fixture lacks derived state");
-  require(!source.get_net_map().at("n0").get_driver_pin_list().empty()
-              && !source.get_net_map().at("n0").get_load_pin_list().empty(),
-          "raw-clone fixture lacks derived net caches");
-
-  NativeDatabaseCandidate candidate = NativeDatabaseCandidate::create(source);
-  Database& clone = candidate.database();
-  require(clone.get_design_name() == source.get_design_name(), "raw clone lost design name");
-  require(clone.get_pin_map().size() == source.get_pin_map().size()
-              && clone.get_net_map().size() == source.get_net_map().size(),
-          "raw clone lost pin/net inputs");
-  require(clone.get_timing_library().get_cell_map().size()
-              == source.get_timing_library().get_cell_map().size(),
-          "raw clone lost TimingLibrary inputs");
-  require(clone.get_arc_list().empty() && clone.get_outgoing_arc_list_map().empty()
-              && clone.get_incoming_arc_list_map().empty(),
-          "raw clone retained derived arcs or adjacency");
-  require(clone.get_timing_point_map().empty() && clone.get_start_point_list().empty()
-              && clone.get_end_point_list().empty() && clone.get_timing_order_list().empty(),
-          "raw clone retained timing-point/order state");
-  require(clone.get_timing_path_group_list().empty(), "raw clone retained path groups");
-  require(clone.get_net_map().at("n0").get_driver_pin().empty()
-              && clone.get_net_map().at("n0").get_driver_pin_list().empty()
-              && clone.get_net_map().at("n0").get_load_pin_list().empty(),
-          "raw clone retained derived net driver/load caches");
-  require(source.get_arc_list().size() == 1 && source.get_timing_point_map().size() == 2,
-          "detached clone reset mutated the canonical source");
-}
-
 void testOnlyExactNonInvertingTwoPortBufferIsAccepted()
 {
   NativeEditFixture fixture = makeNativeEditFixture();
@@ -215,12 +181,35 @@ void testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs()
   PreparedBatch batch = NativeTimingEditPreparer::prepare(
       fixture.database(), plan, prepareContext(baseline, identity, kToken), resolver);
   TimingEditResolverState staged_resolver = resolver.stage(batch);
-  NativeDatabaseCandidate candidate = NativeDatabaseCandidate::create(fixture.database());
+  const auto original_members = fixture.database().get_net_map().at("n0").get_pin_name_list();
+  const auto original_sink_net = fixture.database().get_pin_map().at("out").get_net_name();
+  const auto original_arcs = fixture.database().get_arc_list().size();
+  const auto* library = &fixture.database().get_timing_library();
+  const auto* cell = &fixture.database().get_timing_library().get_cell_map().at("BUF_X1");
+  {
+    auto edits = detail::prepareNativeBufferInsertions(
+        fixture.database(), batch.normalizedEdits(), staged_resolver,
+        detail::nextNativeInstanceId(fixture.database()));
+    require(fixture.database().get_net_map().at("n0").get_pin_name_list() == original_members,
+            "raw preparation changed canonical membership");
+    edits.apply();
+    requireBidirectionalRawMembership(fixture.database());
+    require(&fixture.database().get_timing_library() == library
+                && &fixture.database().get_timing_library().get_cell_map().at("BUF_X1") == cell,
+            "raw apply replaced immutable library storage");
+    edits.undo();
+    require(fixture.database().get_net_map().at("n0").get_pin_name_list() == original_members
+                && fixture.database().get_pin_map().at("out").get_net_name() == original_sink_net
+                && fixture.database().get_arc_list().size() == original_arcs
+                && fixture.database().get_instance_map().empty(),
+            "local raw undo failed to restore actual old state");
+    requireBidirectionalRawMembership(fixture.database());
+  }
 
   const NativeTranslationResult result
-      = NativeDesignEditTranslator::applyNormalizedBatch(candidate.database(), batch, staged_resolver);
+      = NativeDesignEditTranslator::applyNormalizedBatch(fixture.database(), batch, staged_resolver);
   require(result.applied() && result.reasons.empty(), "supported translator path returned fallback");
-  const Database& translated = candidate.database();
+  const Database& translated = fixture.database();
   const TokenMaterialization& names = staged_resolver.materialization(editTestCreationToken());
 
   require(translated.get_instance_map().contains(names.instance_name), "translator did not add instance");
@@ -247,10 +236,7 @@ void testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs()
               && translated.get_outgoing_arc_list_map().empty()
               && translated.get_incoming_arc_list_map().empty(),
           "translator constructed or retained derived timing graph state");
-  require(fixture.database().get_instance_map().empty()
-              && fixture.database().get_net_map().at("n0").get_pin_name_list()
-                     == std::vector<std::string>{"in", "out"},
-          "detached translation mutated the canonical source");
+
 }
 
 void testTranslatorChecksSequentialDataAndControlSinkRoles()
@@ -270,7 +256,7 @@ void testTranslatorChecksSequentialDataAndControlSinkRoles()
       fixture.database(), plan, prepareContext(baseline, identity, kToken), resolver);
   const TimingEditResolverState staged_resolver = resolver.stage(batch);
 
-  NativeDatabaseCandidate sequential = NativeDatabaseCandidate::create(fixture.database());
+  auto sequential = makeNativeEditFixture();
   installInstanceSink(sequential.database(), true, false);
   require(sequential.database().get_instance_map().at("u_sink").get_is_sequential()
               && sequential.database().get_timing_library().get_cell_map().at("DFF_X1").get_is_sequential(),
@@ -282,7 +268,7 @@ void testTranslatorChecksSequentialDataAndControlSinkRoles()
       },
       "sequential sink without a setup/hold data role was accepted");
 
-  NativeDatabaseCandidate data = NativeDatabaseCandidate::create(fixture.database());
+  auto data = makeNativeEditFixture();
   installInstanceSink(data.database(), true, false);
   auto& data_cell = data.database().get_timing_library().get_cell_map().at("DFF_X1");
   TimingCheckArc setup;
@@ -305,7 +291,7 @@ void testTranslatorChecksSequentialDataAndControlSinkRoles()
   requireBidirectionalRawMembership(data.database());
 
   for (const bool gating : {false, true}) {
-    NativeDatabaseCandidate control = NativeDatabaseCandidate::create(fixture.database());
+    auto control = makeNativeEditFixture();
     installInstanceSink(control.database(), true, false);
     auto& control_cell = control.database().get_timing_library().get_cell_map().at("DFF_X1");
     control_cell.get_check_arc_list().push_back(setup);
@@ -321,7 +307,7 @@ void testTranslatorChecksSequentialDataAndControlSinkRoles()
             "rejected control sink changed native memberships");
   }
 
-  NativeDatabaseCandidate clock_port = NativeDatabaseCandidate::create(fixture.database());
+  auto clock_port = makeNativeEditFixture();
   installInstanceSink(clock_port.database(), false, true);
   require(clock_port.database().get_timing_library().get_cell_map().at("DFF_X1")
               .get_port_map().at("D").get_is_clock(),
@@ -340,7 +326,6 @@ void testTranslatorChecksSequentialDataAndControlSinkRoles()
 
 int main()
 {
-  testRawClonePreservesInputsAndClearsEveryDerivedGraphContainer();
   testOnlyExactNonInvertingTwoPortBufferIsAccepted();
   testNativeDatabaseRejectsIncompleteTimingOrder();
   testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs();

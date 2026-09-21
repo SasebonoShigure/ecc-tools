@@ -3,10 +3,9 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 #include <algorithm>
-#include <limits>
-#include <numeric>
 #include <stdexcept>
-#include <tuple>
+#include <utility>
+#include <type_traits>
 
 #include "Arc.hpp"
 #include "CsrReferenceInputAdapterInternal.hpp"
@@ -14,6 +13,84 @@
 #include "NativeTargetedEditInternal.hpp"
 
 namespace ista::timing_edit::detail {
+PreparedNativeTargetedMetadata::PreparedNativeTargetedMetadata(
+    NativeTargetedEditState& state, const AppendOnlySlotPlan& slots,
+    const std::vector<TokenMaterialization>& materializations)
+    : _state(state), _resolver_patch(state.resolver, state.resolver.prepareAssignmentsDelta(slots, materializations)),
+      _generation(state.generation.value() + 1), _node_count(state.node_names.size()),
+      _arc_count(state.arc_native_ranks.size()), _native_count(state.native_arc_ids.size()),
+      _out_count(state.base_out_offsets.size()), _in_count(state.base_in_offsets.size())
+{
+  _names.resize(slots.after.node_slots - slots.before.node_slots);
+  for (const auto& assignment : slots.nodes) {
+    if (assignment.slot.value() < _node_count || assignment.tombstone)
+      throw std::invalid_argument("targeted metadata requires appended live nodes");
+    const auto& name = _resolver_patch.view().resolveNode(assignment.ref);
+    _names.at(assignment.slot.value() - _node_count) = name;
+    if (state.node_ids.contains(name) || !_node_ids.emplace(name, csr::NodeId{assignment.slot.value()}).second)
+      throw std::invalid_argument("targeted metadata node name collision");
+  }
+  _ids.reserve(_node_ids.size());
+  for (auto it = _node_ids.begin(); it != _node_ids.end(); ++it)
+    _ids.push_back(it);
+  for (const auto& assignment : slots.arcs) {
+    const auto id = assignment.slot.value();
+    if (id >= _arc_count) {
+      _new_arc_refs.emplace_back(id, assignment.ref);
+      continue;
+    }
+    const auto rank = state.arc_native_ranks.at(id);
+    _old_ranks.emplace_back(id, rank);
+    if (rank)
+      _old_native_ids.emplace_back(*rank, state.native_arc_ids.at(*rank));
+  }
+  reserveTargetedAppend(state.node_names, slots.after.node_slots);
+  reserveTargetedAppend(state.arc_native_ranks, slots.after.arc_slots);
+  reserveTargetedAppend(state.arc_refs, slots.after.arc_slots);
+  reserveTargetedAppend(state.native_arc_ids, _native_count + slots.nodes.size());
+  reserveTargetedAppend(state.base_out_offsets, _out_count + slots.nodes.size());
+  reserveTargetedAppend(state.base_in_offsets, _in_count + slots.nodes.size());
+}
+
+void PreparedNativeTargetedMetadata::apply() noexcept
+{
+  _resolver_patch.apply();
+  const auto& resolver = _state.resolver;
+  std::swap(_state.generation, _generation);
+  _state.node_names.resize(resolver.highWater().node_slots);
+  _state.arc_native_ranks.resize(resolver.highWater().arc_slots);
+  _state.arc_refs.resize(resolver.highWater().arc_slots);
+  for (const auto& [id, ref] : _new_arc_refs)
+    _state.arc_refs[id] = &resolver.arcBindings().find(ref)->first;
+  for (std::size_t i = 0; i < _names.size(); ++i)
+    _state.node_names[_node_count + i].swap(_names[i]);
+  _state.node_ids.merge(_node_ids);
+  _applied = true;
+}
+void PreparedNativeTargetedMetadata::undo() noexcept
+{
+  if (!_applied)
+    return;
+  const auto erase_inserted = [](auto& target, const auto& inserted) {
+    for (auto it : inserted)
+      target.erase(it);
+  };
+  _resolver_patch.rollback();
+  erase_inserted(_state.node_ids, _ids);
+  std::swap(_state.generation, _generation);
+  for (const auto& [rank, id] : _old_native_ids)
+    _state.native_arc_ids[rank] = id;
+  for (const auto& [id, rank] : _old_ranks)
+    _state.arc_native_ranks[id] = rank;
+  _state.node_names.resize(_node_count);
+  _state.arc_native_ranks.resize(_arc_count);
+  _state.arc_refs.resize(_arc_count);
+  _state.native_arc_ids.resize(_native_count);
+  _state.base_out_offsets.resize(_out_count);
+  _state.base_in_offsets.resize(_in_count);
+  _applied = false;
+}
+
 csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditState& state, const std::string& name)
 {
   const auto& pin = database.get_pin_map().at(name);
@@ -28,7 +105,8 @@ csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditS
   auto node = csr::detail::projectCanonicalNodeRecord(database, name, pin, starts, ends, owners);
   node.id = state.node_ids.at(name);
   if (!node.is_port) {
-    const auto cell = csr::detail::projectCanonicalReferencedLibraryCell(database, node.instance_cell);
+    state.models->requireDatabase(database);
+    const auto& cell = state.models->cell(node.instance_cell);
     csr::detail::applyCanonicalNodeLibraryRoles(cell, node);
   }
   return node;
@@ -96,7 +174,7 @@ csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTarget
     throw std::invalid_argument("targeted buffer edit touches a clock arc");
   const bool clock_eligible = state.clock_arcs->contains(state.native_arc_ids.at(rank));
   record.eligibility = csr::detail::projectCanonicalArcEligibility(record, nodes[1], false, clock_eligible);
-  record.transfer = csr::detail::projectCanonicalArcTransfer(record, arc);
+  record.transfer = csr::detail::projectCanonicalArcTransfer(database, *state.models, record, arc);
   auto load = loads.find(nodes[1].net_name);
   if (load == loads.end())
     load = loads.emplace(nodes[1].net_name, netLoad(database, state, nodes[1].net_name)).first;
@@ -124,61 +202,5 @@ std::vector<csr::ArcId> targetedRow(const Database& database, const NativeTarget
   return result;
 }
 
-void canonicalizeTargetedNativeOrder(Database& database, NativeTargetedEditState& state)
-{
-  auto& arcs = database.get_arc_list();
-  std::map<const TimingCellArc*, std::size_t> ordinals;
-  for (const auto& [name, cell] : database.get_timing_library().get_cell_map()) {
-    static_cast<void>(name);
-    const auto& children = cell.get_cell_arc_list();
-    for (std::size_t i = 0; i < children.size(); ++i)
-      ordinals.emplace(&children[i], i);
-  }
-  std::vector<std::size_t> order(arcs.size());
-  std::iota(order.begin(), order.end(), 0);
-  auto key = [&](std::size_t rank) {
-    const auto& arc = arcs[rank];
-    const bool net = arc.get_type() == ArcType::kNet;
-    const auto ordinal = arc.get_timing_cell_arc() == nullptr ? rank : ordinals.at(arc.get_timing_cell_arc());
-    return std::tuple{net, arc.get_owner_name(), net ? 0 : ordinal, arc.get_source_pin(), arc.get_sink_pin()};
-  };
-  std::ranges::stable_sort(order, [&](auto a, auto b) { return key(a) < key(b); });
-  std::vector<std::size_t> new_rank(arcs.size());
-  std::vector<Arc> reordered;
-  std::vector<csr::ArcId> ids;
-  reordered.reserve(arcs.size());
-  ids.reserve(arcs.size());
-  for (const auto old : order) {
-    new_rank[old] = reordered.size();
-    ids.push_back(state.native_arc_ids.at(old));
-    reordered.push_back(std::move(arcs[old]));
-  }
-  arcs.swap(reordered);
-  state.native_arc_ids.swap(ids);
-  for (auto* rows : {&database.get_outgoing_arc_list_map(), &database.get_incoming_arc_list_map()}) {
-    for (auto& [name, row] : *rows) {
-      static_cast<void>(name);
-      for (auto& rank : row)
-        rank = new_rank.at(rank);
-      std::ranges::sort(row);
-    }
-  }
-  for (auto& rank : state.arc_native_ranks)
-    if (rank)
-      *rank = new_rank.at(*rank);
-  auto rebind = [&](auto& value) {
-    const auto old = value.get_predecessor_arc_idx();
-    if (old != std::numeric_limits<std::size_t>::max())
-      value.set_predecessor_arc_idx(new_rank.at(old));
-  };
-  for (auto& [name, point] : database.get_timing_point_map()) {
-    static_cast<void>(name);
-    rebind(point);
-    for (auto& [analysis, sources] : point.get_path_state_map())
-      for (auto& [source, transitions] : sources)
-        for (auto& [transition, tags] : transitions)
-          for (auto& [tag, path] : tags)
-            rebind(path);
-  }
-}
+
 }  // namespace ista::timing_edit::detail

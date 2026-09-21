@@ -32,25 +32,6 @@ bool validOffsets(const std::vector<std::uint64_t>& offsets,
          && offsets.back() == entries;
 }
 
-bool validAuxRows(const AuxOutCsrState& aux, std::size_t nodes) noexcept
-{
-  if (aux.source_to_aux_row.size() != nodes
-      || aux.row_sources.size()
-             > static_cast<std::size_t>(
-                   std::numeric_limits<std::int64_t>::max()))
-    return false;
-  for (std::size_t row = 0; row < aux.row_sources.size(); ++row) {
-    const std::size_t source = aux.row_sources[row].value();
-    if (source >= nodes
-        || aux.source_to_aux_row[source]
-               != static_cast<std::int64_t>(row)
-        || (row != 0
-            && aux.row_sources[row - 1].value() >= source))
-      return false;
-  }
-  return true;
-}
-
 }  // namespace
 
 DualCsrEdgeViewImpl::DualCsrEdgeViewImpl(const DualCsrState& state)
@@ -63,10 +44,8 @@ DualCsrEdgeViewImpl::DualCsrEdgeViewImpl(const DualCsrState& state)
                                 _state->base_out.physical_slots.size())
                || !validOffsets(_state->base_in.row_offsets, nodes,
                                 _state->base_in.physical_slots.size())
-               || !validOffsets(_state->aux_out.row_offsets,
-                                _state->aux_out.row_sources.size(),
-                                _state->aux_out.arc_ids.size())
-               || !validAuxRows(_state->aux_out, nodes);
+               || _state->aux_out.source_to_aux_row.size() != nodes
+               || _state->aux_out.row_arcs.size() != _state->aux_out.row_sources.size();
   if (!_malformed)
     _active_slot_count = static_cast<std::size_t>(active);
 }
@@ -153,27 +132,17 @@ csr::EdgeVisitResult DualCsrEdgeViewImpl::visitAuxRow(
     std::size_t row, const csr::EdgeVisitor& visitor) const
 {
   const auto& aux = _state->aux_out;
-  if (row >= aux.row_sources.size() || row + 1 >= aux.row_offsets.size())
+  if (row >= aux.row_sources.size() || row >= aux.row_arcs.size())
     return csr::EdgeVisitResult::fail(
         csr::CsrViewError::kMalformedAdjacency);
   const csr::NodeId source = aux.row_sources[row];
   if (source.value() >= nodeCount()
       || aux.source_to_aux_row[source.value()]
-             != static_cast<std::int64_t>(row)
-      || (row != 0 && aux.row_sources[row - 1].value() >= source.value())
-      || (row + 1 < aux.row_sources.size()
-          && source.value() >= aux.row_sources[row + 1].value()))
+             != static_cast<std::int64_t>(row))
     return csr::EdgeVisitResult::fail(
         csr::CsrViewError::kMalformedAdjacency);
-  const std::uint64_t begin = aux.row_offsets[row];
-  const std::uint64_t end = aux.row_offsets[row + 1];
-  if (begin > end || end > aux.arc_ids.size())
-    return csr::EdgeVisitResult::fail(
-        csr::CsrViewError::kMalformedAdjacency);
-  for (std::uint64_t offset = begin; offset < end; ++offset) {
-    const auto result = visitArc(aux.arc_ids[offset], source, true,
-                                 csr::EdgeStorageKind::kAuxOut,
-                                 visitor);
+  for (const auto arc : aux.row_arcs[row]) {
+    const auto result = visitArc(arc, source, true, csr::EdgeStorageKind::kAuxOut, visitor);
     if (result.control != csr::EdgeVisitControl::kContinue)
       return result;
   }

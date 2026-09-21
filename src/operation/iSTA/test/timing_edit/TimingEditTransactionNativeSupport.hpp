@@ -14,7 +14,8 @@
 #include "IncrementalStaSession.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "NativeDesignEditTranslator.hpp"
-#include "TimingEditCoordinator.hpp"
+#include "NativeEditTransaction.hpp"
+#include "TimingEditResolver.hpp"
 #include "TimingEditNativeFixture.hpp"
 
 namespace ista::timing_edit::test {
@@ -62,11 +63,8 @@ struct PreparedNativeTransaction
 
 struct ExecutedNativeTransaction
 {
-  InstalledNativeDatabase installed;
-  std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot;
-  CsrExecutionAuthorization csr_full_receipt;
+  NativeEditTransaction installed;
   CommittedEditIdentity post_identity;
-  TimingEditResolverState staged_resolver;
   TokenMaterialization materialization;
 };
 
@@ -78,20 +76,15 @@ void installNativeTransactionBaseline();
 [[nodiscard]] std::unique_ptr<csr::CsrCommittedSessionSnapshot> buildNativeHostSnapshot(
     const Database& database, TimingEditSessionToken session_token);
 
-[[nodiscard]] NativeDatabaseCandidate translateNativeCandidate(
-    const PreparedNativeTransaction& transaction,
-    const TimingEditResolverState& staged_resolver);
+
 
 [[nodiscard]] ExecutedNativeTransaction executeNativeTransaction(
     const NativeExecutionAuthority& authority,
     StaCsrSessionContext& session_context,
-    const PreparedNativeTransaction& transaction);
+    PreparedNativeTransaction& transaction);
 
 void requireReleasedSnapshotForNativeMutation(
     StaCsrSessionContext& session_context, TimingEditSessionToken session_token);
-
-[[nodiscard]] CumulativeEditTrace nativeSuccessorTrace(
-    const PreparedNativeTransaction& transaction);
 
 void requireRecursiveStaOperationRejected(std::uint64_t token,
                                           StaCsrSessionContext& context);

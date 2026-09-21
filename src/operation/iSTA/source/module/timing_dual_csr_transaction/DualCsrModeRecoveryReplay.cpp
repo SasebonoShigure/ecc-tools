@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -37,32 +38,39 @@ DualCsrModeRecoveryReplayAttempt reject(
   return attempt;
 }
 
-template <typename T>
-bool exactPrefix(const std::vector<T>& produced,
-                 const std::vector<T>& expected,
-                 std::size_t length)
+// Capacity retained after an abandoned transaction and allocation growth are
+// resource observations, not replayable logical state.
+bool sameRecoveredState(const CommittedDualCsrAnalysisState& lhs, const CommittedDualCsrAnalysisState& rhs)
 {
-  return produced.size() == length && expected.size() >= length
-         && std::equal(produced.begin(), produced.end(),
-                       expected.begin());
+  const auto graph = [](const DualCsrState& value) {
+    return std::tie(value.session_token, value.generation, value.high_water, value.nodes, value.arc_slots,
+                    value.base_out.row_offsets, value.base_out.physical_slots,
+                    value.base_in.row_offsets, value.base_in.physical_slots,
+                    value.aux_out.row_arcs, value.aux_out.row_sources, value.aux_out.source_to_aux_row,
+                    value.reference_payload);
+  };
+  const auto execution = [](const DualCsrTelemetry& value) {
+    return std::tie(value.generation_before, value.generation_after, value.logical_edges_before, value.logical_edges_after,
+                    value.base_physical_edges, value.base_active_edges, value.base_tombstones, value.aux_rows, value.aux_edges,
+                    value.tombstone_reuse_count, value.base_change_count, value.reverse_change_count, value.nodes_appended,
+                    value.arcs_appended, value.payload_change_count, value.aux_rebuild_count, value.full_rebuild_count,
+                    value.fallback_count, value.traversal);
+  };
+  const auto state = [](const CommittedDualCsrAnalysisState& value) {
+    return std::tie(value.timing, value.resolver, value.arc_group_index, value.identity, value.generation,
+                    value.descriptor_trace, value.semantic_trace, value.traversal_telemetry, value.execution_trace);
+  };
+  return graph(lhs.graph) == graph(rhs.graph) && execution(lhs.graph.telemetry) == execution(rhs.graph.telemetry)
+         && state(lhs) == state(rhs) && bool(lhs.baseline) == bool(rhs.baseline)
+         && (!lhs.baseline || *lhs.baseline == *rhs.baseline);
 }
 
-bool stageMatchesPersistedPrefix(
-    const CommittedDualCsrAnalysisState& staged,
-    const CommittedDualCsrAnalysisState& expected,
-    std::size_t length)
+bool stageMatchesPersistedRecord(const DualCsrVerifiedStage& staged, const CommittedDualCsrAnalysisState& expected, std::size_t index)
 {
-  if (!exactPrefix(staged.descriptor_trace,
-                   expected.descriptor_trace, length)
-      || !exactPrefix(staged.semantic_trace,
-                      expected.semantic_trace, length)
-      || !exactPrefix(staged.execution_trace,
-                      expected.execution_trace, length))
-    return false;
-  const auto& record = staged.execution_trace.back();
-  return validateLevelizationExecutionTraceShape(record)
-         && record.generation()
-                == timing_edit::TransactionGeneration{length};
+  const auto& batch = staged.batch();
+  return index < expected.semantic_trace.size() && index < expected.execution_trace.size() && index < expected.descriptor_trace.size()
+         && batch.semantic == expected.semantic_trace[index] && batch.execution == expected.execution_trace[index]
+         && batch.descriptor && *batch.descriptor == expected.descriptor_trace[index];
 }
 
 }  // namespace
@@ -85,7 +93,8 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
 
   const DualCsrViolations baseline_errors
       = validateCommittedDualCsrAnalysisState(generation_zero);
-  if (!baseline_errors.empty() || generation_zero.generation.value() != 0
+  if (!baseline_errors.empty() || !generation_zero.baseline || *generation_zero.baseline != *poisoned_committed.baseline
+      || generation_zero.generation.value() != 0
       || !generation_zero.descriptor_trace.empty()
       || !generation_zero.semantic_trace.empty()
       || !generation_zero.execution_trace.empty())
@@ -114,19 +123,22 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
   }
 
   DualCsrTransactionCoordinator coordinator(std::move(generation_zero));
-  const std::size_t count = poisoned_committed.descriptor_trace.size();
+  const std::size_t count = poisoned_committed.semantic_trace.size();
   for (std::size_t index = 0; index < count; ++index) {
+    const auto replay_generation_before = coordinator.committed().generation.value();
     const auto& persisted_execution = poisoned_committed.execution_trace[index];
-    // Only the current descriptor needs a new session binding for the source.
-    auto descriptor = poisoned_committed.descriptor_trace[index];
-    descriptor.session_token = new_token;
-    if (auto& identity = descriptor.reference_payload.source_identity; identity) {
-      identity->expected.session_token = new_token.value();
-      identity->replacement.session_token = new_token.value();
+    std::optional<DualCsrBatchDescriptor> descriptor;
+    if constexpr (incregpusta_debug_checks_enabled) {
+      descriptor = poisoned_committed.descriptor_trace[index];
+      descriptor->session_token = new_token;
+      if (auto& identity = descriptor->reference_payload.source_identity; identity) {
+        identity->expected.session_token = new_token.value();
+        identity->replacement.session_token = new_token.value();
+      }
     }
     DualCsrModeRecoveryBatchRequest request{.batch_index = index,
-                                            .exact_recovered_before = coordinator.committed(),
-                                            .persisted_descriptor = descriptor,
+                                            .coordinator = coordinator,
+                                            .diagnostic_descriptor = descriptor ? &*descriptor : nullptr,
                                             .persisted_semantic_batch = poisoned_committed.semantic_trace[index],
                                             .persisted_execution = persisted_execution};
     auto batch_attempt = source.rebuild(request);
@@ -134,7 +146,7 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
       return reject(
           evidence,
           DualCsrModeRecoveryReplayCode::kBatchSourceRejected,
-          coordinator.committed().generation.value(),
+          replay_generation_before,
           batch_attempt.detail.empty()
               ? "recovery batch source did not mint a unique capability"
               : std::move(batch_attempt.detail),
@@ -144,7 +156,7 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
     if (persisted_execution.mode()
         == LevelizationExecutionMode::kFullStage5) {
       auto full_attempt = makeStagedDualCsrAnalysisState(
-          coordinator.committed(),
+          coordinator,
           std::move(*batch_attempt.verified_batch));
       if (!full_attempt.success()) {
         DualCsrStageFailure failure{
@@ -154,7 +166,7 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
         return reject(
             evidence,
             DualCsrModeRecoveryReplayCode::kFullStageRejected,
-            coordinator.committed().generation.value(),
+            replay_generation_before,
             "persisted full mode failed its real Stage 5 factory",
             full_attempt.violations, std::move(failure));
       }
@@ -164,14 +176,14 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
     } else if (persisted_execution.mode()
                == LevelizationExecutionMode::kMixedStage6) {
       auto mixed_attempt = makeMixedLevelizedDualCsrAnalysisState(
-          coordinator.committed(),
+          coordinator,
           std::move(*batch_attempt.verified_batch));
       if (auto* dual = std::get_if<DualCsrStageFailure>(
               &mixed_attempt))
         return reject(
             evidence,
             DualCsrModeRecoveryReplayCode::kMixedStageRejected,
-            coordinator.committed().generation.value(),
+            replay_generation_before,
             "persisted mixed mode failed at the Dual-CSR boundary",
             dual->violations, std::move(*dual));
       if (auto* mixed = std::get_if<
@@ -180,7 +192,7 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
         return reject(
             evidence,
             DualCsrModeRecoveryReplayCode::kMixedStageRejected,
-            coordinator.committed().generation.value(),
+            replay_generation_before,
             "persisted mixed mode failed its real Stage 6 factory", {},
             std::nullopt, std::move(*mixed));
       staged.emplace(std::move(
@@ -191,23 +203,22 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
       return reject(
           evidence,
           DualCsrModeRecoveryReplayCode::kModeRecordMismatch,
-          coordinator.committed().generation.value(),
+          replay_generation_before,
           "persisted execution mode is unknown");
     }
 
-    const std::size_t prefix = index + 1;
-    if (incregpusta_debug_checks_enabled && !stageMatchesPersistedPrefix(staged->state(), *expected, prefix))
+    if (incregpusta_debug_checks_enabled && !stageMatchesPersistedRecord(*staged, *expected, index))
       return reject(
           evidence,
           DualCsrModeRecoveryReplayCode::kModeRecordMismatch,
-          coordinator.committed().generation.value(),
+          replay_generation_before,
           "real replay did not reproduce the persisted mode-specific record");
     const auto status = coordinator.publish(std::move(*staged));
     if (!status.ok() || !status.published || status.poisoned)
       return reject(
           evidence,
           DualCsrModeRecoveryReplayCode::kPublishRejected,
-          coordinator.committed().generation.value(),
+          replay_generation_before,
           "recovery replay publish rejected a verified stage");
     if constexpr (incregpusta_debug_checks_enabled)
       ++evidence.descriptors_replayed;
@@ -217,7 +228,7 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
     evidence.generation_recovered = coordinator.committed().generation.value();
     evidence.recovery_replay_count = 1;
   }
-  if (coordinator.committed().generation != poisoned_committed.generation || (incregpusta_debug_checks_enabled && !(coordinator.committed() == *expected)))
+  if (coordinator.committed().generation != poisoned_committed.generation || (incregpusta_debug_checks_enabled && !sameRecoveredState(coordinator.committed(), *expected)))
     return reject(
         evidence,
         DualCsrModeRecoveryReplayCode::kDeterministicMismatch,
@@ -227,29 +238,36 @@ DualCsrModeRecoveryReplayAttempt replayDualCsrModesForRecovery(
   DualCsrModeRecoveryReplayAttempt attempt;
   if constexpr (incregpusta_debug_checks_enabled)
     attempt.evidence = evidence;
-  attempt.recovery.emplace(DualCsrVerifiedModeRecovery(poisoned_committed, std::move(coordinator._committed)));
+  attempt.recovery.emplace(DualCsrVerifiedModeRecovery(poisoned_committed, std::move(*coordinator._committed)));
   return attempt;
+}
+
+DualCsrTransactionCoordinator::DualCsrTransactionCoordinator(DualCsrVerifiedModeRecovery recovered)
+    : _committed(std::make_shared<CommittedDualCsrAnalysisState>(std::move(recovered._state)))
+{
 }
 
 DualCsrTransactionStatus DualCsrTransactionCoordinator::recover(
     DualCsrVerifiedModeRecovery verified)
 {
+  if (!_pending.expired())
+    return reject(DualCsrTransactionCode::kPending);
   if (!_poisoned)
     return reject(DualCsrTransactionCode::kRecoveryNotPoisoned);
-  if (!verified._expected_poisoned.matches(_committed))
+  if (!verified._expected_poisoned.matches(*_committed))
     return reject(DualCsrTransactionCode::kTraceMismatch);
   if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(verified._state).empty())
     return reject(DualCsrTransactionCode::kInvalidStagedState);
-  if (verified._state.generation != _committed.generation || verified._state.graph.session_token.value() == 0
-      || verified._state.graph.session_token == _committed.graph.session_token)
+  if (verified._state.generation != _committed->generation || verified._state.graph.session_token.value() == 0
+      || verified._state.graph.session_token == _committed->graph.session_token)
     return reject(DualCsrTransactionCode::kTraceMismatch);
 
   if constexpr (incregpusta_debug_checks_enabled) {
-    auto rebound = rebindRecoveredAggregateSession(_committed, _committed.graph.session_token, verified._state.graph.session_token);
-    if (!rebound.success() || !(*rebound.rebound == verified._state))
+    auto rebound = rebindRecoveredAggregateSession(*_committed, _committed->graph.session_token, verified._state.graph.session_token);
+    if (!rebound.success() || !sameRecoveredState(*rebound.rebound, verified._state))
       return reject(DualCsrTransactionCode::kTraceMismatch);
   }
-  _committed.swap(verified._state);
+  _committed->swap(verified._state);
   _poisoned = false;
   return {DualCsrTransactionCode::kOk, true, false};
 }

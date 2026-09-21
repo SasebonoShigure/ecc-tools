@@ -3,23 +3,13 @@
 #include "CsrCpuReferenceTestFixture.hpp"
 #include "CsrCudaMemory.cuh"
 #include "CudaDualCsrDebugState.hpp"
-#include "CudaDualCsrSession.hpp"
+#include "CudaDualCsrTestSupport.hpp"
 #include "timing_dual_csr/DualCsrTestSupport.hpp"
 namespace {
 using namespace ista;
 using namespace csr;
+using csr::test::patchFor;
 using timing_dual_csr::test::require;
-CudaDualCsrPatch patchFor(const CsrReferenceInput& input, std::uint64_t generation, timing_edit::AppendOnlyHighWater before,
-                          timing_edit::AppendOnlyHighWater after)
-{
-  CudaDualCsrPatch patch;
-  patch.session_token = timing_edit::TimingEditSessionToken{input.source_identity.session_token};
-  patch.expected_generation = timing_edit::TransactionGeneration{generation};
-  patch.target_generation = timing_edit::TransactionGeneration{generation + 1};
-  patch.before = before;
-  patch.after = after;
-  return patch;
-}
 // Isolated development process: create a real asynchronous device failure
 // without resetting live stream handles (unsupported by this WSL driver).
 __global__ void invalidDeviceAddress()
@@ -34,20 +24,24 @@ void actualCudaFault(const std::string& operation, CudaLevelizationMode leveliza
   const timing_edit::AppendOnlyHighWater water{2, 2, 1};
   CudaDualCsrSession owner(input, water);
   auto patch = patchFor(input, 0, water, water);
-  auto candidate = owner.stage(patch, levelization), sibling = owner.stage(patch, levelization);
+  std::optional<CudaDualCsrSession> candidate;
+  if (operation == "--debug-context-fault")
+    candidate.emplace(owner.stage(patch, levelization));
   invalidDeviceAddress<<<1, 1>>>();
   require(cudaGetLastError() == cudaSuccess, "fault kernel did not launch");
   require(cudaDeviceSynchronize() == cudaErrorIllegalAddress, "device fault did not reach synchronization");
   bool failed = false;
   try {
     if (operation == "--debug-context-fault")
-      static_cast<void>(candidate.debugState());
+      static_cast<void>(candidate->debugState());
     else
       static_cast<void>(owner.stage(patch, levelization));
   } catch (const cuda_detail::CudaError&) {
     failed = true;
   }
-  require(failed && owner.poisoned() && !owner.publish(std::move(sibling)), "real CUDA failure left originating owner publishable");
+  require(failed && owner.poisoned() && (!candidate || !owner.publish(std::move(*candidate))), "real CUDA failure left originating owner publishable");
+  require(!owner.close(), "real CUDA cleanup failure was reported as success");
+  candidate.reset();  // Abandoning a candidate after owner close must not touch freed device memory.
 }
 void actualAllocationFailure()
 {
@@ -74,6 +68,7 @@ void actualAllocationFailure()
   auto input = csr::test::makeCpuReferenceNetFixture();
   CudaDualCsrSession healthy(input, {2, 2, 1});
   require(!healthy.computationCode(), "fresh GPU session after actual allocation failure failed");
+  require(healthy.close() && healthy.close() && memory.close() == cudaSuccess, "healthy or repeated cleanup failed");
 }
 
 }  // namespace

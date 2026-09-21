@@ -415,23 +415,11 @@ std::optional<timing_edit::BaselineSemanticIdentity> expectedBaseline(
   }
   const auto& synthetic = std::get<SyntheticReplayPayload>(program.workload);
   if (!synthetic.batches.empty()) {
-    return synthetic.batches.front().baseline;
+    return synthetic.baseline;
   }
   return std::nullopt;
 }
-std::unique_ptr<csr::CsrCommittedSessionSnapshot> buildHostSnapshot(
-    const ProductionFreshSessionView& view)
-{
-  csr::CsrSessionSnapshotBuildResult built = csr::buildCsrSessionSnapshot(
-      view.database, view.reference_input.analysis_context, view.session_token);
-  auto* snapshot
-      = std::get_if<std::unique_ptr<csr::CsrCommittedSessionSnapshot>>(&built);
-  if (snapshot == nullptr || *snapshot == nullptr) {
-    freshFail(FreshBaselineFailureCode::kBaselineCaptureFailed,
-              "generation-zero host CSR snapshot build failed");
-  }
-  return std::move(*snapshot);
-}
+
 void requireArtifactEvidence(const ProductionFreshSessionView& view,
                              const FreshBaselineArtifacts& artifacts)
 {
@@ -450,84 +438,13 @@ void requireArtifactEvidence(const ProductionFreshSessionView& view,
     }
   }
 }
-struct InstalledRollback
-{
-  timing_edit::InstalledNativeDatabase* installed{nullptr};
-};
-bool rollbackInstalled(void* opaque) noexcept
-{
-  auto& signal = *static_cast<InstalledRollback*>(opaque);
-  return signal.installed != nullptr && signal.installed->rollback();
-}
-void requireTransactionOk(timing_edit::TransactionStatus status,
-                          std::string_view operation)
-{
-  if (!status.ok()) {
-    throw BufferReplayError(
-        BufferReplayFailureCode::kPublishRejected,
-        std::string(operation) + " returned transaction status "
-            + std::to_string(static_cast<std::uint32_t>(status.code)));
-  }
-}
 }  // namespace
-class BufferTraceProductionFreshAdapter::Services final
-    : public GuardedReplayServices
-{
- public:
-  Services(const ProductionFreshSessionView& view, timing_edit::TimingEditCoordinator& coordinator) noexcept
-      : _view(view), _coordinator(coordinator) {}
- private:
-  Database& database() noexcept override { return STADM.getDatabase(); }
-  const csr::StaAnalysisContext& analysisContext() const noexcept override
-  { return _view.reference_input.analysis_context; }
-  const timing_edit::NativeExecutionAuthority& authority() const noexcept override
-  { return _view.authority; }
-  timing_edit::TimingEditCoordinator& coordinator() noexcept override
-  { return _coordinator; }
-  void proveSealAndPublish(PendingVerifiedBatch&& pending) override
-  {
-    BufferTraceProductionFreshAdapter::proveSealAndPublish(_view, _coordinator,
-                                                           std::move(pending));
-  }
-  const ProductionFreshSessionView& _view;
-  timing_edit::TimingEditCoordinator& _coordinator;
-};
 OneShotProcessState BufferTraceProductionFreshAdapter::oneShotState() noexcept
 { return g_one_shot_state.load(std::memory_order_acquire); }
 std::uint64_t BufferTraceProductionFreshAdapter::loaderInvocationCount() noexcept
 { return g_loader_invocation_count.load(std::memory_order_acquire); }
 std::uint64_t BufferTraceProductionFreshAdapter::guardedWorkInvocationCount() noexcept
 { return g_guarded_work_invocation_count.load(std::memory_order_acquire); }
-void BufferTraceProductionFreshAdapter::proveSealAndPublish(
-    const ProductionFreshSessionView& view,
-    timing_edit::TimingEditCoordinator& coordinator,
-    PendingVerifiedBatch&& pending)
-{
-  try {
-    timing_edit::CsrExecutionAuthorization proof = StaTimingEditSessionProbeAccess::proveCsrFullExact(
-        view.authority, *pending._host_snapshot, pending._installed.database(), pending._prepared.targetGeneration());
-    requireTransactionOk(
-        coordinator.sealVerified(pending._prepared, pending._post_identity),
-        "sealVerified");
-    timing_edit::VerifiedPublishBundle bundle(
-        std::move(pending._installed), std::move(pending._host_snapshot),
-        std::move(proof), std::move(pending._prepared),
-        std::move(pending._cumulative), std::move(pending._staged_resolver));
-    requireTransactionOk(
-        coordinator.publish(view.authority, std::move(bundle)), "publish");
-  } catch (...) {
-    if (pending._installed.active()) {
-      InstalledRollback rollback{&pending._installed};
-      const timing_edit::TransactionStatus status
-          = coordinator.rollbackPrecommit({&rollback, &rollbackInstalled});
-      if (!status.ok()) {
-        throw BufferReplayError(BufferReplayFailureCode::kPublishRejected,
-                                "proof/seal failure also failed exact rollback");
-      }
-    }
-    throw;
-  }
-}
 ReplayReceipt BufferTraceProductionFreshAdapter::runOnce(
     const ReplayProgram& program, BufferReplayWork work,
     bool generation_template)
@@ -577,7 +494,7 @@ ReplayReceipt BufferTraceProductionFreshAdapter::runOnce(
                     "production loader invoked replay work more than once");
         }
         requireArtifactEvidence(view, artifacts);
-        const timing_edit::BaselineSemanticIdentity actual_baseline
+        timing_edit::BaselineSemanticIdentity actual_baseline
             = baselineIdentity(view);
         if (const auto expected_baseline = expectedBaseline(program);
             expected_baseline
@@ -622,43 +539,28 @@ ReplayReceipt BufferTraceProductionFreshAdapter::runOnce(
         }
         timing_edit::TimingEditResolverState resolver
             = timing_edit::TimingEditResolverState::bindBaseline(view.database);
-        std::unique_ptr<csr::CsrCommittedSessionSnapshot> initial_host
-            = buildHostSnapshot(view);
-        const StaCsrCaptureAttempt capture
-            = StaTimingEditSessionProbeAccess::captureSnapshotForTesting(
-                view.session_context, view.database);
-        const auto* captured = std::get_if<csr::CsrCaptureResult>(&capture.value);
-        if (captured == nullptr || captured->error) {
-          freshFail(FreshBaselineFailureCode::kBaselineCaptureFailed,
-                    "fresh session CSR observation capture failed");
+        // Release an already requested observation; do not build one just to discard it.
+        {
+          std::unique_ptr<csr::CsrSnapshotObservation> released;
+          StaTimingEditSessionProbeAccess::releaseSnapshotForMutation(view.session_context, &released);
         }
-        std::unique_ptr<csr::CsrSnapshotObservation> released;
-        StaTimingEditSessionProbeAccess::releaseSnapshotForMutation(
-            view.session_context, &released);
-        if (released == nullptr) {
-          freshFail(FreshBaselineFailureCode::kBaselineCaptureFailed,
-                    "fresh session CSR observation was not released for mutation");
-        }
-        timing_edit::TimingEditCoordinator coordinator(
-            token_value, StaTimingEditSessionProbeAccess::stateSignal(view.session),
-            actual_baseline, initial_identity, {}, std::move(resolver),
-            std::move(initial_host));
-        Services services(view, coordinator);
+        BufferReplayContext context(
+            STADM.getDatabase(), view.reference_input.analysis_context, view.authority,
+            std::move(actual_baseline), initial_identity, std::move(resolver),
+            &StaTimingEditSessionProbeAccess::requireNativeTimingEqual);
         try {
-          BufferReplayContext context(services);
           g_guarded_work_invocation_count.fetch_add(1, std::memory_order_acq_rel);
           result.emplace(work(context));
           if (result->header != program.header
-              || result->committed_identity != coordinator.committedIdentity()
-              || result->cumulative_trace != coordinator.cumulativeTrace()
-              || result->resolver_state != coordinator.resolverState()) {
+              || result->committed_identity != context._identity
+              || result->resolver_state != context._resolver) {
             freshFail(FreshBaselineFailureCode::kGuardedWorkFailed,
                       "guarded work returned a receipt that differs from committed state");
           }
         } catch (...) {
           if (_prove_first_empty_failure)
             _first_empty_generation_zero_exact
-                = test_support::proveFirstEmptyGenerationZero(view, coordinator, initial_identity);
+                = test_support::proveFirstEmptyGenerationZero(view, context._identity, context._resolver, initial_identity);
           guarded_work_failure = std::current_exception();
         }
         } catch (...) { requirePhysicalUnchanged(); throw; }

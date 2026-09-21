@@ -138,7 +138,7 @@ template <typename T>
 
 [[nodiscard]] CsrCpuReferenceStageStatus reverseRequired(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  for (auto node = work.result.timing_order.rbegin(); node != work.result.timing_order.rend(); ++node) {
+  for (auto node = work.result.level_nodes.rbegin(); node != work.result.level_nodes.rend(); ++node) {
     if (node->value() >= work.node_count)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     const std::size_t source = static_cast<std::size_t>(node->value());
@@ -414,8 +414,7 @@ template <typename T>
 {
   const auto& result = work.result;
   if (result.level_offsets.empty() || result.level_offsets.front() != 0 || result.level_offsets.back() != work.node_count
-      || result.level_nodes.size() != work.node_count || result.node_to_level.size() != work.node_count || result.timing_order.size() != work.node_count
-      || result.timing_order != result.level_nodes || !validateNodeShape(work) || !validateClockShape(result.effective_clock, work.node_count)
+      || result.level_nodes.size() != work.node_count || result.node_to_level.size() != work.node_count || !validateNodeShape(work) || !validateClockShape(result.effective_clock, work.node_count)
       || !validateClockShape(result.physical_clock, work.node_count) || !validateOptionalSoa(result.data_slews, work.node_lane_count, false)
       || !validatePathShape(work) || !validateArcShape(edges, work))
     return false;

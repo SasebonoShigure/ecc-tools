@@ -6,63 +6,83 @@
 
 namespace ista::csr {
 using namespace cuda_detail;
+void CudaDualCsrSession::Impl::bindGraph() noexcept
+{
+  view.out_offsets = storage->graph.out_offsets.data;
+  view.in_offsets = storage->graph.in_offsets.data;
+  view.roots = storage->graph.roots.data;
+  view.ends = storage->graph.ends.data;
+  seed_nodes = storage->graph.node_seeds.data;
+  seed_paths = storage->graph.path_seeds.data;
+  view.out_arcs = storage->graph.out_arcs.data;
+  view.aux_rows = storage->graph.aux_rows.data;
+  view.in_arcs = storage->graph.in_arcs.data;
+  view.arcs = storage->graph.arcs.data;
+  view.children = storage->children.data;
+  view.table_data = storage->tables.data;
+  view.endpoints = storage->graph.endpoints.data;
+  view.indegrees = storage->indegrees.data;
+}
+
+void CudaDualCsrSession::Impl::bindAuxRows()
+{
+  for (auto& binding : storage->aux_bindings) {
+    if (binding.source >= storage->graph.aux_storage.size() || binding.source >= storage->graph.aux_rows.capacity)
+      continue;  // Capacity preparation may have failed before reaching this new row.
+    const auto& row = storage->graph.aux_storage[binding.source];
+    binding.before = {row.buffer.data, row.count};
+    memory.upload(&binding.before, const_cast<AuxRow*>(view.aux_rows) + binding.source, 1);
+  }
+}
+
 void CudaDualCsrSession::Impl::allocate()
 {
-  view.out_offsets = memory.allocate<Index>(out_offsets.size());
-  view.out_arcs = memory.allocate<Index>(out_offsets.back());
-  view.in_offsets = memory.allocate<Index>(in_offsets.size());
-  view.in_arcs = memory.allocate<Index>(in_offsets.back());
-  view.aux_offsets = memory.allocate<Index>(aux_offsets.size());
-  view.aux_arcs = memory.allocate<Index>(aux_offsets.back());
-  view.source_to_aux_row = memory.allocate<Index>(aux_mapping.size());
-  view.roots = memory.allocate<Index>(roots.size());
-  view.ends = memory.allocate<Index>(ends.size());
-  view.endpoints = memory.allocate<Endpoint>(view.endpoint_count);
-  view.arcs = memory.allocate<Arc>(view.arc_count);
-  view.children = memory.allocate<Child>(view.child_count);
-  view.table_data = memory.allocate<double>(table_count);
-  seed_nodes = memory.allocate<NodeState>(view.node_count);
-  seed_paths = memory.allocate<PathState>(checkedProduct(checkedProduct(view.node_count, 8), view.tag_count));
-  view.nodes = memory.allocate<NodeState>(view.node_count);
-  view.paths = memory.allocate<PathState>(checkedProduct(checkedProduct(view.node_count, 8), view.tag_count));
-  view.arc_state = memory.allocate<ArcState>(view.arc_count);
-  view.child_state = memory.allocate<ChildState>(view.child_count);
-  view.indegrees = memory.allocate<Index>(view.node_count);
-  view.order = memory.allocate<Index>(view.node_count);
-  view.node_levels = memory.allocate<Index>(view.node_count);
-  view.level_offsets = memory.allocate<Index>(checkedAdd(view.node_count, 1));
-  view.level_offset_count = memory.allocate<Index>(1);
-  view.status = memory.allocate<Status>(1);
-  if constexpr (incregpusta_debug_checks_enabled) {
-    view.storage_visits = memory.allocate<Index>(8);
-    memory.zero(view.storage_visits, 8);
+  auto grow = [&]<class T>(DeviceBuffer<T>& buffer, Index count, Index preserve = 0) {
+    if (memory.ensure(buffer, count, preserve))
+      ++telemetry.grown_buffers;
+    return buffer.data;
+  };
+  const auto* old = storage->full_graph_pending ? nullptr : origin.get();
+  grow(storage->graph.out_arcs, host->out_offsets.back(), old ? host->out_offsets[old->view.node_count] : 0);
+  grow(storage->graph.in_arcs, host->in_offsets.back(), old ? host->in_offsets[old->view.node_count] : 0);
+  grow(storage->graph.arcs, view.arc_count, old ? old->view.arc_count : 0);
+  grow(storage->children, view.child_count, storage->uploaded_children);
+  grow(storage->tables, table_count, storage->uploaded_tables);
+  grow(storage->graph.endpoints, view.endpoint_count, old ? old->view.endpoint_count : 0);
+  grow(storage->indegrees, view.node_count);
+  if (storage->graph.aux_storage.size() < view.node_count)
+    storage->graph.aux_storage.resize(view.node_count);
+  grow(storage->graph.aux_rows, view.node_count, old ? old->view.node_count : 0);
+  // Only changed Aux rows reserve capacity. Other rows keep their addresses.
+  for (const auto& binding : storage->aux_bindings) {
+    auto& row = storage->graph.aux_storage[binding.source];
+    grow(row.buffer, binding.replacement_count, row.count);
   }
-  if (origin) {
-    const auto& old = *origin;
-    auto grew = [&](Index before, Index after) {
-      if (after > before)
-        ++telemetry.grown_buffers;
-    };
-    grew(old.out_offsets.size(), out_offsets.size());
-    grew(old.out_offsets.back(), out_offsets.back());
-    grew(old.in_offsets.size(), in_offsets.size());
-    grew(old.in_offsets.back(), in_offsets.back());
-    grew(old.aux_offsets.size(), aux_offsets.size());
-    grew(old.aux_offsets.back(), aux_offsets.back());
-    grew(old.aux_mapping.size(), aux_mapping.size());
-    grew(old.roots.size(), roots.size());
-    grew(old.ends.size(), ends.size());
-    grew(old.view.endpoint_count, view.endpoint_count);
-    grew(old.view.arc_count, view.arc_count);
-    grew(old.view.arc_count, view.arc_count);
-    grew(old.view.child_count, view.child_count);
-    grew(old.view.child_count, view.child_count);
-    grew(old.table_count, table_count);
-    // Node seeds/results, indegrees, order, node-levels and level-offsets.
-    for (unsigned buffer = 0; buffer < 6; ++buffer)
-      grew(old.view.node_count, view.node_count);
-    for (unsigned buffer = 0; buffer < 2; ++buffer)
-      grew(checkedProduct(old.view.node_count, old.view.tag_count), checkedProduct(view.node_count, view.tag_count));
+  grow(storage->graph.out_offsets, host->out_offsets.size(), old ? old->view.node_count + 1 : 0);
+  grow(storage->graph.in_offsets, host->in_offsets.size(), old ? old->view.node_count + 1 : 0);
+  grow(storage->graph.roots, host->roots.size(), old ? old->view.root_count : 0);
+  grow(storage->graph.ends, host->ends.size(), old ? old->view.end_count : 0);
+  grow(storage->graph.node_seeds, host->node_seeds.size(), old ? storage->host_undo.node_seeds : 0);
+  grow(storage->graph.path_seeds, host->path_seeds.size(), old ? storage->host_undo.path_seeds : 0);
+  bindGraph();
+  const Index old_nodes = old ? old->view.node_count : 0;
+  memory.zero(const_cast<AuxRow*>(view.aux_rows) + old_nodes, view.node_count - old_nodes);
+  auto& result = storage->results[result_index];
+  auto& domain = storage->domains[domain_index];
+  view.path_offsets = grow(domain.offsets, domain.host.offsets.size());
+  view.path_tags = grow(domain.tags, domain.host.tags.size());
+  view.nodes = grow(result.nodes, view.node_count);
+  view.paths = grow(result.paths, view.path_count);
+  view.arc_state = grow(result.arcs, view.arc_count);
+  view.child_state = grow(result.children, view.child_state_count);
+  view.order = grow(result.order, view.node_count);
+  view.node_levels = grow(result.node_levels, view.node_count);
+  view.level_offsets = grow(result.level_offsets, checkedAdd(view.node_count, 1));
+  view.level_offset_count = grow(result.level_offset_count, 1);
+  view.status = grow(result.status, 1);
+  if constexpr (incregpusta_debug_checks_enabled) {
+    view.storage_visits = grow(result.storage_visits, 8);
+    memory.zero(view.storage_visits, 8);
   }
   memory.zero(view.status, 1);
   memory.zero(view.level_offset_count, 1);
@@ -70,122 +90,121 @@ void CudaDualCsrSession::Impl::allocate()
 
 void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCsrPatch& patch, const PackedPatch& packed)
 {
-  memory.record(6);
-  auto copy = [&]<class T>(const T* source, const T* destination, Index old_size, Index size) {
-    demand(size >= old_size, "CUDA candidate buffer shrank below copied prefix");
-    memory.copy(source, const_cast<T*>(destination), old_size);
-  };
-  copy(prior.view.out_arcs, view.out_arcs, prior.out_offsets.back(), out_offsets.back());
-  copy(prior.view.in_arcs, view.in_arcs, prior.in_offsets.back(), in_offsets.back());
-  copy(prior.view.arcs, view.arcs, prior.view.arc_count, view.arc_count);
-  copy(prior.view.children, view.children, prior.view.child_count, view.child_count);
-  copy(prior.view.table_data, view.table_data, prior.table_count, table_count);
-  copy(prior.seed_nodes, seed_nodes, prior.view.node_count, view.node_count);
-  copy(prior.seed_paths, seed_paths, checkedProduct(checkedProduct(prior.view.node_count, 8), view.tag_count),
-       checkedProduct(checkedProduct(view.node_count, 8), view.tag_count));
-  copy(prior.view.endpoints, view.endpoints, prior.view.endpoint_count, view.endpoint_count);
-  std::map<Index, const timing_dual_csr::AuxOutRowDescriptor*> changed;
-  for (const auto& row : patch.aux_rows)
-    changed.emplace(row.source.value(), &row);
-  for (Index source = 0; source < aux_mapping.size(); ++source)
-    if (aux_mapping[source] != absent && !changed.contains(source)) {
-      const Index old_row = prior.aux_mapping[source];
-      demand(old_row != absent, "unchanged Aux row lost origin");
-      memory.copy(prior.view.aux_arcs + prior.aux_offsets[old_row], const_cast<Index*>(view.aux_arcs) + aux_offsets[aux_mapping[source]], aux_lengths[source]);
-    }
-  memory.record(0);
-  memory.upload(out_offsets, view.out_offsets);
-  memory.upload(in_offsets, view.in_offsets);
-  memory.upload(aux_offsets, view.aux_offsets);
-  memory.upload(aux_mapping, view.source_to_aux_row);
-  memory.upload(roots, view.roots);
-  memory.upload(ends, view.ends);
-  std::vector<std::vector<Index>> row_uploads;
-  auto uploadIds = [&](const auto& ids, const Index* destination) {
-    auto& values = row_uploads.emplace_back();
+  // Allocate and prepare every upload/undo source before submitting async work.
+  std::vector<std::pair<Index*, std::vector<Index>>> rows;
+  rows.reserve(patch.appended_base_out_rows.size() + patch.appended_base_in_rows.size() + patch.aux_rows.size());
+  const auto prepareIds = [&](const auto& ids, const Index* destination) {
+    auto& upload = rows.emplace_back(const_cast<Index*>(destination), std::vector<Index>{});
+    upload.second.reserve(ids.size());
     for (auto id : ids)
-      values.push_back(id.value());
-    memory.upload(values.data(), const_cast<Index*>(destination), values.size());
+      upload.second.push_back(id.value());
   };
   for (const auto& row : patch.appended_base_out_rows)
-    uploadIds(row.arc_ids, view.out_arcs + out_offsets[row.source.value()]);
+    prepareIds(row.arc_ids, view.out_arcs + host->out_offsets[row.source.value()]);
   for (const auto& row : patch.appended_base_in_rows)
-    uploadIds(row.arc_ids, view.in_arcs + in_offsets[row.sink.value()]);
-  for (const auto& row : patch.aux_rows)
-    if (!row.replacement_arc_ids.empty())
-      uploadIds(row.replacement_arc_ids, view.aux_arcs + aux_offsets[aux_mapping[row.source.value()]]);
-  memory.upload(packed.appends.data(), const_cast<Arc*>(view.arcs) + prior.view.arc_count, packed.appends.size());
-  memory.upload(packed.children.data(), const_cast<Child*>(view.children) + prior.view.child_count, packed.children.size());
-  memory.upload(packed.tables.data(), const_cast<double*>(view.table_data) + prior.table_count, packed.tables.size());
-  std::vector<NodeState> nodes(patch.node_appends.size());
-  std::vector<PathState> paths(checkedProduct(checkedProduct(nodes.size(), 8), view.tag_count));
-  for (const auto& seed : patch.appended_start_seeds) {
-    demand(seed.seed_node.value() >= prior.view.node_count && seed.seed_node.value() < view.node_count && seed.path_start_node.value() < view.node_count
-               && !seed.crpr_node && !seed.crpr_transition,
-           "CUDA append seed has invalid node or unsupported CRPR");
-    demand(seed.availability == StartSeedAvailability::kMaterialized && (!seed.path_source || *seed.path_source == PathSource::kInput),
-           "unsupported appended seed");
-    const auto found = std::find(layout.clock_tags.begin(), layout.clock_tags.end(), seed.clock_tag);
-    demand(found != layout.clock_tags.end(), "appended seed changes clock tag domain");
-    const Index tag = found - layout.clock_tags.begin();
-    auto name = std::find(layout.clock_names.begin(), layout.clock_names.end(), seed.clock_tag);
-    if (name == layout.clock_names.end()) {
-      layout.clock_names.push_back(seed.clock_tag);
-      name = layout.clock_names.end() - 1;
-    }
-    const Index local = seed.seed_node.value() - prior.view.node_count;
-    auto& node = nodes[local];
-    node.clock_name = name - layout.clock_names.begin();
-    node.arrival = 0.0;
-    for (unsigned a = 0; a < 2; ++a)
-      for (unsigned t = 0; t < 2; ++t) {
-        demand(seed.slew[a][t] && std::isfinite(*seed.slew[a][t]), "invalid appended seed slew");
-        node.slew[a * 2 + t] = {*seed.slew[a][t], true};
-        if (seed.path_source) {
-          demand(seed.arrival[a][t] && std::isfinite(*seed.arrival[a][t]), "invalid appended seed arrival");
-          auto& path = paths[((local * 2 + a) * 2 * 2 + t) * view.tag_count + tag];
-          path.present = true;
-          path.arrival = *seed.arrival[a][t];
-          path.slew = *seed.slew[a][t];
-          path.start = seed.path_start_node.value();
-        }
-      }
-    if (seed.path_source)
-      node.arrival = *seed.arrival[0][0];
-  }
-  memory.upload(nodes.data(), seed_nodes + prior.view.node_count, nodes.size());
-  memory.upload(paths.data(), seed_paths + prior.view.node_count * 8 * view.tag_count, paths.size());
+    prepareIds(row.arc_ids, view.in_arcs + host->in_offsets[row.sink.value()]);
   std::vector<Endpoint> endpoints;
-  for (const auto& source : patch.appended_endpoints) {
-    demand(source.node.value() >= prior.view.node_count && source.node.value() < view.node_count, "appended endpoint outside appended nodes");
-    endpoints.push_back({source.node.value(), source.clock_period, {source.output_delay[0].value_or(0.0), source.output_delay[0].has_value()}});
+  endpoints.reserve(patch.appended_endpoints.size());
+  for (const auto& source : patch.appended_endpoints)
+    endpoints.push_back({source.node.value(), source.clock_period,
+                         {source.output_delay[0].value_or(0.0), source.output_delay[0].has_value()}});
+  std::vector<SlotUndo> slots;
+  slots.reserve(packed.removes.size() + packed.changes.size() + packed.reverse_changes.size());
+  for (const auto& item : packed.removes)
+    slots.push_back({const_cast<Index*>(view.out_arcs) + item.slot, 0});
+  for (const auto& item : packed.changes)
+    slots.push_back({const_cast<Index*>(view.out_arcs) + item.slot, 0});
+  for (const auto& item : packed.reverse_changes)
+    slots.push_back({const_cast<Index*>(view.in_arcs) + item.slot, 0});
+  for (const auto& item : packed.aux_patches) {
+    const auto& row = storage->graph.aux_storage[item.source];
+    for (Index i = 0; i < std::min(row.count, item.replacement_count); ++i)
+      slots.push_back({row.buffer.data + i, 0});
   }
-  memory.upload(endpoints.data(), const_cast<Endpoint*>(view.endpoints) + prior.view.endpoint_count, endpoints.size());
-  DevicePatch device;
-  auto uploaded = [&]<class T>(const std::vector<T>& values) {
-    auto* pointer = memory.allocate<T>(values.size());
-    memory.upload(values, pointer);
-    return pointer;
+  std::vector<ArcUndo> arcs;
+  arcs.reserve(packed.payloads.size() + packed.deactivations.size());
+  for (const auto& item : packed.payloads)
+    arcs.push_back({item.id, {}});
+  for (const auto& item : packed.deactivations)
+    arcs.push_back({item.id, {}});
+  auto reserve = [&]<class T>(DeviceBuffer<T>& buffer, std::size_t count) {
+    if (memory.ensure(buffer, count))
+      ++telemetry.grown_buffers;
+    return buffer.data;
   };
-  device.removes = uploaded(packed.removes);
+  DevicePatch device;
+  device.removes = reserve(storage->removes, packed.removes.size());
   device.remove_count = packed.removes.size();
-  device.changes = uploaded(packed.changes);
+  device.changes = reserve(storage->changes, packed.changes.size());
   device.change_count = packed.changes.size();
-  device.reverse_changes = uploaded(packed.reverse_changes);
+  device.reverse_changes = reserve(storage->reverse_changes, packed.reverse_changes.size());
   device.reverse_count = packed.reverse_changes.size();
-  device.payloads = uploaded(packed.payloads);
+  device.payloads = reserve(storage->payloads, packed.payloads.size());
   device.payload_count = packed.payloads.size();
-  device.deactivations = uploaded(packed.deactivations);
+  device.deactivations = reserve(storage->deactivations, packed.deactivations.size());
   device.deactivate_count = packed.deactivations.size();
-  device.expected_children = uploaded(packed.expected_children);
-  device.expected_tables = uploaded(packed.expected_tables);
-  device.aux_expected = uploaded(packed.aux_expected);
-  device.aux_expected_count = packed.aux_expected.size();
-  device.expected_aux_arcs = uploaded(packed.expected_aux_arcs);
-  device.old_aux_arcs = prior.view.aux_arcs;
-  memory.record(1);
-  launchTargetedPatch(view, device, memory.stream());
-  telemetry.cuda.kernel_launches += 3;
-  memory.synchronize();
+  device.aux_patches = reserve(storage->aux_patches, packed.aux_patches.size());
+  device.aux_patch_count = packed.aux_patches.size();
+  device.aux_values = reserve(storage->aux_values, packed.aux_values.size());
+  reserve(storage->slot_undo, slots.size());
+  reserve(storage->arc_undo, arcs.size());
+  storage->slot_undo_count = slots.size();
+  storage->arc_undo_count = arcs.size();
+  try {
+    memory.record(0);
+    const auto offset_begin = prior.view.node_count + 1;
+    memory.upload(host->out_offsets.data() + offset_begin, const_cast<Index*>(view.out_offsets) + offset_begin, host->out_offsets.size() - offset_begin);
+    memory.upload(host->in_offsets.data() + offset_begin, const_cast<Index*>(view.in_offsets) + offset_begin, host->in_offsets.size() - offset_begin);
+    bindAuxRows();
+    if (patch.roots)
+      memory.upload(host->roots, view.roots);
+    if (patch.ends)
+      memory.upload(host->ends, view.ends);
+    for (const auto& [target, values] : rows)
+      memory.upload(values, target);
+    memory.upload(packed.appends.data(), const_cast<Arc*>(view.arcs) + prior.view.arc_count, packed.appends.size());
+    const auto child_begin = storage->uploaded_children, table_begin = storage->uploaded_tables;
+    if (view.child_count > child_begin)
+      memory.upload(storage->models.children.data() + child_begin, const_cast<Child*>(view.children) + child_begin, view.child_count - child_begin);
+    if (table_count > table_begin)
+      memory.upload(storage->models.tables.data() + table_begin, const_cast<double*>(view.table_data) + table_begin, table_count - table_begin);
+    const auto node_seed_begin = storage->host_undo.node_seeds, path_seed_begin = storage->host_undo.path_seeds;
+    if (host->node_seeds.size() > node_seed_begin)
+      memory.upload(host->node_seeds.data() + node_seed_begin, seed_nodes + node_seed_begin, host->node_seeds.size() - node_seed_begin);
+    if (host->path_seeds.size() > path_seed_begin)
+      memory.upload(host->path_seeds.data() + path_seed_begin, seed_paths + path_seed_begin, host->path_seeds.size() - path_seed_begin);
+    if (domain_index != prior.domain_index) {
+      const auto& paths = storage->domains[domain_index].host;
+      memory.upload(paths.offsets, view.path_offsets);
+      memory.upload(paths.tags, view.path_tags);
+    }
+    memory.upload(endpoints.data(), const_cast<Endpoint*>(view.endpoints) + prior.view.endpoint_count, endpoints.size());
+    memory.upload(packed.removes, device.removes);
+    memory.upload(packed.changes, device.changes);
+    memory.upload(packed.reverse_changes, device.reverse_changes);
+    memory.upload(packed.payloads, device.payloads);
+    memory.upload(packed.deactivations, device.deactivations);
+    memory.upload(packed.aux_patches, device.aux_patches);
+    memory.upload(packed.aux_values, device.aux_values);
+    memory.upload(slots, storage->slot_undo.data);
+    memory.upload(arcs, storage->arc_undo.data);
+    launchCaptureUndo(view, storage->slot_undo.data, slots.size(), storage->arc_undo.data, arcs.size(), memory.stream());
+    storage->undo_captured = true;
+    telemetry.cuda.kernel_launches += !slots.empty() || !arcs.empty();
+    memory.record(1);
+    launchTargetedPatch(view, device, memory.stream());
+    telemetry.cuda.kernel_launches += 3;
+    memory.synchronize();
+    storage->uploaded_children = view.child_count;
+    storage->uploaded_tables = table_count;
+  } catch (...) {
+    // Keep all local host sources alive until the stream has consumed them.
+    try {
+      memory.synchronize();
+    } catch (...) {
+      storage->poisoned = true;
+    }
+    throw;
+  }
 }
 }  // namespace ista::csr

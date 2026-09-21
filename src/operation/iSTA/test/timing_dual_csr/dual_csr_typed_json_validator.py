@@ -3,10 +3,13 @@
 
 import copy
 import math
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
+
+from dual_csr_reference_model_validator import run_reference_model_self_test
 from dual_csr_reference_model_validator import (
-    run_reference_model_self_test,
-    validate_reference_value as validate_exact_reference_value)
+    validate_reference_value as validate_exact_reference_value,
+)
 
 Require = Callable[[bool, str], None]
 
@@ -186,11 +189,25 @@ REFERENCE_KEYS = {"schema_version", "source_identity", "analysis_context",
     "endpoint_required", "cell_pin_capacitances", "unsupported_reasons"}
 
 
+REFERENCE_APPEND_KEYS = {"instances", "referenced_library_cells",
+                         "cell_pin_capacitances", "clock_owner_by_node"}
+
+
 def validate_reference_delta(value: object, label: str, require: Require,
                              chain: dict[str, object]) -> None:
     item = _object(value, REFERENCE_KEYS, label, require)
     for field, replacement in item.items():
         if replacement is None:
+            continue
+        if field in REFERENCE_APPEND_KEYS:
+            typed = _object(replacement, {"expected_size", "values"},
+                            f"{label}.{field}", require)
+            size = _count(typed["expected_size"], f"{label}.{field}.expected_size", require)
+            validate_exact_reference_value(field, typed["values"],
+                                           f"{label}.{field}.values", require)
+            if field in chain:
+                require(size == chain[field], f"{label}.{field} breaks the append chain")
+            chain[field] = size + len(typed["values"])
             continue
         typed = _object(replacement, {"expected", "replacement"},
                         f"{label}.{field}", require)
@@ -206,19 +223,22 @@ def validate_reference_delta(value: object, label: str, require: Require,
 
 def validate_descriptor_schema(value: object, label: str,
                                require: Require) -> None:
-    require(value == "ista-dual-csr-update/1.2.0",
+    require(value == "ista-dual-csr-update/2.0.0",
             f"{label} exact schema differs")
 
 
 def run_typed_validator_self_test(require: Require) -> None:
     errors: list[str] = []
-    validate_descriptor_schema("ista-dual-csr-update/1.2.0", "schema-canary",
-                               lambda ok, message: errors.append(message)
-                               if not ok else None)
+
+    def collect_error(ok: object, message: str) -> None:
+        if not ok:
+            errors.append(message)
+
+    validate_descriptor_schema("ista-dual-csr-update/2.0.0", "schema-canary",
+                               collect_error)
     require(not errors, f"valid descriptor schema was rejected: {errors}")
-    validate_descriptor_schema("ista-dual-csr-update/1.1.0", "old-schema-canary",
-                               lambda ok, message: errors.append(message)
-                               if not ok else None)
+    validate_descriptor_schema("ista-dual-csr-update/1.2.0", "old-schema-canary",
+                               collect_error)
     require(errors, "descriptor schema tamper was accepted")
     number = {"kind": "finite", "value": 0.0, "negative_zero": False}
     payload = {"key": {"source": {"kind": "port", "full_name": "a",
@@ -242,8 +262,7 @@ def run_typed_validator_self_test(require: Require) -> None:
         errors = []
         try:
             validate_arc_payload(tampered, f"payload-{mutate}-canary",
-                                 lambda ok, message: errors.append(message)
-                                 if not ok else None)
+                                 collect_error)
         except (KeyError, TypeError):
             errors.append("recursive typed validation rejected malformed payload")
         require(errors, f"nested payload {mutate} tamper was accepted")
@@ -260,7 +279,7 @@ def run_typed_validator_self_test(require: Require) -> None:
     try:
         validate_exact_reference_value(
             "referenced_library_cells", [library_cell], "optional-lane-canary",
-            lambda ok, message: errors.append(message) if not ok else None)
+            collect_error)
     except (KeyError, TypeError):
         errors.append("valid optional lane matrix raised")
     require(not errors, f"valid optional lane matrix was rejected: {errors}")
@@ -269,14 +288,14 @@ def run_typed_validator_self_test(require: Require) -> None:
     errors = []
     validate_exact_reference_value(
         "referenced_library_cells", [invalid_lanes], "invalid-optional-lane-canary",
-        lambda ok, message: errors.append(message) if not ok else None)
+        collect_error)
     require(errors, "non-null optional lane tamper was accepted")
     for temperature in ("25", "__unspecified_temperature__"):
         errors = []
         validate_exact_reference_value(
             "analysis_context", {"liberty_corner": "c", "temperature": temperature,
              "rc_corner": "r"}, "temperature-wire-positive",
-            lambda ok, message: errors.append(message) if not ok else None)
+            collect_error)
         require(not errors,
                 f"valid wire temperature {temperature!r} was rejected: {errors}")
     for temperature in (25.0, True, "25.0", "-0", " 25", "25 ", "025",
@@ -285,7 +304,7 @@ def run_typed_validator_self_test(require: Require) -> None:
         validate_exact_reference_value(
             "analysis_context", {"liberty_corner": "c", "temperature": temperature,
              "rc_corner": "r"}, "temperature-wire-negative",
-            lambda ok, message: errors.append(message) if not ok else None)
+            collect_error)
         require(errors,
                 f"noncanonical wire temperature {temperature!r} was accepted")
     chain = {"analysis_context": {"liberty_corner": "c", "temperature": "25",
@@ -296,8 +315,7 @@ def run_typed_validator_self_test(require: Require) -> None:
         "liberty_corner": "c2", "temperature": "25", "rc_corner": "r"}}
     errors = []
     validate_reference_delta(delta, "reference-chain-canary",
-                             lambda ok, message: errors.append(message)
-                             if not ok else None, chain)
+                             collect_error, chain)
     require(errors, "reference analysis_context chain tamper was accepted")
     from dual_csr_arc_group_validator import validate_arc_group_semantics
 

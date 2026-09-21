@@ -90,7 +90,8 @@ def _close(left: float, right: float,
 
 def _graph_index(graph: dict[str, Any], require: Callable, label: str
                  ) -> tuple[list[object], list[dict[str, Any]],
-                            dict[str, int], dict[str, int]]:
+                            dict[str, int], dict[str, int],
+                            list[list[int]]]:
     raw_nodes = graph.get("nodes")
     raw_arcs = graph.get("active_arcs")
     require(isinstance(raw_nodes, list) and isinstance(raw_arcs, list),
@@ -107,6 +108,7 @@ def _graph_index(graph: dict[str, Any], require: Callable, label: str
         nodes.append(raw["key"])
     arcs: list[dict[str, Any]] = []
     arc_index: dict[str, int] = {}
+    incoming: list[list[int]] = [[] for _ in nodes]
     for index, raw in enumerate(raw_arcs):
         require(isinstance(raw, dict) and isinstance(raw.get("key"), dict)
                 and isinstance(raw.get("source"), dict)
@@ -120,7 +122,9 @@ def _graph_index(graph: dict[str, Any], require: Callable, label: str
                 f"{label}.active_arcs[{index}] key/endpoints are invalid")
         arc_index[encoded] = index
         arcs.append(raw)
-    return nodes, arcs, node_index, arc_index
+        if raw["eligibility"].get("data_arrival") is True:
+            incoming[node_index[canonical(raw["sink"])]].append(index)
+    return nodes, arcs, node_index, arc_index, incoming
 
 
 def _admissible(costs: list[tuple[float, str]], analysis: int,
@@ -138,7 +142,7 @@ def _admissible(costs: list[tuple[float, str]], analysis: int,
 def _validate_node_winners(graph: dict[str, Any], timing: dict[str, Any],
                            require: Callable, label: str
                            ) -> dict[str, list[str]]:
-    nodes, arcs, node_index, arc_index = _graph_index(
+    nodes, arcs, node_index, arc_index, incoming = _graph_index(
         graph, require, f"{label}.graph")
     count = len(nodes)
     section = timing["nodes"]
@@ -160,10 +164,8 @@ def _validate_node_winners(graph: dict[str, Any], timing: dict[str, Any],
     for sink, sink_key in enumerate(nodes):
         costs: list[tuple[float, str]] = []
         selected_costs: dict[str, float] = {}
-        for arc_id, arc in enumerate(arcs):
-            if arc["eligibility"].get("data_arrival") is not True \
-                    or canonical(arc["sink"]) != canonical(sink_key):
-                continue
+        for arc_id in incoming[sink]:
+            arc = arcs[arc_id]
             source = node_index[canonical(arc["source"])]
             source_arrival = _finite(arrivals["values"][source]) \
                 if arrivals["presence"][source] == 1 else None
@@ -221,17 +223,14 @@ def _round_path(value: float) -> float:
     return rounded / PATH_ROUND_SCALE
 
 
-def _selected_path_delay(arcs: dict[str, Any], arc: int, analysis: int,
+def _selected_path_delay(io: dict[str, list[Any]],
+                         graph: dict[str, list[Any]], arc: int, analysis: int,
                          input_transition: int, output_transition: int,
                          require: Callable, label: str) -> float | None:
-    count = len(arcs["delays"]["presence"])
     io_lane = ((arc * 2 + analysis) * 2 + input_transition) * 2 \
         + output_transition
-    io = _soa(arcs, "input_output_delays", count * 8,
-              require, label)
     if io["presence"][io_lane] == 0:
         return None
-    graph = _soa(arcs, "graph_delays", count * 8, require, label)
     if graph["presence"][io_lane] == 1:
         return _number(graph, io_lane, require, f"{label}.graph_delays")
     return _number(io, io_lane, require,
@@ -299,7 +298,7 @@ def _root_seed_matches(graph: dict[str, Any], nodes: list[object],
 def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
                            require: Callable, label: str
                            ) -> dict[str, list[str]]:
-    nodes, active_arcs, node_index, arc_index = _graph_index(
+    nodes, active_arcs, node_index, arc_index, incoming = _graph_index(
         graph, require, f"{label}.graph")
     rows = len(nodes) * 8
     paths = timing["paths"]
@@ -341,6 +340,10 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
     arc_section = timing["arcs"]
     _soa(arc_section, "delays", len(active_arcs), require,
          f"{label}.arcs")
+    io_delays = _soa(arc_section, "input_output_delays",
+                     len(active_arcs) * 8, require, f"{label}.arcs")
+    graph_delays = _soa(arc_section, "graph_delays",
+                        len(active_arcs) * 8, require, f"{label}.arcs")
     result: dict[str, list[str]] = {}
     for entry, row in enumerate(entry_rows):
         transition = row % 2
@@ -352,14 +355,12 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
         tag = paths["clock_tags"]["values"][entry]
         costs: list[tuple[float, str]] = []
         evidence: dict[str, tuple[float, float, int]] = {}
-        for arc_id, arc in enumerate(active_arcs):
-            if arc["eligibility"].get("data_arrival") is not True \
-                    or canonical(arc["sink"]) != canonical(nodes[sink]):
-                continue
+        for arc_id in incoming[sink]:
+            arc = active_arcs[arc_id]
             predecessor = node_index[canonical(arc["source"])]
             for predecessor_transition in range(2):
                 delay = _selected_path_delay(
-                    arc_section, arc_id, analysis, predecessor_transition,
+                    io_delays, graph_delays, arc_id, analysis, predecessor_transition,
                     transition, require, f"{label}.arcs")
                 if delay is None:
                     continue

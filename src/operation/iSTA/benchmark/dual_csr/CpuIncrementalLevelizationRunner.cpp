@@ -25,12 +25,12 @@ double elapsedMilliseconds(SteadyClock::time_point start)
 
 CpuIncrementalLevelizationRunResult
 CpuIncrementalLevelizationRunner::run(
-    const CommittedDualCsrAnalysisState& committed,
+    DualCsrTransactionCoordinator& coordinator,
     VerifiedStructuredBatch&& verified_batch)
 {
   const auto started = SteadyClock::now();
   auto attempt = makeMixedLevelizedDualCsrAnalysisState(
-      committed, std::move(verified_batch));
+      coordinator, std::move(verified_batch));
   std::optional<DualCsrStageTimings> timings;
   if (const auto* staged = std::get_if<DualCsrVerifiedStage>(&attempt))
     timings = staged->timings();

@@ -84,7 +84,6 @@ set(ISTA_BUFFER_TRACE_PARASITIC_BOUNDARY_SOURCES
     ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
 )
 set(ISTA_BUFFER_TRACE_PARASITIC_BOUNDARY_LINKS
-    ista_timing_edit_transaction
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
@@ -161,7 +160,6 @@ set(ISTA_BUFFER_TRACE_PROBE_SOURCES
 )
 set(ISTA_BUFFER_TRACE_PROBE_LINKS
     ista_buffer_trace_runtime
-    ista_timing_edit_transaction
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers

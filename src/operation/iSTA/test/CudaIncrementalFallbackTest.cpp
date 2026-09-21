@@ -104,9 +104,10 @@ void fallbackAndContinue(const Fixture& fixture)
   require(candidate.timingValues() == full.timingValues(), "production full fallback differs from independent full execution");
   require(owner.publish(std::move(candidate)) && owner.generation().value() == 2, "production full fallback could not publish");
   CudaTargetedTraceBatch next;
+  const auto committed = owner.timingValues();
   auto continuation = csr::detail::stageCudaTargetedBatch(owner, fixture.patch(2, fixture.conflict.after, fixture.conflict.after),
                                                           StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError, next);
-  require(continuation.timingValues() == owner.timingValues() && next.execution.execution_kind == StaExecutionKind::kIncrementalUpdate
+  require(continuation.timingValues() == committed && next.execution.execution_kind == StaExecutionKind::kIncrementalUpdate
               && !next.rejected_mixed_attempt && owner.publish(std::move(continuation)),
           "mixed execution did not continue after actual full fallback");
 }

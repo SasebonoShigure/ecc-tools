@@ -13,7 +13,6 @@
 
 #include "Database.hpp"
 #include "NativeBufferInsertionInternal.hpp"
-#include "NativeDatabaseCandidate.hpp"
 #include "TimingEditResolver.hpp"
 
 namespace ista::timing_edit {
@@ -40,28 +39,47 @@ NativeTranslationResult preflightPolicy(const PreparedBatch& batch)
   return {};
 }
 
+void resetDerivedState(Database& database) noexcept
+{
+  database.get_arc_list().clear();
+  database.get_outgoing_arc_list_map().clear();
+  database.get_incoming_arc_list_map().clear();
+  database.get_start_point_list().clear();
+  database.get_end_point_list().clear();
+  database.get_timing_order_list().clear();
+  database.get_timing_point_map().clear();
+  database.get_timing_path_group_list().clear();
+
+  for (auto& [name, net] : database.get_net_map()) {
+    static_cast<void>(name);
+    net.get_driver_pin().clear();
+    net.get_driver_pin_list().clear();
+    net.get_load_pin_list().clear();
+  }
+
+  database.get_power_activity_map().clear();
+  database.get_instance_power_map().clear();
+  database.get_power_summary() = PowerSummary{};
+  database.get_summary() = Summary{};
+}
+
 }  // namespace
 
 NativeTranslationResult NativeDesignEditTranslator::applyNormalizedBatch(Database& database, const PreparedBatch& batch,
-                                                                          const TimingEditResolverState& staged_resolver)
+                                                                          TimingEditResolverView staged_resolver)
 {
   NativeTranslationResult policy = preflightPolicy(batch);
   if (!policy.applied()) {
     return policy;
   }
 
-  Database staged(database);
-  NativeDatabaseCandidate::resetDerivedState(staged);
-  std::uint64_t instance_id = detail::nextNativeInstanceId(staged);
-  for (const auto& edit : batch.normalizedEdits()) {
-    detail::applyNativeBufferInsertion(staged, edit, staged_resolver, instance_id);
-    if (instance_id == std::numeric_limits<std::uint64_t>::max() && &edit != &batch.normalizedEdits().back()) {
-      invalid("native instance ID capacity is exhausted within the batch");
-    }
-    ++instance_id;
-  }
-  NativeDatabaseCandidate::resetDerivedState(staged);
-  database = std::move(staged);
+  auto prepared = detail::prepareNativeBufferInsertions(
+      database, batch.normalizedEdits(), staged_resolver,
+      detail::nextNativeInstanceId(database));
+  // No writes precede preparation. This no-throw publication leaves full
+  // graph rebuilding to the selected backend and does not clone Liberty.
+  prepared.apply();
+  resetDerivedState(database);
   return policy;
 }
 

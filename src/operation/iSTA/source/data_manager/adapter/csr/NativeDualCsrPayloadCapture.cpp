@@ -46,12 +46,12 @@ const T* findUnique(const std::vector<T>& values, Predicate predicate)
 class CaptureBuilder final
 {
  public:
-  CaptureBuilder(const ista::Database& database,
+  CaptureBuilder(const ista::Database& database, csr::detail::NativeLibraryModels& models,
                  const DualSemanticReadView& committed,
                  const DualCsrArcGroupIndex& committed_index,
-                 const timing_edit::TimingEditResolverState& staged,
+                 timing_edit::TimingEditResolverView staged,
                  const AffectedCapturePlan& plan, CaptureRun& run)
-      : _database(database),
+      : _database(database), _models(models),
         _committed(committed),
         _committed_index(committed_index),
         _staged(staged),
@@ -63,6 +63,7 @@ class CaptureBuilder final
 
   void build()
   {
+    _models.requireDatabase(_database);
     validateNoParasiticMode();
     if (const auto error = detail::validateNativeDataOnlyNets(
             _database, _plan))
@@ -120,38 +121,38 @@ class CaptureBuilder final
 
   csr::NodeId nodeIdForRequest(const AffectedNodeCapture& request) const
   {
-    const auto binding = _staged.nodeBindings().find(request.ref);
-    if (binding == _staged.nodeBindings().end()
-        || binding->second.tombstone
-        || binding->second.native_name
+    const auto* binding = _staged.findNodeBinding(request.ref);
+    if (binding == nullptr
+        || binding->tombstone
+        || binding->native_name
                != request.expected_key.full_name
-        || binding->second.slot.value() >= _plan.after.node_slots)
+        || binding->slot.value() >= _plan.after.node_slots)
       abortCapture(NarrowCaptureError::kInvalidHighWater);
-    return csr::NodeId{binding->second.slot.value()};
+    return csr::NodeId{binding->slot.value()};
   }
 
   csr::NodeId nodeIdForModelRequest(
       const AffectedNodeModelCapture& request) const
   {
-    const auto binding = _staged.nodeBindings().find(request.ref);
-    if (binding == _staged.nodeBindings().end()
-        || binding->second.tombstone
-        || binding->second.native_name
+    const auto* binding = _staged.findNodeBinding(request.ref);
+    if (binding == nullptr
+        || binding->tombstone
+        || binding->native_name
                != request.expected_key.full_name
-        || binding->second.slot.value() >= _plan.after.node_slots)
+        || binding->slot.value() >= _plan.after.node_slots)
       abortCapture(NarrowCaptureError::kInvalidHighWater);
-    return csr::NodeId{binding->second.slot.value()};
+    return csr::NodeId{binding->slot.value()};
   }
 
   csr::ArcId arcIdForRequest(const AffectedArcCapture& request) const
   {
-    const auto binding = _staged.arcBindings().find(request.ref);
-    if (binding == _staged.arcBindings().end()
-        || binding->second.slot.value() >= _plan.after.arc_slots
-        || binding->second.tombstone
+    const auto* binding = _staged.findArcBinding(request.ref);
+    if (binding == nullptr
+        || binding->slot.value() >= _plan.after.arc_slots
+        || binding->tombstone
                != (request.expected_post_multiplicity == 0))
       abortCapture(NarrowCaptureError::kInvalidHighWater);
-    return csr::ArcId{binding->second.slot.value()};
+    return csr::ArcId{binding->slot.value()};
   }
 
   const csr::ArcSemanticPayload* committedArcForRequest(
@@ -190,7 +191,7 @@ class CaptureBuilder final
     const auto found = _library_by_name.find(cell_name);
     if (found == _library_by_name.end())
       abortCapture(NarrowCaptureError::kUnplannedDependency);
-    return found->second;
+    return *found->second;
   }
 
   void captureLibraries()
@@ -211,15 +212,14 @@ class CaptureBuilder final
     if constexpr (incregpusta_debug_checks_enabled)
       _run.records().audit.requested_library_cells = requested.size();
     for (const auto& item : requested) {
-      auto model = csr::detail::projectCanonicalReferencedLibraryCell(
-          _database, item.cell_name);
+      const auto& model = _models.cell(item.cell_name);
       if constexpr (incregpusta_debug_checks_enabled)
         ++_run.records().audit.library_cell_reads;
       if (const auto error = detail::validateCapturedLibraryCell(item, model))
         abortCapture(*error);
-      if (!_library_by_name.emplace(item.cell_name, model).second)
+      if (!_library_by_name.emplace(item.cell_name, &model).second)
         abortCapture(NarrowCaptureError::kDuplicateRequest);
-      _run.records().library_cells.push_back({item, std::move(model)});
+      _run.records().library_cells.push_back({item, model});
       if constexpr (incregpusta_debug_checks_enabled)
         ++_run.records().audit.accepted_library_cells;
     }
@@ -477,9 +477,9 @@ class CaptureBuilder final
       semantic.is_loop_disabled
           = native[index]->get_is_loop_disable();
       semantic.transfer = csr::detail::projectCanonicalArcTransfer(
-          semantic, *native[index]);
+          _database, _models, semantic, *native[index]);
       if (semantic.kind == csr::ArcKind::kCell
-          && semantic.transfer.children.size()
+          && semantic.transfer.children().size()
                  != semantic.key.base.library_arcs.size())
         abortCapture(NarrowCaptureError::kMalformedNativeRecord);
       result.push_back({indices[index], semantic.key, semantic.source,
@@ -664,9 +664,10 @@ class CaptureBuilder final
       abortCapture(NarrowCaptureError::kArcMultiplicityMismatch);
   }
   const ista::Database& _database;
+  csr::detail::NativeLibraryModels& _models;
   const DualSemanticReadView& _committed;
   const DualCsrArcGroupIndex& _committed_index;
-  const timing_edit::TimingEditResolverState& _staged;
+  timing_edit::TimingEditResolverView _staged;
   const AffectedCapturePlan& _plan;
   CaptureRun& _run;
   std::vector<csr::NodeRecord> _nodes;
@@ -674,19 +675,19 @@ class CaptureBuilder final
   std::map<std::string, csr::NodeId> _node_ids;
   std::map<std::uint64_t, std::string> _node_name_by_id;
   std::unordered_map<std::string, std::string> _ordered_pin_owners;
-  std::map<std::string, csr::ReferencedLibraryCellModel> _library_by_name;
+  std::map<std::string, const csr::ReferencedLibraryCellModel*> _library_by_name;
   std::map<std::string, csr::ArcOutputLoadMatrix> _load_by_net;
 };
 }
 detail::NativeCaptureResult detail::captureNativeDualCsrPayload(
-    const ista::Database& database, const DualSemanticReadView& committed,
+    const ista::Database& database, csr::detail::NativeLibraryModels& models, const DualSemanticReadView& committed,
     const DualCsrArcGroupIndex& committed_index,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
   CaptureRun run(plan);
   try {
-    CaptureBuilder{database, committed, committed_index, staged, plan,
+    CaptureBuilder{database, models, committed, committed_index, staged, plan,
                    run}.build();
     return run.succeed();
   } catch (const CaptureAbort& error) {

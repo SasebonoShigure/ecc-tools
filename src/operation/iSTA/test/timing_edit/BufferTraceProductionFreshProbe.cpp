@@ -368,7 +368,7 @@ ReplayReceipt runReplay(BufferTraceProductionFreshAdapter& adapter,
 Json replayEnvelope(BufferTraceProductionFreshAdapter& adapter,
                     const ReplayReceipt& receipt, std::uint64_t repetition)
 {
-  return {{"schema_version", "buffer-replay-probe/2.0.0"},
+  return {{"schema_version", "buffer-replay-probe/3.0.0"},
           {"functional", replayReceiptToJson(receipt)},
           {"source_isolation", sourceIsolation(adapter.sourceIsolationReceipt())},
           {"derived_timing_freshness",
@@ -434,6 +434,7 @@ void templateMode(const Options& options, bool synthetic)
            {std::move(verilog_name), std::move(verilog_text)},
            {std::move(sdc_name), std::move(sdc_text)},
            option(options, "--top")},
+        .baseline = {},
         .batches = {}};
   } else {
     payload = RealReplayPayload{
@@ -499,6 +500,7 @@ void firstEmptyMode(const Options& options)
              {std::move(lib_name), std::move(lib_text)},
              {std::move(verilog_name), std::move(verilog_text)},
              {std::move(sdc_name), std::move(sdc_text)}, option(options, "--top")},
+          .baseline = {},
           .batches = {}}};
   BufferTraceProductionFreshAdapter adapter(true);
   std::string error_what;
@@ -608,10 +610,29 @@ void doubleInvocationMode(const Options& options)
           parseBufferTraceArtifactJson(readText(option(options, "--trace"))),
           "trace artifact");
   BufferTraceProductionFreshAdapter adapter;
-  ReplayReceipt first = runReplay(
-      adapter, parsed.replay,
-      std::visit([](const auto& payload) { return payload.batches.size(); },
-                 parsed.replay.workload));
+  ReplayProgram foreign = parsed.replay;
+  std::visit([](auto& payload) {
+    auto& fingerprint = payload.baseline.fingerprints.topology;
+    fingerprint.front() = fingerprint.front() == '0' ? '1' : '0';
+  }, foreign.workload);
+  if (!validateReplayProgram(foreign).empty())
+    fail("foreign-baseline canary must remain a valid replay program");
+  ReplayReceipt first = adapter.withFreshBaseline(
+      parsed.replay, [&](BufferReplayContext& context) {
+        bool rejected = false;
+        try {
+          static_cast<void>(replayTracePrefix(context, foreign, 1));
+        } catch (const BufferReplayError& error) {
+          rejected = error.code() == BufferReplayFailureCode::kContextMismatch;
+        }
+        if (!rejected)
+          fail("fresh context accepted a different replay baseline");
+        // The rejected input must leave generation zero ready for the real trace.
+        return replayTracePrefix(
+            context, parsed.replay,
+            std::visit([](const auto& payload) { return payload.batches.size(); },
+                       parsed.replay.workload));
+      });
   bool second_work_entered = false;
   std::string error_what;
   try {

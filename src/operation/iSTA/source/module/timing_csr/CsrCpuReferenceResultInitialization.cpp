@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -87,116 +88,100 @@ void initializeClockSourceLane(ClockResultSoa& clock, std::size_t lane)
   clock.slews.values[lane] = 0.0;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus initializeIdealClocks(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
+}  // namespace
+
+CsrCpuReferenceStageStatus collectCsrInitialTimingSeeds(const TimingPayloadView& payloads, CsrInitialTimingSeeds& seeds)
 {
-  if (payloads.clockOwners().size() != work.node_count)
+  const auto node_count = payloads.nodeCount();
+  std::size_t rows = 0;
+  if (!checkedMultiply(node_count, kAnalysisCount * kPathSourceCount * kTransitionCount, rows)
+      || rows == std::numeric_limits<std::size_t>::max())
     return CsrCpuReferenceStageStatus::kInvariantViolation;
-  for (std::size_t node = 0; node < work.node_count; ++node) {
+  seeds.nodes.clear();
+  seeds.paths.clear();
+  if (payloads.clockOwners().size() != node_count || payloads.startSeeds().size() != payloads.orderedStartIds().size())
+    return CsrCpuReferenceStageStatus::kInvariantViolation;
+  std::map<NodeId, CsrInitialNodeSeed> nodes;
+  auto node_seed = [&](NodeId id) -> CsrInitialNodeSeed& {
+    auto& value = nodes[id];
+    value.node = id;
+    return value;
+  };
+  for (std::size_t node = 0; node < node_count; ++node) {
     const auto& owner = payloads.clockOwners()[node];
-    if (!owner)
-      continue;
-    work.result.nodes.is_clock_point.values[node] = 1;
-    work.result.nodes.clock_names.presence[node] = 1;
-    work.result.nodes.clock_names.values[node] = *owner;
-    for (AnalysisMode analysis : kAnalyses)
-      for (Transition transition : kTransitions)
-        initializeClockSourceLane(work.result.effective_clock, csrNodeLane(node, analysis, transition));
+    if (owner) {
+      auto& value = node_seed(NodeId{node});
+      value.clock_point = true;
+      value.clock_name = *owner;
+    }
   }
-  for (const auto& clock : payloads.clocks()) {
+  for (const auto& clock : payloads.clocks())
     for (const auto& source : clock.ordered_sources) {
       if (!source.resolved_node)
         continue;
-      const std::uint64_t node = source.resolved_node->value();
-      if (node >= work.node_count)
+      if (source.resolved_node->value() >= node_count)
         return CsrCpuReferenceStageStatus::kInvariantViolation;
-
-      work.result.nodes.is_clock_point.values[node] = 1;
-      if (work.result.nodes.clock_names.presence[node] == 0) {
-        work.result.nodes.clock_names.presence[node] = 1;
-        work.result.nodes.clock_names.values[node] = clock.map_key;
-      }
-      for (AnalysisMode analysis : kAnalyses) {
-        for (Transition transition : kTransitions) {
-          const std::size_t lane = csrNodeLane(node, analysis, transition);
-          initializeClockSourceLane(work.result.effective_clock, lane);
-          initializeClockSourceLane(work.result.physical_clock, lane);
-        }
-      }
+      auto& value = node_seed(*source.resolved_node);
+      if (!value.clock_point)
+        value.clock_name = clock.map_key;
+      value.clock_point = true;
+      value.physical_clock_source = true;
     }
-  }
-  return CsrCpuReferenceStageStatus::kSuccess;
-}
-
-[[nodiscard]] CsrCpuReferenceStageStatus initializeStarts(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
-{
-  if (payloads.startSeeds().size() != payloads.orderedStartIds().size())
-    return CsrCpuReferenceStageStatus::kInvariantViolation;
-
   for (std::size_t index = 0; index < payloads.startSeeds().size(); ++index) {
     const auto& seed = payloads.startSeeds()[index];
-    const std::uint64_t node = seed.seed_node.value();
-    if (node >= work.node_count || payloads.orderedStartIds()[index] != seed.seed_node)
+    const auto node = seed.seed_node.value();
+    if (node >= node_count || payloads.orderedStartIds()[index] != seed.seed_node)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
-
     if (seed.availability == StartSeedAvailability::kDeferredSequential)
       continue;
-    const ClockConstraintModel* direct_clock = findDirectClock(payloads, seed.seed_node);
-    for (AnalysisMode analysis : kAnalyses) {
+    auto& value = node_seed(seed.seed_node);
+    const auto* direct_clock = findDirectClock(payloads, seed.seed_node);
+    value.data_start = true;
+    value.arrival = 0.0;
+    value.launch = direct_clock == nullptr ? 0.0 : direct_clock->edges[csrTransitionIndex(Transition::kRise)];
+    value.clock_name = seed.clock_tag;
+    for (AnalysisMode analysis : kAnalyses)
       for (Transition transition : kTransitions) {
-        const std::size_t lane = csrNodeLane(node, analysis, transition);
-        const auto& slew = seed.slew[csrAnalysisIndex(analysis)][csrTransitionIndex(transition)];
-        if (!slew)
+        const auto a = csrAnalysisIndex(analysis), t = csrTransitionIndex(transition);
+        if (!seed.slew[a][t])
           return CsrCpuReferenceStageStatus::kInvariantViolation;
-        work.result.data_slews.presence[lane] = 1;
-        work.result.data_slews.values[lane] = *slew;
+        value.slew[a * 2 + t] = *seed.slew[a][t];
       }
-    }
-
-    work.result.nodes.arrivals.values[node] = 0.0;
-    if (seed.path_source) {
-      const auto& scalar_arrival = seed.arrival[csrAnalysisIndex(AnalysisMode::kMax)][csrTransitionIndex(Transition::kRise)];
-      if (!scalar_arrival)
-        return CsrCpuReferenceStageStatus::kInvariantViolation;
-      work.result.nodes.arrivals.values[node] = *scalar_arrival;
-    }
-    work.result.nodes.launches.values[node] = direct_clock == nullptr ? 0.0 : direct_clock->edges[csrTransitionIndex(Transition::kRise)];
-    work.result.nodes.clock_names.presence[node] = 1;
-    work.result.nodes.clock_names.values[node] = seed.clock_tag;
-
     if (!seed.path_source)
       continue;
     if (*seed.path_source != PathSource::kInput || seed.availability != StartSeedAvailability::kMaterialized)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
-    const std::optional<ClockTagId> clock_tag = findClockTag(payloads, seed.clock_tag);
+    const auto clock_tag = findClockTag(payloads, seed.clock_tag);
     if (!clock_tag)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
-
-    for (AnalysisMode analysis : kAnalyses) {
+    if (!seed.arrival[0][0])
+      return CsrCpuReferenceStageStatus::kInvariantViolation;
+    value.arrival = *seed.arrival[0][0];
+    for (AnalysisMode analysis : kAnalyses)
       for (Transition transition : kTransitions) {
-        const auto& arrival = seed.arrival[csrAnalysisIndex(analysis)][csrTransitionIndex(transition)];
-        const auto& slew = seed.slew[csrAnalysisIndex(analysis)][csrTransitionIndex(transition)];
-        if (!arrival || !slew)
+        const auto a = csrAnalysisIndex(analysis), t = csrTransitionIndex(transition);
+        if (!seed.arrival[a][t])
           return CsrCpuReferenceStageStatus::kInvariantViolation;
-
         CsrCpuReferencePathState path;
         path.clock_tag = *clock_tag;
-        path.arrival = *arrival;
-        path.slew = *slew;
-        path.launch = direct_clock == nullptr
-                          ? 0.0
-                          : direct_clock->edges[analysis == AnalysisMode::kMax && transition == Transition::kFall ? csrTransitionIndex(Transition::kFall)
-                                                                                                                  : csrTransitionIndex(Transition::kRise)];
+        path.arrival = *seed.arrival[a][t];
+        path.slew = value.slew[a * 2 + t];
+        path.launch = direct_clock == nullptr ? 0.0
+            : direct_clock->edges[analysis == AnalysisMode::kMax && transition == Transition::kFall ? 1 : 0];
         path.start_node = seed.path_start_node;
         path.crpr_node = seed.crpr_node;
         path.crpr_transition = seed.crpr_transition;
-        work.path_rows[csrPathRow(node, analysis, PathSource::kInput, transition)].push_back(path);
+        seeds.paths.push_back({csrPathRow(node, analysis, PathSource::kInput, transition), std::move(path)});
       }
-    }
+  }
+  seeds.nodes.reserve(nodes.size());
+  for (auto& [id, value] : nodes) {
+    static_cast<void>(id);
+    seeds.nodes.push_back(std::move(value));
   }
   return CsrCpuReferenceStageStatus::kSuccess;
 }
 
-}  // namespace
 
 CsrCpuReferenceStageStatus initializeCsrCpuReferenceSeeds(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
@@ -223,18 +208,39 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceSeeds(const TimingPayloadVie
   work.path_rows.assign(work.path_row_count, {});
   work.result.paths.row_offsets.assign(work.path_row_count + 1, 0);
 
-  CsrCpuReferenceStageStatus status = initializeIdealClocks(payloads, work);
+  CsrInitialTimingSeeds seeds;
+  const auto status = collectCsrInitialTimingSeeds(payloads, seeds);
   if (status != CsrCpuReferenceStageStatus::kSuccess)
     return status;
-  return initializeStarts(payloads, work);
+  for (const auto& seed : seeds.nodes) {
+    const auto node = seed.node.value();
+    work.result.nodes.clock_names.presence[node] = 1;
+    work.result.nodes.clock_names.values[node] = seed.clock_name;
+    work.result.nodes.is_clock_point.values[node] = seed.clock_point;
+    work.result.nodes.arrivals.values[node] = seed.arrival;
+    work.result.nodes.launches.values[node] = seed.launch;
+    for (std::size_t lane = 0; lane < 4; ++lane) {
+      const auto flat = node * 4 + lane;
+      if (seed.clock_point)
+        initializeClockSourceLane(work.result.effective_clock, flat);
+      if (seed.physical_clock_source)
+        initializeClockSourceLane(work.result.physical_clock, flat);
+      if (seed.data_start) {
+        work.result.data_slews.presence[flat] = 1;
+        work.result.data_slews.values[flat] = seed.slew[lane];
+      }
+    }
+  }
+  for (auto& seed : seeds.paths)
+    work.path_rows[seed.row].push_back(std::move(seed.path));
+  return CsrCpuReferenceStageStatus::kSuccess;
 }
 
-CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, const CsrFifoLevelization& replay, CsrCpuReferenceWorkState& work)
+CsrCpuReferenceStageStatus initializeCsrCpuReferenceResult(const TimingPayloadView& payloads, CsrFifoLevelization replay, CsrCpuReferenceWorkState& work)
 {
-  work.result.level_offsets = replay.level_offsets;
-  work.result.level_nodes = replay.level_nodes;
-  work.result.node_to_level = replay.node_to_level;
-  work.result.timing_order = replay.level_nodes;
+  work.result.level_offsets = std::move(replay.level_offsets);
+  work.result.level_nodes = std::move(replay.level_nodes);
+  work.result.node_to_level = std::move(replay.node_to_level);
   return initializeCsrCpuReferenceSeeds(payloads, work);
 }
 

@@ -54,7 +54,6 @@ target_include_directories(ista_buffer_trace_runtime
 target_link_libraries(ista_buffer_trace_runtime
     PUBLIC
     ista_buffer_trace_contract
-    ista_timing_edit_transaction
     ista_timing_edit_native
     PRIVATE
     ista_timing_graph_csr_adapter
@@ -71,5 +70,5 @@ target_compile_options(ista_buffer_trace_runtime
     -ffp-contract=off
 )
 
-# Runtime remains production-only. Test adapters and Stage 3 proof/session seams
-# are compiled solely into the exact-inventory one-shot probe executable.
+# Native replay reuses local transactions. Independent timing comparison is
+# supplied only by the diagnostic probe executable.

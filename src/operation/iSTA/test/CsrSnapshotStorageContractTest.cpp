@@ -14,6 +14,7 @@
 //
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <array>
 #include <charconv>
 #include <cstdint>
@@ -243,17 +244,19 @@ void checkDynamicFamilies()
   checkInputFamilyDelta([](auto& input) { input.arcs[0].key.base.owner_name += ":arc"; }, "arc key");
   checkInputFamilyDelta(
       [](auto& input) {
-        input.arcs[0].transfer.children[0].delay_tables[0].axes.push_back({0.3, 0.4});
-        input.arcs[0].transfer.children[0].delay_tables[0].values.push_back(0.5);
+        ista::csr::test::mutateChildren(input.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0].axes.push_back({0.3, 0.4});
+        children[0].delay_tables[0].values.push_back(0.5); });
       },
       "nested array table");
   checkInputFamilyDelta(
       [](auto& input) {
-        auto& table = input.arcs[0].transfer.children[0].check_tables[0];
+        ista::csr::test::mutateChildren(input.arcs[0].transfer, [&](auto& children) {
+      auto& table = children[0].check_tables[0];
         table.present = true;
         table.variable1 = TableVariable::kInputTransition;
         table.axes = {{0.6, 0.7}};
         table.values = {0.8, 0.9};
+    });
       },
       "nested check table");
   checkInputFamilyDelta([](auto& input) { input.arc_ids_by_key[0].key.base.owner_name += ":lookup"; }, "arc lookup");
@@ -312,7 +315,7 @@ void checkDynamicFamilies()
         check.clock_port = "CK";
         check.data_port = "D";
         check.kind = TimingCheckKind::kSetup;
-        check.children.push_back(std::move(child));
+        check.setChildren({std::move(child)});
         input.referenced_library_cells[0].timing_checks.push_back(std::move(check));
       },
       "referenced library timing checks");

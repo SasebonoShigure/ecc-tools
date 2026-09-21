@@ -46,6 +46,7 @@ set(ISTA_TIMING_EDIT_RESOLVER_TEST_LINKS
     ista_timing_database_headers
 )
 add_executable(ista_timing_edit_resolver_test ${ISTA_TIMING_EDIT_RESOLVER_TEST_SOURCES})
+target_sources(ista_timing_edit_resolver_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}/AllocationFailureSupport.cpp")
 target_link_libraries(ista_timing_edit_resolver_test
     PRIVATE
     ${ISTA_TIMING_EDIT_RESOLVER_TEST_LINKS}
@@ -79,7 +80,6 @@ set(ISTA_TIMING_EDIT_CSR_RECEIPT_TEST_SUPPORT
 set(ISTA_TIMING_EDIT_TRANSACTION_TEST_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.hpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionTest.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditRuntimeContract.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.hpp"
@@ -87,7 +87,6 @@ set(ISTA_TIMING_EDIT_TRANSACTION_TEST_SOURCES
     ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
 )
 set(ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS
-    ista_timing_edit_transaction
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
@@ -112,7 +111,6 @@ set(ISTA_TIMING_EDIT_GUARD_TEST_SOURCES
     ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
 )
 set(ISTA_TIMING_EDIT_GUARD_TEST_LINKS
-    ista_timing_edit_transaction
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
@@ -129,27 +127,6 @@ target_link_libraries(ista_timing_edit_guard_scope_test
 )
 ista_register_timing_edit_test(ista_timing_edit_guard_scope_test)
 
-set(ISTA_TIMING_EDIT_RECEIPT_TEST_SOURCES
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.hpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditReceiptMismatchTest.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.hpp"
-    ${ISTA_TIMING_EDIT_CSR_RECEIPT_TEST_SUPPORT}
-    ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
-)
-set(ISTA_TIMING_EDIT_RECEIPT_TEST_LINKS
-    ${ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS}
-)
-add_executable(ista_timing_edit_receipt_test
-    ${ISTA_TIMING_EDIT_RECEIPT_TEST_SOURCES}
-)
-target_link_libraries(ista_timing_edit_receipt_test
-    PRIVATE
-    ${ISTA_TIMING_EDIT_RECEIPT_TEST_LINKS}
-)
-ista_register_timing_edit_test(ista_timing_edit_receipt_test)
-
 set(ISTA_TIMING_EDIT_TRANSACTION_FAULT_TEST_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.hpp"
@@ -163,6 +140,7 @@ set(ISTA_TIMING_EDIT_TRANSACTION_FAULT_TEST_LINKS
     ${ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS}
 )
 add_executable(ista_timing_edit_transaction_fault_test
+    "${CMAKE_CURRENT_LIST_DIR}/AllocationFailureSupport.cpp"
     ${ISTA_TIMING_EDIT_TRANSACTION_FAULT_TEST_SOURCES}
 )
 target_link_libraries(ista_timing_edit_transaction_fault_test
@@ -170,28 +148,6 @@ target_link_libraries(ista_timing_edit_transaction_fault_test
     ${ISTA_TIMING_EDIT_TRANSACTION_FAULT_TEST_LINKS}
 )
 ista_register_timing_edit_test(ista_timing_edit_transaction_fault_test)
-
-set(ISTA_TIMING_EDIT_FRESH_RECOVERY_TEST_SOURCES
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.hpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditFreshRecoveryTest.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.hpp"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle/IndependentOracleObservation.cpp"
-    ${ISTA_TIMING_EDIT_CSR_RECEIPT_TEST_SUPPORT}
-    ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
-)
-set(ISTA_TIMING_EDIT_FRESH_RECOVERY_TEST_LINKS
-    ${ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS}
-)
-add_executable(ista_timing_edit_fresh_recovery_test
-    ${ISTA_TIMING_EDIT_FRESH_RECOVERY_TEST_SOURCES}
-)
-target_link_libraries(ista_timing_edit_fresh_recovery_test
-    PRIVATE
-    ${ISTA_TIMING_EDIT_FRESH_RECOVERY_TEST_LINKS}
-)
-ista_register_timing_edit_test(ista_timing_edit_fresh_recovery_test)
 
 set(ISTA_TIMING_EDIT_DAG_PROPERTY_TEST_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditDagPropertyTest.cpp"
@@ -236,9 +192,12 @@ set_tests_properties(ista_timing_edit_prepare_property_test
 
 add_executable(ista_native_targeted_edit_test
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/NativeTargetedEditTest.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/AllocationFailureSupport.cpp"
+    ${ISTA_TIMING_EDIT_CSR_RECEIPT_TEST_SUPPORT}
     ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
 )
 target_link_libraries(ista_native_targeted_edit_test PRIVATE
-    ista_timing_edit_native ista_timing_graph_csr_adapter ista_timing_database_headers
-    ista_graph_builder ista_data_manager ista_toolkit)
+    ${ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS} ista_graph_builder)
 ista_register_timing_edit_test(ista_native_targeted_edit_test)

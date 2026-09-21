@@ -136,6 +136,11 @@ using PrepublishScatterResult = std::variant<PreparedScatterEnvelope, CsrTimingR
 
 // Internal values-only boundary. Caller owns stable mappings and holds the
 // operation guard; all candidate container growth must precede target lookup.
+[[nodiscard]] TimingResultPreparationResult prepareStableTimingResult(
+    Database& database, const std::vector<std::string>& node_names,
+    const std::vector<std::optional<std::size_t>>& arc_native_ranks,
+    const TimingScatterLayout& layout, const CsrTimingValues& values);
+
 [[nodiscard]] TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTargets& targets, const TimingScatterLayout& layout,
                                                                         const CsrTimingValues& values);
 

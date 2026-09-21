@@ -4,6 +4,7 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -47,7 +48,7 @@ void baselineFactoryContracts()
   canonical_first.id = csr::ArcId{0};
   canonical_first.native_traversal_rank = 1;
   canonical_first.key.base.library_arcs[0].arc_index = 0;
-  canonical_first.transfer.children[0].signature.arc_index = 0;
+  ista::csr::test::mutateChildren(canonical_first.transfer, [&](auto& children) { children[0].signature.arc_index = 0; });
   fifo_input.arcs = {canonical_first, native_first};
   fifo_input.arc_ids_by_key = {{canonical_first.key, canonical_first.id},
                                {native_first.key, native_first.id}};
@@ -274,9 +275,8 @@ DualCsrState baseAndAuxState()
   state.base_out.row_offsets = {0, 1, 1, 1};
   state.base_in.row_offsets = {0, 0, 1, 2};
   state.base_in.physical_slots = {csr::ArcId{0}, csr::ArcId{1}};
-  state.aux_out.row_offsets = {0, 1};
   state.aux_out.row_sources = {csr::NodeId{0}};
-  state.aux_out.arc_ids = {csr::ArcId{1}};
+  state.aux_out.row_arcs = {{csr::ArcId{1}}};
   state.aux_out.source_to_aux_row = {0, -1, -1};
   state.high_water.node_slots = 3;
   state.high_water.arc_slots = 2;
@@ -344,8 +344,8 @@ void directViewControlAndMalformedContracts()
   missing_inverse.aux_out.source_to_aux_row[0] = -1;
   DualCsrEdgeViewImpl missing_inverse_edges(missing_inverse);
   const auto missing_inverse_status
-      = missing_inverse_edges.forEachOutgoing(
-          csr::NodeId{0}, [](const csr::EdgeEntry&) {
+      = missing_inverse_edges.forEachActiveArc(
+          [](const csr::EdgeEntry&) {
             return csr::EdgeVisitResult::continueVisit();
           });
   require(missing_inverse_status.control
@@ -434,14 +434,12 @@ void payloadSemanticContracts()
                   DualCsrViolationCode::kExpectedValue),
           "CellTransferFlagsAndChildSignatureMirrorKey flag canary was accepted");
   auto cell_signature = cellState();
-  ++cell_signature.arc_slots[0]
-        .payload.transfer.children[0].signature.arc_index;
+  csr::test::mutateChildren(cell_signature.arc_slots[0].payload.transfer, [](auto& children) { ++children[0].signature.arc_index; });
   require(hasCode(validateDualCsrState(cell_signature),
                   DualCsrViolationCode::kExpectedValue),
           "CellTransferFlagsAndChildSignatureMirrorKey signature canary was accepted");
   auto cell_table = cellState();
-  cell_table.arc_slots[0]
-      .payload.transfer.children[0].delay_tables[0].present = true;
+  ista::csr::test::mutateChildren(cell_table.arc_slots[0].payload.transfer, [](auto& children) { children[0].delay_tables[0].present = true; });
   require(!validateDualCsrState(cell_table).empty(),
           "cell timing-table signature/shape canary was accepted");
 

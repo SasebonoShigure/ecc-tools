@@ -6,6 +6,7 @@
 #include "DualSemanticReadView.hpp"
 #include "TimingEditResolver.hpp"
 namespace ista { class Database; }
+namespace ista::csr::detail { class NativeLibraryModels; }
 namespace ista::timing_dual_csr {
 namespace detail { struct CandidateCaptureStorage; }
 class TimingEditDualCsrDescriptorBuilder;
@@ -32,11 +33,14 @@ class CandidateBoundCapture final {
 
 class NarrowTimingRecordReader final {
  public:
+  explicit NarrowTimingRecordReader(csr::detail::NativeLibraryModels& models) : _models(models) {}
   [[nodiscard]] CandidateBoundCapture read(
       const ista::Database&, const DualSemanticReadView&,
       const DualCsrArcGroupIndex&,
-      const timing_edit::TimingEditResolverState&,
+      timing_edit::TimingEditResolverView,
       const timing_edit::PreparedBatch&,
       const AffectedCapturePlan&) const;
+ private:
+  csr::detail::NativeLibraryModels& _models;
 };
 }

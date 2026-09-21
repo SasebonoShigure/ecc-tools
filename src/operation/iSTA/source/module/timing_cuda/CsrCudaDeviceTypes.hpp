@@ -46,6 +46,7 @@ struct Arc
   Index sink{0};
   Index child_begin{0};
   Index child_count{0};
+  Index child_state_begin{0};
   double delay{0.0};
   double delay_min{0.0};
   double delay_max{0.0};
@@ -89,9 +90,16 @@ struct NodeState
   Index predecessor_arc{absent};
   Value<double> slew[4];
   Index clock_owner{absent};
+  bool clock_point{false};
   Value<double> effective_arrival[4], effective_slew[4];
   ClockLane physical_clock[4];
   SequentialSeed sequential;
+};
+
+struct NodeSeed
+{
+  Index node{};
+  NodeState state;
 };
 
 struct PathState
@@ -107,6 +115,12 @@ struct PathState
   Index crpr_node{absent};
   std::uint8_t crpr_transition{2};
   bool present{false};
+};
+
+struct PathSeed
+{
+  Index row{}, tag{};
+  PathState state;
 };
 
 struct ArcState
@@ -137,6 +151,12 @@ struct Endpoint
   std::uint8_t clock_transition{0};
 };
 
+struct AuxRow
+{
+  const Index* arcs{nullptr};
+  Index count{};
+};
+
 // All storage is owned by one invocation's host runtime. No device allocation
 // or pointers into STL objects. Optional values preserve absent versus zero.
 struct DeviceView
@@ -144,17 +164,17 @@ struct DeviceView
   Index node_count{0};
   Index arc_count{0};
   Index child_count{0};
+  Index child_state_count{0};
   Index tag_count{0};
   Index clock_count{0};
+  Index path_count{0};
+  const Index *path_offsets{nullptr}, *path_tags{nullptr};
   Index root_count{0};
   Index end_count{0};
   Index endpoint_count{0};
   const Index* out_offsets{nullptr};
   const Index* out_arcs{nullptr};
-  Index aux_row_count{0};
-  const Index* aux_offsets{nullptr};
-  const Index* aux_arcs{nullptr};
-  const Index* source_to_aux_row{nullptr};
+  const AuxRow* aux_rows{nullptr};
   Index* storage_visits{nullptr};
   const Index* in_offsets{nullptr};
   const Index* in_arcs{nullptr};

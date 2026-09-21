@@ -154,7 +154,6 @@ def _fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
                         physical,
                         key=lambda key: (level_by_key[canonical_key(key)],
                                          canonical_key(key))),
-                    "timing_order": [physical[node] for node in dense],
                     "node_to_level": [level_by_key[canonical_key(key)]
                                       for key in canonical],
                 },

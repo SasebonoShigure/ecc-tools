@@ -82,7 +82,7 @@ inline constexpr std::array<DualCsrBufferKind,
         DualCsrBufferKind::kBaseOutSlots,
         DualCsrBufferKind::kBaseInOffsets,
         DualCsrBufferKind::kBaseInSlots,
-        DualCsrBufferKind::kAuxOffsets,
+        DualCsrBufferKind::kAuxRows,
         DualCsrBufferKind::kAuxSources,
         DualCsrBufferKind::kAuxArcs,
         DualCsrBufferKind::kAuxSourceMap};

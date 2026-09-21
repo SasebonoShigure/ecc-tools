@@ -109,8 +109,14 @@ CsrReferenceInputRawProjection projectCsrReferenceInputRaw(const ista::Database&
 {
   CsrReferenceInputRawProjection projection;
   projection.nodes.reserve(database.get_pin_map().size());
-  for (const auto& [map_key, pin] : database.get_pin_map())
-    projection.nodes.push_back({map_key, pin.get_full_name(), pin.get_is_port(), directionToken(pin.get_direction()), pin.get_instance_name()});
+  for (const auto& [map_key, pin] : database.get_pin_map()) {
+    RawNode node{map_key, pin.get_full_name(), pin.get_is_port(), directionToken(pin.get_direction()), pin.get_instance_name(), {}, {}};
+    if (const auto row = database.get_outgoing_arc_list_map().find(map_key); row != database.get_outgoing_arc_list_map().end())
+      node.outgoing_arc_ranks.assign(row->second.begin(), row->second.end());
+    if (const auto row = database.get_incoming_arc_list_map().find(map_key); row != database.get_incoming_arc_list_map().end())
+      node.incoming_arc_ranks.assign(row->second.begin(), row->second.end());
+    projection.nodes.push_back(std::move(node));
+  }
 
   projection.instances.reserve(database.get_instance_map().size());
   for (const auto& [map_key, instance] : database.get_instance_map())
@@ -143,6 +149,8 @@ void appendNode(Writer& writer, const RawNode& node)
   writer.boolean(node.is_port);
   writer.enumeration(node.direction);
   writer.string(node.instance_name);
+  writer.vector(node.outgoing_arc_ranks, [](Writer& local, std::uint64_t rank) { local.u64(rank); });
+  writer.vector(node.incoming_arc_ranks, [](Writer& local, std::uint64_t rank) { local.u64(rank); });
 }
 
 void appendInstance(Writer& writer, const RawInstance& instance)
@@ -190,7 +198,7 @@ void appendNet(Writer& writer, const RawNet& net)
 std::vector<std::uint8_t> canonicalIndependentReferenceInputRawBytes(const CsrReferenceInputRawProjection& projection)
 {
   raw_wire::Writer writer;
-  writer.string("ista-csr-reference-input-raw/1.0.0");
+  writer.string("ista-csr-reference-input-raw/2.0.0");
   writer.vector(projection.nodes, raw_wire::appendNode);
   writer.vector(projection.instances, raw_wire::appendInstance);
   writer.vector(projection.arcs, raw_wire::appendArc);

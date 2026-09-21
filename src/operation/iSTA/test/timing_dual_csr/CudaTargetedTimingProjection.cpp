@@ -123,8 +123,6 @@ CsrTimingResult projectCudaTargetedTiming(const CsrReferenceInput& input, const 
   result.level_offsets = values.level_offsets;
   for (const auto node : values.level_nodes)
     result.level_nodes.push_back(node_map.at(node.value()).value());
-  for (const auto node : values.timing_order)
-    result.timing_order.push_back(node_map.at(node.value()).value());
   remap(result.nodes.predecessor_nodes, node_map);
   remap(result.nodes.predecessor_arcs, arc_map);
   remap(result.effective_clock.predecessor_nodes, node_map);

@@ -15,21 +15,21 @@ namespace ista::timing_dual_csr::detail {
 
 [[nodiscard]] csr::NodeKey stableNodeKey(
     const timing_edit::StableNodeRef& ref,
-    const timing_edit::TimingEditResolverState& resolver);
+    timing_edit::TimingEditResolverView resolver);
 
 [[nodiscard]] csr::ArcKey materializedArcKey(
     const timing_edit::StableArcRef& ref,
-    const timing_edit::TimingEditResolverState& resolver);
+    timing_edit::TimingEditResolverView resolver);
 
 [[nodiscard]] csr::ArcKey committedArcKey(
     const timing_edit::StableArcRef& ref,
-    const timing_edit::TimingEditResolverState& resolver,
+    timing_edit::TimingEditResolverView resolver,
     const DualSemanticReadView& view);
 
 [[nodiscard]] AffectedCapturePlan makeStructuredCapturePlan(
     const timing_edit::PreparedBatch& batch,
     const timing_edit::TimingEditResolverState& committed,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const DualCsrArcGroupIndex& arc_group_index,
     const DualSemanticReadView& view);
 

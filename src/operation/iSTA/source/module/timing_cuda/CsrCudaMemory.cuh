@@ -1,14 +1,17 @@
 #pragma once
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 #include "CsrCudaBackend.hpp"
 
 namespace ista::csr::cuda_detail {
 class CudaError : public std::runtime_error { public: using std::runtime_error::runtime_error; };
+class CudaAllocationError final : public CudaError { public: using CudaError::CudaError; };
 
 inline void check(cudaError_t error, const char* operation)
 {
@@ -16,27 +19,59 @@ inline void check(cudaError_t error, const char* operation)
     throw CudaError(std::string(operation) + ": " + cudaGetErrorString(error));
 }
 
-// One concrete owner holds the stream, events, and allocations. A full call
-// or a detached targeted candidate releases its own storage on destruction.
+template <class T> struct DeviceBuffer
+{
+  T* data{};
+  std::size_t capacity{};
+};
+
+// One session owns the stream, events and explicitly named device buffers.
 class Runtime final
 {
  public:
-  explicit Runtime(CsrCudaTelemetry& telemetry) : _telemetry(telemetry)
+  explicit Runtime(CsrCudaTelemetry& telemetry) : _telemetry(&telemetry)
   {
     check(cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking), "cudaStreamCreateWithFlags");
     try {
       for (auto& event : _events)
         check(cudaEventCreate(&event), "cudaEventCreate");
     } catch (...) {
-      release();
+      static_cast<void>(close());
       throw;
     }
   }
-  ~Runtime() { release(); }
+  ~Runtime() { static_cast<void>(close()); }
   Runtime(const Runtime&) = delete;
   Runtime& operator=(const Runtime&) = delete;
 
   cudaStream_t stream() const { return _stream; }
+  void bindTelemetry(CsrCudaTelemetry& telemetry) noexcept { _telemetry = &telemetry; }
+
+  template <class T> bool ensure(DeviceBuffer<T>& buffer, std::size_t count, std::size_t preserve = 0)
+  {
+    if (preserve > buffer.capacity)
+      throw std::length_error("CUDA preserved range exceeds allocated capacity");
+    if (count <= buffer.capacity)
+      return false;
+    const auto limit = std::numeric_limits<std::size_t>::max() / sizeof(T);
+    if (count > limit)
+      throw std::length_error("CUDA buffer byte capacity overflow");
+    const auto extra = buffer.capacity / 2 + 1;
+    const auto grown = extra <= limit - buffer.capacity ? buffer.capacity + extra : limit;
+    auto* replacement = allocate<T>(std::max(count, grown));
+    copy(buffer.data, replacement, preserve);
+    // Retiring a grown buffer is the only path that waits for its old contents.
+    if (buffer.data) {
+      synchronize();
+      const auto found = std::find(_allocations.begin(), _allocations.end(), buffer.data);
+      if (found == _allocations.end())
+        throw std::logic_error("CUDA buffer does not belong to this runtime");
+      check(cudaFree(buffer.data), "cudaFree grown buffer");
+      *found = nullptr;
+    }
+    buffer = {replacement, std::max(count, grown)};
+    return true;
+  }
 
   template <class T> T* allocate(std::size_t count)
   {
@@ -46,10 +81,19 @@ class Runtime final
       throw std::length_error("CUDA buffer byte capacity overflow");
     // Reserve bookkeeping before allocation so an allocation cannot leak if
     // growing the host ownership vector fails.
-    _allocations.push_back(nullptr);
-    check(cudaMalloc(&_allocations.back(), count * sizeof(T)), "cudaMalloc");
-    ++_telemetry.allocations;
-    return static_cast<T*>(_allocations.back());
+    auto slot = std::find(_allocations.begin(), _allocations.end(), nullptr);
+    if (slot == _allocations.end()) {
+      _allocations.push_back(nullptr);
+      slot = _allocations.end() - 1;
+    }
+    const auto status = cudaMalloc(&*slot, count * sizeof(T));
+    if (status == cudaErrorMemoryAllocation) {
+      static_cast<void>(cudaGetLastError());
+      throw CudaAllocationError("cudaMalloc: device capacity exhausted");
+    }
+    check(status, "cudaMalloc");
+    ++_telemetry->allocations;
+    return static_cast<T*>(*slot);
   }
 
   template <class T> void upload(const T* source, T* target, std::size_t count)
@@ -57,7 +101,7 @@ class Runtime final
     if (count == 0)
       return;
     check(cudaMemcpyAsync(target, source, count * sizeof(T), cudaMemcpyHostToDevice, _stream), "cudaMemcpyAsync H2D");
-    _telemetry.h2d_bytes += count * sizeof(T);
+    _telemetry->h2d_bytes += count * sizeof(T);
   }
 
   template <class T> void upload(const std::vector<T>& source, const T* target)
@@ -70,7 +114,7 @@ class Runtime final
     if (count == 0)
       return;
     check(cudaMemcpyAsync(target, source, count * sizeof(T), cudaMemcpyDeviceToHost, _stream), "cudaMemcpyAsync D2H");
-    _telemetry.d2h_bytes += count * sizeof(T);
+    _telemetry->d2h_bytes += count * sizeof(T);
   }
 
   template <class T> void download(const T* source, std::vector<T>& target)
@@ -82,7 +126,7 @@ class Runtime final
   {
     if (!count) return;
     check(cudaMemcpyAsync(target, source, count * sizeof(T), cudaMemcpyDeviceToDevice, _stream), "cudaMemcpyAsync D2D");
-    _telemetry.d2d_bytes += count * sizeof(T);
+    _telemetry->d2d_bytes += count * sizeof(T);
   }
   template <class T> void zero(T* target, std::size_t count)
   {
@@ -98,22 +142,30 @@ class Runtime final
     return value;
   }
 
- private:
-  void release() noexcept
+  // Explicit close reports asynchronous and cleanup failures; destruction is
+  // only a no-throw fallback. Always attempt every resource after the first error.
+  [[nodiscard]] cudaError_t close() noexcept
   {
+    const auto retain = [&](cudaError_t status) {
+      if (_close_status == cudaSuccess && status != cudaSuccess)
+        _close_status = status;
+    };
     if (_stream != nullptr)
-      cudaStreamSynchronize(_stream);
-    for (auto allocation : _allocations)
+      retain(cudaStreamSynchronize(_stream));
+    for (auto& allocation : _allocations)
       if (allocation != nullptr)
-        cudaFree(allocation);
-    for (auto event : _events)
+        retain(cudaFree(std::exchange(allocation, nullptr)));
+    for (auto& event : _events)
       if (event != nullptr)
-        cudaEventDestroy(event);
+        retain(cudaEventDestroy(std::exchange(event, nullptr)));
     if (_stream != nullptr)
-      cudaStreamDestroy(_stream);
+      retain(cudaStreamDestroy(std::exchange(_stream, nullptr)));
+    return _close_status;
   }
 
-  CsrCudaTelemetry& _telemetry;
+ private:
+  cudaError_t _close_status{cudaSuccess};
+  CsrCudaTelemetry* _telemetry;
   cudaStream_t _stream{nullptr};
   std::array<cudaEvent_t, 8> _events{};
   std::vector<void*> _allocations;

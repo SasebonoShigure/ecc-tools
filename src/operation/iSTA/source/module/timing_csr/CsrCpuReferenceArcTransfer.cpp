@@ -77,7 +77,7 @@ void resetRequiredSoa(OptionalSoa<T>& soa, std::size_t size, const T& value)
   bool has_negative = false;
   bool has_positive_or_none = false;
   bool has_non_unate = false;
-  for (const auto& child : transfer.children) {
+  for (const auto& child : transfer.children()) {
     has_negative = has_negative || child.signature.sense == TimingSense::kNegativeUnate;
     has_positive_or_none
         = has_positive_or_none || child.signature.sense == TimingSense::kPositiveUnate || child.signature.sense == TimingSense::kNoneUsesPositiveFallback;
@@ -88,7 +88,7 @@ void resetRequiredSoa(OptionalSoa<T>& soa, std::size_t size, const T& value)
 
 [[nodiscard]] bool allNegative(const CellTransferModel& transfer)
 {
-  for (const auto& child : transfer.children)
+  for (const auto& child : transfer.children())
     if (child.signature.sense != TimingSense::kNegativeUnate)
       return false;
   return true;
@@ -98,7 +98,7 @@ void resetRequiredSoa(OptionalSoa<T>& soa, std::size_t size, const T& value)
 {
   if (!transfer.is_clock_arc)
     return true;
-  const Transition trigger = transfer.children.front().signature.trigger_transition;
+  const Transition trigger = transfer.children().front().signature.trigger_transition;
   return input_transition == (trigger == Transition::kFall ? Transition::kFall : Transition::kRise);
 }
 
@@ -111,7 +111,7 @@ void resetRequiredSoa(OptionalSoa<T>& soa, std::size_t size, const T& value)
     if (output_transition != expected)
       return false;
   }
-  for (const auto& child : transfer.children)
+  for (const auto& child : transfer.children())
     if (hasOutputTable(child, output_transition))
       return true;
   return false;
@@ -189,8 +189,8 @@ void writeInitializationCache(std::size_t lane, double candidate, AnalysisMode a
 
         bool delay_candidate_seen = false;
         double aggregate_delay = 0.0;
-        for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index) {
-          const auto& child = arc.transfer.children[child_index];
+        for (std::size_t child_index = 0; child_index < arc.transfer.children().size(); ++child_index) {
+          const auto& child = arc.transfer.children()[child_index];
           if (!csrChildSelected(child, input_transition, output_transition))
             continue;
           const TimingTableModel& table = child.delay_tables[csrTransitionIndex(output_transition)];
@@ -300,7 +300,7 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView
       callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
       return EdgeVisitResult::fail(CsrViewError::kCallbackError);
     }
-    const std::size_t count = payload.value().transfer.children.size();
+    const std::size_t count = payload.value().transfer.children().size();
     if (count > std::numeric_limits<std::size_t>::max() - work.timing_arc_count) {
       callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
       return EdgeVisitResult::fail(CsrViewError::kCallbackError);
@@ -340,8 +340,8 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView
     const std::size_t arc_index = entry.arc_id.value();
     const ArcSemanticPayload& arc = payload.value();
     const std::size_t child_offset = result.timing_arc_row_offsets[arc_index];
-    for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index)
-      result.timing_arc_indices[child_offset + child_index] = arc.transfer.children[child_index].signature.arc_index;
+    for (std::size_t child_index = 0; child_index < arc.transfer.children().size(); ++child_index)
+      result.timing_arc_indices[child_offset + child_index] = arc.transfer.children()[child_index].signature.arc_index;
     result.delays.presence[arc_index] = 1;
     result.min_delays.presence[arc_index] = 1;
     result.max_delays.presence[arc_index] = 1;
@@ -353,7 +353,7 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView
       initializeNet(arc_index, result);
     } else if (!arc.output_load) {
       status = CsrCpuReferenceStageStatus::kInvariantViolation;
-    } else if (arc.transfer.children.empty()) {
+    } else if (arc.transfer.children().empty()) {
       initializeEmptyCell(arc_index, arc.transfer, result);
     } else {
       status = initializeNonemptyCell(arc_index, arc, child_offset, result);
@@ -389,7 +389,7 @@ CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges,
   value.present = true;
   value.delay = work.result.arcs.input_output_delays.values[io_lane];
   value.slew = source_slew;
-  if (!arc.transfer.children.empty()) {
+  if (!arc.transfer.children().empty()) {
     if (!arc.output_load)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     bool delay_seen = false;
@@ -397,8 +397,8 @@ CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges,
     double aggregate_delay = 0.0;
     double aggregate_slew = 0.0;
     const std::size_t child_begin = work.result.arcs.timing_arc_row_offsets[arc_index];
-    for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index) {
-      const auto& child = arc.transfer.children[child_index];
+    for (std::size_t child_index = 0; child_index < arc.transfer.children().size(); ++child_index) {
+      const auto& child = arc.transfer.children()[child_index];
       if (!csrChildSelected(child, input_transition, output_transition))
         continue;
       const double output_load = (*arc.output_load)[csrAnalysisIndex(analysis)][csrTransitionIndex(output_transition)];

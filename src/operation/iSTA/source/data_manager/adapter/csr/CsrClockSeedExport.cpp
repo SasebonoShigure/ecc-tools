@@ -299,9 +299,9 @@ std::string resolveClockTag(const ReferenceBuildState& state, const NativeRoleIn
 Transition selectedCrprTransition(const ReferencedLibraryCellModel& cell)
 {
   const auto selected = std::ranges::find_if(cell.cell_arcs, [](const LibraryCellArcModel& arc) { return arc.transfer.is_clock_arc; });
-  if (selected == cell.cell_arcs.end() || selected->transfer.children.empty())
+  if (selected == cell.cell_arcs.end() || selected->transfer.children().empty())
     return Transition::kRise;
-  const Transition trigger = selected->transfer.children.front().signature.trigger_transition;
+  const Transition trigger = selected->transfer.children().front().signature.trigger_transition;
   return trigger == Transition::kNone ? Transition::kRise : trigger;
 }
 

@@ -27,13 +27,12 @@ bool finite(double value)
   return std::isfinite(value);
 }
 
-std::vector<std::size_t> nativeArcOrder(const CsrReferenceInput& input)
+std::vector<std::size_t> adjacencyArcOrder(const CsrReferenceInput& input)
 {
   std::vector<std::size_t> order;
   order.reserve(input.arcs.size());
-  for (std::size_t index = 0; index < input.arcs.size(); ++index)
-    order.push_back(index);
-  std::ranges::sort(order, [&](std::size_t lhs, std::size_t rhs) { return input.arcs[lhs].native_traversal_rank < input.arcs[rhs].native_traversal_rank; });
+  for (const auto id : input.out_arc_ids)
+    order.push_back(id.value());
   return order;
 }
 
@@ -154,7 +153,7 @@ SlowOracleStatus dynamicArc(const CsrReferenceInput& input, std::size_t arc_inde
   const std::size_t io_lane = slowArcIoLane(arc_index, analysis, input_transition, output_transition);
   if (state.result.arcs.input_output_delays.presence[io_lane] == 0)
     return SlowOracleStatus::kInvariant;
-  if (arc.kind == ArcKind::kNet || arc.transfer.children.empty()) {
+  if (arc.kind == ArcKind::kNet || arc.transfer.children().empty()) {
     delay = state.result.arcs.input_output_delays.values[io_lane];
     slew = source_slew;
     return SlowOracleStatus::kSuccess;
@@ -166,8 +165,8 @@ SlowOracleStatus dynamicArc(const CsrReferenceInput& input, std::size_t arc_inde
   bool slew_written = false;
   delay = arc.transfer.delay;
   slew = source_slew;
-  for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index) {
-    const auto& child = arc.transfer.children[child_index];
+  for (std::size_t child_index = 0; child_index < arc.transfer.children().size(); ++child_index) {
+    const auto& child = arc.transfer.children()[child_index];
     if (!childMatches(child, input_transition, output_transition))
       continue;
     if (child.delay_tables[output_transition].present) {
@@ -202,8 +201,8 @@ SlowOracleStatus dynamicArc(const CsrReferenceInput& input, std::size_t arc_inde
 SlowOracleStatus propagateSlewAndDelay(const CsrReferenceInput& input, SlowOracleState& state)
 {
   auto& result = state.result;
-  const std::vector<std::size_t> arc_order = nativeArcOrder(input);
-  for (NodeId node : result.timing_order) {
+  const std::vector<std::size_t> arc_order = adjacencyArcOrder(input);
+  for (NodeId node : result.level_nodes) {
     for (std::size_t arc_index : arc_order) {
       const ArcRecord& arc = input.arcs[arc_index];
       if (arc.source != node || !arc.eligibility.data_slew)
@@ -318,8 +317,8 @@ SlowOracleStatus propagatePathArc(const CsrReferenceInput& input, std::size_t ar
 
 SlowOracleStatus propagateArrivalAndPath(const CsrReferenceInput& input, SlowOracleState& state)
 {
-  const std::vector<std::size_t> arc_order = nativeArcOrder(input);
-  for (NodeId node : state.result.timing_order)
+  const std::vector<std::size_t> arc_order = adjacencyArcOrder(input);
+  for (NodeId node : state.result.level_nodes)
     for (std::size_t arc : arc_order) {
       if (input.arcs[arc].source != node || !input.arcs[arc].eligibility.data_arrival)
         continue;
@@ -352,8 +351,8 @@ SlowOracleStatus propagateRequired(const CsrReferenceInput& input, SlowOracleSta
     result.nodes.requireds.values[endpoint.node.value()] = required;
   }
 
-  const std::vector<std::size_t> arc_order = nativeArcOrder(input);
-  for (auto node = result.timing_order.rbegin(); node != result.timing_order.rend(); ++node)
+  const std::vector<std::size_t> arc_order = adjacencyArcOrder(input);
+  for (auto node = result.level_nodes.rbegin(); node != result.level_nodes.rend(); ++node)
     for (std::size_t arc_index : arc_order) {
       const ArcRecord& arc = input.arcs[arc_index];
       if (arc.source != *node || !arc.eligibility.data_arrival)
@@ -437,7 +436,7 @@ SlowOracleLevelization slowOracleLevelize(const CsrReferenceInput& input)
   for (const auto& arc : input.arcs)
     if (arc.eligibility.levelization)
       ++indegree[arc.sink.value()];
-  const std::vector<std::size_t> arc_order = nativeArcOrder(input);
+  const std::vector<std::size_t> arc_order = adjacencyArcOrder(input);
 
   std::vector<NodeId> ready;
   for (std::size_t node = 0; node < input.nodes.size(); ++node)

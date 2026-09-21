@@ -29,24 +29,24 @@ std::optional<NarrowCaptureError> addNode(
     NodeNames& nodes,
     const timing_edit::StableNodeRef& ref,
     const csr::NodeKey& key,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
-  const auto binding = staged.nodeBindings().find(ref);
-  if (binding == staged.nodeBindings().end()
-      || binding->second.tombstone
-      || binding->second.native_name != key.full_name
-      || binding->second.slot.value() >= plan.after.node_slots)
+  const auto* binding = staged.findNodeBinding(ref);
+  if (binding == nullptr
+      || binding->tombstone
+      || binding->native_name != key.full_name
+      || binding->slot.value() >= plan.after.node_slots)
     return NarrowCaptureError::kBatchBindingMismatch;
   const auto [found, inserted] = nodes.emplace(
-      binding->second.slot.value(), binding->second.native_name);
-  if (!inserted && found->second != binding->second.native_name)
+      binding->slot.value(), binding->native_name);
+  if (!inserted && found->second != binding->native_name)
     return NarrowCaptureError::kDuplicateRequest;
   return std::nullopt;
 }
 
 std::variant<AffectedNames, NarrowCaptureError> affectedNames(
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
   AffectedNames result;
@@ -124,7 +124,7 @@ NativeArcOrderResult captureNativeAffectedArcRows(
     const ista::Database& database,
     const DualSemanticReadView& committed,
     const DualCsrArcGroupIndex& committed_index,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan,
     std::span<const NativeCandidateArcOrderFact> candidates)
 {

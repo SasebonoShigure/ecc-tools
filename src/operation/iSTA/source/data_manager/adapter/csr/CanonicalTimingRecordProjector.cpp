@@ -230,8 +230,9 @@ std::optional<ArcOutputLoadMatrix> projectCanonicalNoParasiticOutputLoad(
   const auto load = net_loads.find(sink_net_name);
   return load == net_loads.end() ? std::optional<ArcOutputLoadMatrix>{ArcOutputLoadMatrix{}} : std::optional<ArcOutputLoadMatrix>{load->second};
 }
-CellTransferModel projectCanonicalArcTransfer(const ArcRecord& arc, const ista::Arc& native_arc)
+CellTransferModel projectCanonicalArcTransfer(const ista::Database& database, NativeLibraryModels& models, const ArcRecord& arc, const ista::Arc& native_arc)
 {
+  models.requireDatabase(database);
   if (arc.kind == ArcKind::kNet) {
     CellTransferModel transfer;
     transfer.delay = 0.0;
@@ -246,6 +247,7 @@ CellTransferModel projectCanonicalArcTransfer(const ArcRecord& arc, const ista::
     transfer.is_disabled = arc.is_disabled;
     return transfer;
   }
-  return exportReferenceCellTransfer(*native_cell_arc);
+  const auto& instance = database.get_instance_map().at(arc.key.base.owner_name);
+  return models.transfer(instance.get_cell_name(), *native_cell_arc);
 }
 }  // namespace ista::csr::detail

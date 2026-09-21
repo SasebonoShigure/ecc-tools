@@ -6,6 +6,7 @@
 // iEDA is licensed under Mulan PSL v2.
 // You may use this software according to the terms and conditions of the Mulan PSL v2.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -106,17 +107,18 @@ void setSlew(ChildTimingArcModel& child, std::size_t output, TimingTableModel ta
 void resetChildren(CsrReferenceInput& input, const std::vector<TimingSense>& senses)
 {
   auto& transfer = input.arcs[cellArcIndex(input)].transfer;
-  requireCpuReference(!transfer.children.empty(), "cell fixture has no child prototype");
-  ChildTimingArcModel prototype = transfer.children.front();
+  requireCpuReference(!transfer.children().empty(), "cell fixture has no child prototype");
+  ChildTimingArcModel prototype = transfer.children().front();
   clearTables(prototype);
-  transfer.children.clear();
+  std::vector<ChildTimingArcModel> children;
   for (std::size_t index = 0; index < senses.size(); ++index) {
     ChildTimingArcModel child = prototype;
     child.signature.arc_index = static_cast<std::int32_t>(7 + index);
     child.signature.sense = senses[index];
     child.signature.trigger_transition = Transition::kNone;
-    transfer.children.push_back(std::move(child));
+    children.push_back(std::move(child));
   }
+  transfer.setChildren(children);
 }
 
 void synchronizeCell(CsrReferenceInput& input, const std::string& name)
@@ -126,7 +128,7 @@ void synchronizeCell(CsrReferenceInput& input, const std::string& name)
   arc.is_clock_arc = arc.transfer.is_clock_arc;
   arc.is_disabled = arc.transfer.is_disabled;
   arc.key.base.library_arcs.clear();
-  for (const auto& child : arc.transfer.children)
+  for (const auto& child : arc.transfer.children())
     arc.key.base.library_arcs.push_back(child.signature);
   input.arc_ids_by_key[cell_arc].key = arc.key;
   input.referenced_library_cells.front().cell_arcs.front().transfer = arc.transfer;
@@ -198,7 +200,7 @@ void testEmptyCellFallback()
   CsrReferenceInput input = makeCpuReferenceCellFixture();
   const std::size_t cell_arc = cellArcIndex(input);
   auto& arc = input.arcs[cell_arc];
-  arc.transfer.children.clear();
+  arc.transfer.setChildren({});
   arc.transfer.delay = 2.0;
   arc.transfer.delay_min = 1.0;
   arc.transfer.delay_max = 3.0;
@@ -243,7 +245,7 @@ void testTablePresenceAndFamilyDispatch()
   {
     CsrReferenceInput input = makeCpuReferenceCellFixture();
     resetChildren(input, {TimingSense::kPositiveUnate});
-    setDelay(input.arcs[cellArcIndex(input)].transfer.children.front(), 0, constantTable(2.0));
+    ista::csr::test::mutateChildren(input.arcs[cellArcIndex(input)].transfer, [&](auto& children) { setDelay(children.front(), 0, constantTable(2.0)); });
     synchronizeCell(input, "delay-only fixture");
     const CsrTimingResult result = runTiming(input, "delay-only missing-fall");
     const std::size_t arc = cellArcIndex(input);
@@ -259,7 +261,7 @@ void testTablePresenceAndFamilyDispatch()
   {
     CsrReferenceInput input = makeCpuReferenceCellFixture();
     resetChildren(input, {TimingSense::kPositiveUnate});
-    setSlew(input.arcs[cellArcIndex(input)].transfer.children.front(), 1, constantTable(0.25));
+    ista::csr::test::mutateChildren(input.arcs[cellArcIndex(input)].transfer, [&](auto& children) { setSlew(children.front(), 1, constantTable(0.25)); });
     synchronizeCell(input, "slew-only fixture");
     const CsrTimingResult result = runTiming(input, "slew-only missing-rise");
     const std::size_t arc = cellArcIndex(input);
@@ -275,7 +277,7 @@ void testTablePresenceAndFamilyDispatch()
   {
     CsrReferenceInput input = makeCpuReferenceCellFixture();
     resetChildren(input, {TimingSense::kPositiveUnate});
-    input.arcs[cellArcIndex(input)].transfer.children.front().check_tables[0] = constantTable(0.5);
+    ista::csr::test::mutateChildren(input.arcs[cellArcIndex(input)].transfer, [&](auto& children) { children.front().check_tables[0] = constantTable(0.5); });
     synchronizeCell(input, "check-only fixture");
     const CsrTimingResult result = runTiming(input, "check-only");
     const std::size_t arc = cellArcIndex(input);
@@ -290,9 +292,11 @@ void testTablePresenceAndFamilyDispatch()
   {
     CsrReferenceInput input = makeCpuReferenceCellFixture();
     resetChildren(input, {TimingSense::kPositiveUnate});
-    auto& child = input.arcs[cellArcIndex(input)].transfer.children.front();
+    ista::csr::test::mutateChildren(input.arcs[cellArcIndex(input)].transfer, [&](auto& children) {
+      auto& child = children.front();
     setDelay(child, 0, {true, TableVariable::kNone, TableVariable::kNone, {}, {}});
     setDelay(child, 1, {true, TableVariable::kNone, TableVariable::kNone, {}, {}});
+    });
     synchronizeCell(input, "present-empty fixture");
     const CsrTimingResult result = runTiming(input, "present-empty");
     const std::size_t arc = cellArcIndex(input);
@@ -325,10 +329,11 @@ void testSenseSelectionMatrix()
   for (const auto& test : cases) {
     CsrReferenceInput input = makeCpuReferenceCellFixture();
     resetChildren(input, test.senses);
-    auto& children = input.arcs[cellArcIndex(input)].transfer.children;
+    auto children = input.arcs[cellArcIndex(input)].transfer.children();
     for (std::size_t child = 0; child < children.size(); ++child)
       for (std::size_t output = 0; output < kTransitionCount; ++output)
         setDelay(children[child], output, constantTable(test.delays[child]));
+    input.arcs[cellArcIndex(input)].transfer.setChildren(children);
     synchronizeCell(input, test.name);
     const CsrTimingResult result = runTiming(input, test.name);
     const std::size_t arc = cellArcIndex(input);
@@ -389,12 +394,14 @@ void testClockTriggerTriStateAndMissingScaffold()
     const std::size_t arc = cellArcIndex(input);
     auto& transfer = input.arcs[arc].transfer;
     transfer.is_clock_arc = true;
-    transfer.children[0].signature.trigger_transition = test.trigger;
-    transfer.children[1].signature.trigger_transition = test.later_trigger;
+    ista::csr::test::mutateChildren(transfer, [&](auto& children) {
+      children[0].signature.trigger_transition = test.trigger;
+    children[1].signature.trigger_transition = test.later_trigger;
     for (std::size_t output = 0; output < kTransitionCount; ++output) {
-      setDelay(transfer.children[0], output, constantTable(2.0));
-      setDelay(transfer.children[1], output, constantTable(4.0));
+      setDelay(children[0], output, constantTable(2.0));
+      setDelay(children[1], output, constantTable(4.0));
     }
+    });
     synchronizeCell(input, test.name);
     const CsrTimingResult result = runTiming(input, test.name);
     for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis) {
@@ -407,7 +414,7 @@ void testClockTriggerTriStateAndMissingScaffold()
       requirePresent(result.arcs.graph_delays, ioLane(arc, analysis, test.active, 1 - test.active), 1.0, "clock cross fallback graph");
       requireCache(result, 0, analysis, test.active, test.active, 2.0, 0, "clock first-child cache");
       requireCache(result, 1, analysis, test.active, test.active, 4.0, 0, "clock later-child cache");
-      for (std::size_t child = 0; child < transfer.children.size(); ++child)
+      for (std::size_t child = 0; child < transfer.children().size(); ++child)
         requireCache(result, child, analysis, test.active, 1 - test.active, std::nullopt, 0, "clock filtered cache");
       requirePresent(result.arcs.transition_delays, transitionLane(arc, analysis, 1 - test.active), 0.0, "clock missing-trigger scaffold");
     }
@@ -427,8 +434,8 @@ void testTwoDimensionalLoadKAT()
   resetChildren(input, {TimingSense::kPositiveUnate});
   const std::size_t arc = cellArcIndex(input);
   TimingTableModel table{true, TableVariable::kInputTransition, TableVariable::kOutputCapacitance, {{0.0, 1.0}, {0.0, 1.0}}, {0.0, 4.0, 8.0, 12.0}};
-  setDelay(input.arcs[arc].transfer.children.front(), 0, table);
-  setDelay(input.arcs[arc].transfer.children.front(), 1, table);
+  ista::csr::test::mutateChildren(input.arcs[arc].transfer, [&](auto& children) { setDelay(children.front(), 0, table);
+  setDelay(children.front(), 1, table); });
 
   ArcOutputLoadMatrix load{};
   load[0] = {0.25, 0.5};
@@ -467,11 +474,12 @@ void testRawNearTieWinnersAndLoserCaches()
   CsrReferenceInput input = makeCpuReferenceCellFixture();
   resetChildren(input, {TimingSense::kPositiveUnate, TimingSense::kPositiveUnate});
   const std::size_t arc = cellArcIndex(input);
-  auto& children = input.arcs[arc].transfer.children;
+  auto children = input.arcs[arc].transfer.children();
   for (std::size_t output = 0; output < kTransitionCount; ++output) {
     setDelay(children[0], output, constantTable(low));
     setDelay(children[1], output, constantTable(high));
   }
+  input.arcs[arc].transfer.setChildren(children);
   synchronizeCell(input, "raw near-tie fixture");
   const CsrTimingResult result = runTiming(input, "raw near-tie");
   requirePresent(result.arcs.delays, arc, high, "near-tie scalar max");
@@ -511,12 +519,14 @@ void testIgnoredNoSpefPayloadIsolation()
   CsrReferenceInput baseline_input = makeCpuReferenceCellFixture();
   CsrReferenceInput ignored_input = baseline_input;
   auto& arc = ignored_input.arcs[cellArcIndex(ignored_input)];
-  auto& child = arc.transfer.children.front();
+  ista::csr::test::mutateChildren(arc.transfer, [&](auto& children) {
+      auto& child = children.front();
   child.slew_derate = 3.0;
   child.slew_lower_threshold_pct = {0.1, 0.2};
   child.slew_upper_threshold_pct = {0.8, 0.9};
   child.input_threshold_pct = {0.4, 0.6};
   child.output_threshold_pct = {0.45, 0.55};
+    });
   arc.transfer.is_clear_or_preset = true;
   synchronizeCell(ignored_input, "ignored library payload fixture");
   CsrTimingResult baseline = runTiming(baseline_input, "ignored library baseline");

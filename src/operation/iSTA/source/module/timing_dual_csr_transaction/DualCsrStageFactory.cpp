@@ -17,49 +17,102 @@
 #include "../../data_manager/adapter/csr/DualCsrSemanticIdentity.hpp"
 #include "../../data_manager/adapter/csr/TimingEditDualCsrDescriptorBuilder.hpp"
 #include "CpuIncrementalLevelizationPipeline.hpp"
+#include "MixedLevelizationInternal.hpp"
 #include "CsrCpuReferenceBackendInternal.hpp"
 #include "DualCsrArcGroupResolverValidation.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrStateValidation.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
 #include "DualCsrTransactionCoordinator.hpp"
-#include "DualCsrUpdater.hpp"
+#include "DualCsrDescriptorValidation.hpp"
+#include "DualCsrUpdaterInternal.hpp"
+#include "DualCsrArcGroupIndexValidation.hpp"
 #include "NarrowCaptureAuditValidation.hpp"
 
 namespace ista::timing_dual_csr {
+
+struct DualCsrVerifiedStage::Data
+{
+  // Keep the owner alive until the two undo records have been destroyed.
+  std::shared_ptr<CommittedDualCsrAnalysisState> owner;
+  DualCsrCommitBinding expected;
+  timing_edit::AppendOnlyHighWater before_high_water;
+  std::uint64_t fallback_before;
+  DualCsrBatchDescriptor descriptor;
+  timing_edit::EditBatch semantic_batch;
+  DualCsrTimingResult timing;
+  std::optional<timing_edit::CommittedEditIdentity> identity;
+  std::optional<DualCsrPendingBatch> batch;
+  DualCsrStageTimings timings;
+  timing_edit::PreparedTimingEditResolverPatch resolver_patch;
+  detail::PreparedDualCsrGraphPatch graph_patch;
+  detail::PreparedDualCsrIndexPatch index_patch;
+
+  Data(std::shared_ptr<CommittedDualCsrAnalysisState> state,
+       const timing_edit::PreparedBatch& prepared,
+       timing_edit::TimingEditResolverDelta resolver_delta,
+       DualCsrBatchDescriptor delta)
+      : owner(std::move(state)), expected(*owner), before_high_water(owner->graph.high_water),
+        fallback_before(owner->graph.telemetry.fallback_count),
+        descriptor(std::move(delta)),
+        semantic_batch{prepared.expectedGeneration(), prepared.normalizedEdits()},
+        resolver_patch(owner->resolver, std::move(resolver_delta)),
+        graph_patch(owner->graph, descriptor), index_patch(owner->graph, owner->arc_group_index, descriptor)
+  {
+  }
+};
+
+const DualCsrPendingBatch& DualCsrVerifiedStage::batch() const noexcept { return *_data->batch; }
+const DualCsrStageTimings& DualCsrVerifiedStage::timings() const noexcept { return _data->timings; }
 
 class DualCsrStageFactoryAccess final
 {
  public:
   struct ConsumedBatch
   {
+    const DualCsrState* source_graph;
     timing_edit::PreparedBatch prepared_batch;
-    timing_edit::TimingEditResolverState staged_resolver;
+    timing_edit::TimingEditResolverDelta resolver_delta;
     DualCsrBatchDescriptor descriptor;
-    ExpectedBeforeBinding expected_before;
     NarrowCaptureAudit capture_audit;
   };
 
   [[nodiscard]] static ConsumedBatch consume(
       VerifiedStructuredBatch&& batch)
   {
-    return {std::move(batch._prepared_batch),
-            std::move(batch._staged_resolver),
+    return {batch._source_graph, std::move(batch._prepared_batch),
+            std::move(batch._resolver_delta),
             std::move(batch._descriptor),
-            std::move(batch._expected_before),
             std::move(batch._capture_audit)};
   }
 
-  [[nodiscard]] static DualCsrVerifiedStage makeVerified(
-      const CommittedDualCsrAnalysisState& expected,
-      CommittedDualCsrAnalysisState staged,
-      DualCsrStageTimings timings)
+  using StageData = DualCsrVerifiedStage::Data;
+
+  [[nodiscard]] static bool available(const DualCsrTransactionCoordinator& coordinator)
   {
-    return DualCsrVerifiedStage(expected, std::move(staged), timings);
+    return !coordinator._poisoned && coordinator._pending.expired();
+  }
+
+  [[nodiscard]] static std::shared_ptr<StageData> begin(
+      DualCsrTransactionCoordinator& coordinator, ConsumedBatch batch)
+  {
+    coordinator.reserveHistory();
+    auto stage = std::make_shared<StageData>(coordinator._committed, batch.prepared_batch,
+                                            std::move(batch.resolver_delta), std::move(batch.descriptor));
+    coordinator._pending = stage;
+    stage->resolver_patch.apply();
+    stage->graph_patch.apply();
+    stage->index_patch.apply();
+    return stage;
+  }
+
+  [[nodiscard]] static DualCsrVerifiedStage makeVerified(std::shared_ptr<StageData> stage)
+  {
+    return DualCsrVerifiedStage(std::move(stage));
   }
 
   [[nodiscard]] static LevelizationExecutionTrace makeExecutionTrace(timing_edit::TransactionGeneration generation, LevelizationExecutionMode mode,
-                                                                     const csr::CsrFifoLevelization& levels, csr::CsrTraversalTelemetry traversal,
+                                                                     const csr::CsrTimingValues& levels, csr::CsrTraversalTelemetry traversal,
                                                                      csr::CsrFullLevelizerEntryDelta&& entry_delta, std::uint64_t fallback_count,
                                                                      bool supplied_levels_validated, std::optional<MixedLevelizationDeterministicTrace> mixed)
   {
@@ -110,40 +163,8 @@ MixedLevelizationFailure makeMixedFailure(
 bool baselineMatches(const CommittedDualCsrAnalysisState& committed,
                      const timing_edit::PreparedBatch& batch)
 {
-  if (!committed.semantic_trace.empty())
-    return batch.baseline() == committed.semantic_trace.front().baseline;
-  return committed.generation.value() == 0
-         && committed.identity.generation
-                == timing_edit::TransactionGeneration{0}
-         && committed.identity.current_fingerprints
-                == batch.baseline().fingerprints
-         && committed.identity.canonical_pre_state
-                == batch.baseline().canonical_pre_state;
-}
-
-timing_edit::DesignEditPlan semanticPlan(
-    const timing_edit::PreparedBatch& batch)
-{
-  return {.schema_version = timing_edit::kDesignEditPlanSchema,
-          .baseline = batch.baseline(),
-          .expected_generation = batch.expectedGeneration(),
-          .edits = batch.normalizedEdits()};
-}
-
-std::vector<std::uint8_t> activeArcMask(const DualCsrState& graph)
-{
-  std::vector<std::uint8_t> mask;
-  mask.reserve(graph.arc_slots.size());
-  for (const auto& slot : graph.arc_slots)
-    mask.push_back(slot.active ? 1U : 0U);
-  return mask;
-}
-
-csr::CsrFifoLevelization levelizationFromTiming(
-    const csr::CsrTimingResult& timing)
-{
-  return {true, timing.level_offsets, timing.level_nodes,
-          timing.node_to_level};
+  return committed.baseline && (batch.baselineOwner() == committed.baseline
+                                || batch.baseline() == *committed.baseline);
 }
 
 std::optional<std::uint64_t> counterDelta(
@@ -154,44 +175,29 @@ std::optional<std::uint64_t> counterDelta(
   return after - before;
 }
 
-struct PreparedStage
-{
-  timing_edit::PreparedBatch prepared_batch;
-  timing_edit::TimingEditResolverState staged_resolver;
-  DualCsrBatchDescriptor descriptor;
-  DualCsrState graph;
-  DualCsrArcGroupIndex arc_group_index;
-  timing_edit::DesignEditPlan semantic_batch;
-  DualCsrStageTimings timings;
-};
-
-using PreparedStageAttempt
-    = std::variant<PreparedStage, DualCsrStageFailure>;
+using PreparedStage = std::shared_ptr<DualCsrStageFactoryAccess::StageData>;
+using PreparedStageAttempt = std::variant<PreparedStage, DualCsrStageFailure>;
 
 PreparedStageAttempt prepareStage(
-    const CommittedDualCsrAnalysisState& committed,
+    DualCsrTransactionCoordinator& coordinator,
     DualCsrStageFactoryAccess::ConsumedBatch batch)
 {
+  if (!DualCsrStageFactoryAccess::available(coordinator))
+    return makeDualFailure(DualCsrStageFailureOrigin::kCapability, DualCsrViolationCode::kConflict,
+                           "stage.owner", "owner is pending or poisoned");
+  const auto& committed = coordinator.committed();
   DualCsrViolations violations;
-  if (incregpusta_debug_checks_enabled
-      && (batch.expected_before.graph() != committed.graph || batch.expected_before.resolver() != committed.resolver
-          || batch.expected_before.arcGroupIndex() != committed.arc_group_index || batch.expected_before.identity() != committed.identity))
-    return makeDualFailure(
-        DualCsrStageFailureOrigin::kExactBefore,
-        DualCsrViolationCode::kExpectedValue,
-        "stage.exact_before",
-        "verified capability is not bound to the exact committed aggregate");
-
   const std::uint64_t expected = committed.generation.value();
-  if (expected == std::numeric_limits<std::uint64_t>::max() || batch.prepared_batch.sealed() || batch.prepared_batch.targetPostCommittedIdentity()
+  if (expected == std::numeric_limits<std::uint64_t>::max()
       || batch.prepared_batch.sessionToken() != committed.graph.session_token || batch.prepared_batch.expectedGeneration() != committed.generation
       || batch.prepared_batch.targetGeneration() != timing_edit::TransactionGeneration{expected + 1}
-      || batch.prepared_batch.expectedPreCommittedIdentity() != committed.identity
+      || batch.source_graph != &committed.graph
+      || (incregpusta_debug_checks_enabled && batch.prepared_batch.expectedPreCommittedIdentity() != committed.identity)
       || batch.prepared_batch.policyReceipt().disposition != timing_edit::EditDisposition::kSupported || !baselineMatches(committed, batch.prepared_batch)
       || batch.descriptor.session_token != batch.prepared_batch.sessionToken()
       || batch.descriptor.expected_generation != batch.prepared_batch.expectedGeneration()
       || batch.descriptor.target_generation != batch.prepared_batch.targetGeneration() || batch.descriptor.before != batch.prepared_batch.slotPlan().before
-      || batch.descriptor.after != batch.prepared_batch.slotPlan().after || batch.staged_resolver.highWater() != batch.descriptor.after
+      || batch.descriptor.after != batch.prepared_batch.slotPlan().after || batch.resolver_delta.highWater() != batch.descriptor.after
       || (incregpusta_debug_checks_enabled
           && !validateNarrowCaptureAudit(batch.capture_audit,
                                          NarrowCaptureAuditExpectation{batch.descriptor.after, batch.descriptor.logical_deactivations.size()})))
@@ -200,84 +206,35 @@ PreparedStageAttempt prepareStage(
         DualCsrViolationCode::kGeneration, "stage.capability",
         "verified batch and exact committed state do not form the next generation");
 
-  try {
-    if (incregpusta_debug_checks_enabled && committed.resolver.stage(batch.prepared_batch) != batch.staged_resolver)
-      return makeDualFailure(
-          DualCsrStageFailureOrigin::kCapability,
-          DualCsrViolationCode::kConflict, "stage.resolver",
-          "verified staged resolver is not the exact batch transition");
-  } catch (const std::invalid_argument& error) {
-    return makeDualFailure(DualCsrStageFailureOrigin::kCapability,
-                           DualCsrViolationCode::kConflict,
-                           "stage.resolver", error.what());
-  }
-
   const auto update_started = SteadyClock::now();
-  DualCsrIndexedUpdateAttempt graph_attempt = DualCsrUpdater::stage(
-      committed.graph, committed.arc_group_index, batch.descriptor);
-  const double update_ms = elapsedMilliseconds(update_started);
-  if (!graph_attempt.success())
-    return makeDualFailure(DualCsrStageFailureOrigin::kUpdater,
-                           std::move(graph_attempt.violations));
-
-  DualCsrState graph = std::move(*graph_attempt.state);
-  DualCsrArcGroupIndex arc_group_index
-      = std::move(*graph_attempt.arc_group_index);
-  double invariant_ms = 0.0;
-  if constexpr (incregpusta_debug_checks_enabled) {
-    const auto invariant_started = SteadyClock::now();
-    violations = validateDualCsrArcGroupResolverTransition(committed.arc_group_index, arc_group_index, batch.descriptor, batch.staged_resolver);
-    invariant_ms = elapsedMilliseconds(invariant_started);
-  }
+  violations = validateDualCsrDescriptor(committed.graph, batch.descriptor);
+  if (violations.empty())
+    violations = validateDualCsrArcGroupIndexDelta(committed.graph, committed.arc_group_index, batch.descriptor);
   if (!violations.empty())
-    return makeDualFailure(DualCsrStageFailureOrigin::kStateValidation,
-                           std::move(violations));
-
-  timing_edit::DesignEditPlan semantic_batch
-      = semanticPlan(batch.prepared_batch);
-  return PreparedStage{
-      .prepared_batch = std::move(batch.prepared_batch),
-      .staged_resolver = std::move(batch.staged_resolver),
-      .descriptor = std::move(batch.descriptor),
-      .graph = std::move(graph),
-      .arc_group_index = std::move(arc_group_index),
-      .semantic_batch = std::move(semantic_batch),
-      .timings = {.dual_csr_update_ms = update_ms,
-                  .invariant_ms = invariant_ms}};
+    return makeDualFailure(DualCsrStageFailureOrigin::kUpdater, std::move(violations));
+  auto stage = DualCsrStageFactoryAccess::begin(coordinator, std::move(batch));
+  stage->timings.dual_csr_update_ms = elapsedMilliseconds(update_started);
+  return stage;
 }
 
-using BuiltStateAttempt
-    = std::variant<CommittedDualCsrAnalysisState, DualCsrStageFailure>;
+using BuiltStateAttempt = std::variant<PreparedStage, DualCsrStageFailure>;
 
 BuiltStateAttempt buildStagedState(
-    const CommittedDualCsrAnalysisState& committed,
-    PreparedStage stage, DualCsrTimingResult timing,
-    LevelizationExecutionTrace execution)
+    PreparedStage stage, DualCsrTimingResult timing, LevelizationExecutionTrace execution)
 {
-  DualCsrViolations violations;
-  timing_edit::CommittedEditIdentity identity
-      = deriveDualCsrCommittedIdentity(stage.graph,
-                                       stage.staged_resolver);
-  CommittedDualCsrAnalysisState staged{
-      .graph = std::move(stage.graph),
-      .timing = std::move(timing),
-      .resolver = std::move(stage.staged_resolver),
-      .arc_group_index = std::move(stage.arc_group_index),
-      .identity = std::move(identity),
-      .generation = stage.descriptor.target_generation,
-      .descriptor_trace = committed.descriptor_trace,
-      .semantic_trace = committed.semantic_trace,
-      .traversal_telemetry = execution.traversal(),
-      .execution_trace = committed.execution_trace};
-  staged.descriptor_trace.push_back(std::move(stage.descriptor));
-  staged.semantic_trace.push_back(std::move(stage.semantic_batch));
-  staged.execution_trace.push_back(std::move(execution));
   if constexpr (incregpusta_debug_checks_enabled)
-    violations = validateCommittedDualCsrAnalysisState(staged);
-  if (!violations.empty())
-    return makeDualFailure(DualCsrStageFailureOrigin::kStateValidation,
-                           std::move(violations));
-  return staged;
+    stage->identity = deriveDualCsrCommittedIdentity(stage->owner->graph, stage->owner->resolver);
+  stage->timing = std::move(timing);
+  stage->batch.emplace(DualCsrPendingBatch{std::move(stage->semantic_batch), std::move(execution),
+                                          {}});
+  if constexpr (incregpusta_debug_checks_enabled) {
+    stage->batch->descriptor = std::move(stage->descriptor);
+    auto violations = validatePendingDualCsrAnalysisState(*stage->owner, stage->timing, stage->owner->resolver,
+                                                          stage->identity, *stage->batch, stage->before_high_water);
+    if (!violations.empty())
+      return makeDualFailure(DualCsrStageFailureOrigin::kStateValidation, std::move(violations));
+  }
+  return stage;
 }
 
 void assignFailure(DualCsrStageAttempt& attempt,
@@ -300,12 +257,12 @@ MixedLevelizationFailure forbiddenFullEntry(
 }  // namespace
 
 DualCsrStageAttempt makeStagedDualCsrAnalysisState(
-    const CommittedDualCsrAnalysisState& committed,
+    DualCsrTransactionCoordinator& coordinator,
     VerifiedStructuredBatch&& verified_batch)
 {
   DualCsrStageAttempt attempt;
   auto prepared_attempt = prepareStage(
-      committed,
+      coordinator,
       DualCsrStageFactoryAccess::consume(std::move(verified_batch)));
   if (auto* failure
       = std::get_if<DualCsrStageFailure>(&prepared_attempt)) {
@@ -314,10 +271,10 @@ DualCsrStageAttempt makeStagedDualCsrAnalysisState(
   }
   PreparedStage stage
       = std::move(std::get<PreparedStage>(prepared_attempt));
-  attempt.timings = stage.timings;
+  attempt.timings = stage->timings;
 
-  DualCsrEdgeViewImpl edges(stage.graph);
-  DualCsrTimingPayloadViewImpl payloads(stage.graph);
+  DualCsrEdgeViewImpl edges(stage->owner->graph);
+  DualCsrTimingPayloadViewImpl payloads(stage->owner->graph);
   auto guard = csr::beginCsrFullLevelizerOperation();
   auto computation = csr::detail::computeCsrCpuReferenceForStage(edges, payloads);
   auto entry_delta = std::move(guard).finish();
@@ -337,12 +294,9 @@ DualCsrStageAttempt makeStagedDualCsrAnalysisState(
     return attempt;
   }
 
-  csr::CsrFifoLevelization levels;
-  if constexpr (incregpusta_debug_checks_enabled)
-    levels = levelizationFromTiming(*values);
   const auto fallback_delta = counterDelta(
-      committed.graph.telemetry.fallback_count,
-      stage.graph.telemetry.fallback_count);
+      stage->fallback_before,
+      stage->owner->graph.telemetry.fallback_count);
   if (!fallback_delta) {
     assignFailure(
         attempt,
@@ -353,17 +307,16 @@ DualCsrStageAttempt makeStagedDualCsrAnalysisState(
     return attempt;
   }
 
-  stage.graph.telemetry.traversal = computation.telemetry;
+  stage->owner->graph.telemetry.traversal = computation.telemetry;
   LevelizationExecutionTrace execution
       = DualCsrStageFactoryAccess::makeExecutionTrace(
-          stage.descriptor.target_generation,
-          LevelizationExecutionMode::kFullStage5, std::move(levels),
+          stage->descriptor.target_generation,
+          LevelizationExecutionMode::kFullStage5, *values,
           computation.telemetry, std::move(entry_delta),
           *fallback_delta, false, std::nullopt);
-  DualCsrTimingResult timing{std::move(*values),
-                             activeArcMask(stage.graph)};
+  DualCsrTimingResult timing{std::move(*values)};
   const auto verify_started = SteadyClock::now();
-  auto built = buildStagedState(committed, std::move(stage),
+  auto built = buildStagedState(std::move(stage),
                                 std::move(timing),
                                 std::move(execution));
   attempt.timings.verify_ms = elapsedMilliseconds(verify_started);
@@ -371,19 +324,18 @@ DualCsrStageAttempt makeStagedDualCsrAnalysisState(
     assignFailure(attempt, std::move(*failure));
     return attempt;
   }
-  attempt.staged.emplace(DualCsrStageFactoryAccess::makeVerified(
-      committed,
-      std::move(std::get<CommittedDualCsrAnalysisState>(built)),
-      attempt.timings));
+  auto ready = std::move(std::get<PreparedStage>(built));
+  ready->timings = attempt.timings;
+  attempt.staged.emplace(DualCsrStageFactoryAccess::makeVerified(std::move(ready)));
   return attempt;
 }
 
 MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
-    const CommittedDualCsrAnalysisState& exact_committed_before,
+    DualCsrTransactionCoordinator& coordinator,
     VerifiedStructuredBatch&& verified_batch)
 {
   auto prepared_attempt = prepareStage(
-      exact_committed_before,
+      coordinator,
       DualCsrStageFactoryAccess::consume(std::move(verified_batch)));
   if (auto* failure
       = std::get_if<DualCsrStageFailure>(&prepared_attempt))
@@ -391,20 +343,21 @@ MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
   PreparedStage stage
       = std::move(std::get<PreparedStage>(prepared_attempt));
 
-  DualCsrEdgeViewImpl edges(stage.graph);
-  DualCsrTimingPayloadViewImpl payloads(stage.graph);
-  const csr::CsrFifoLevelization previous
-      = levelizationFromTiming(exact_committed_before.timing.values);
-  const std::uint64_t generation = stage.descriptor.target_generation.value();
+  DualCsrEdgeViewImpl edges(stage->owner->graph);
+  DualCsrTimingPayloadViewImpl payloads(stage->owner->graph);
+  const auto& previous_timing = stage->owner->timing.values;
+  const timing_incremental_levelization::detail::PreviousLevels previous{
+      previous_timing.level_offsets, previous_timing.level_nodes, previous_timing.node_to_level, true};
+  const std::uint64_t generation = stage->descriptor.target_generation.value();
   auto guard = csr::beginCsrFullLevelizerOperation();
   auto mixed_attempt
-      = timing_incremental_levelization::runCpuIncrementalLevelization(
+      = timing_incremental_levelization::detail::runOwnedCpuIncrementalLevelization(
           edges, previous,
           MixedLevelizationRequest{
               .n_last_nodes = static_cast<std::uint64_t>(
-                  exact_committed_before.graph.nodes.size()),
+                  stage->before_high_water.node_slots),
               .generation_before
-                  = exact_committed_before.generation.value(),
+                  = stage->owner->generation.value(),
               .generation_after = generation});
   if (auto* failure
       = std::get_if<MixedLevelizationFailure>(&mixed_attempt)) {
@@ -415,14 +368,14 @@ MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
   }
   MixedLevelizationSuccess mixed
       = std::move(std::get<MixedLevelizationSuccess>(mixed_attempt));
-  stage.timings.mixed_build_ms = mixed.telemetry.mixed_build_ms;
-  stage.timings.mixed_kahn_ms = mixed.telemetry.mixed_kahn_ms;
-  stage.timings.reconstruct_ms = mixed.telemetry.reconstruct_ms;
-  auto computation = csr::detail::propagateCsrCpuReferenceWithLevels(edges, payloads, mixed.levels);
+  stage->timings.mixed_build_ms = mixed.telemetry.mixed_build_ms;
+  stage->timings.mixed_kahn_ms = mixed.telemetry.mixed_kahn_ms;
+  stage->timings.reconstruct_ms = mixed.telemetry.reconstruct_ms;
+  auto computation = csr::detail::propagateCsrCpuReferenceWithLevels(edges, payloads, std::move(mixed.levels));
   auto entry_delta = std::move(guard).finish();
   if (entry_delta.value() != 0)
     return forbiddenFullEntry(generation, entry_delta.value());
-  stage.timings.full_propagation_ms
+  stage->timings.full_propagation_ms
       = computation.phase_timings.propagation_ms;
   auto* values
       = std::get_if<csr::CsrTimingResult>(&computation.computation.outcome);
@@ -434,8 +387,8 @@ MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
         "external-level full CPU propagation did not produce timing");
 
   const auto fallback_delta = counterDelta(
-      exact_committed_before.graph.telemetry.fallback_count,
-      stage.graph.telemetry.fallback_count);
+      stage->fallback_before,
+      stage->owner->graph.telemetry.fallback_count);
   if (!fallback_delta
       || *fallback_delta != mixed.telemetry.fallback_count)
     return makeMixedFailure(
@@ -443,28 +396,76 @@ MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
         MixedFailureOrigin::kPropagation, std::nullopt, generation,
         "mixed fallback telemetry differs from the real graph counter delta");
 
-  stage.graph.telemetry.traversal = computation.telemetry;
+  stage->owner->graph.telemetry.traversal = computation.telemetry;
   LevelizationExecutionTrace execution
       = DualCsrStageFactoryAccess::makeExecutionTrace(
-          stage.descriptor.target_generation,
-          LevelizationExecutionMode::kMixedStage6, mixed.levels,
+          stage->descriptor.target_generation,
+          LevelizationExecutionMode::kMixedStage6, *values,
           computation.telemetry, std::move(entry_delta),
           *fallback_delta, true,
           projectDeterministicMixedTrace(mixed.telemetry));
-  DualCsrTimingResult timing{std::move(*values),
-                             activeArcMask(stage.graph)};
+  DualCsrTimingResult timing{std::move(*values)};
   const auto verify_started = SteadyClock::now();
-  DualCsrStageTimings timings = stage.timings;
-  auto built = buildStagedState(exact_committed_before,
-                                std::move(stage), std::move(timing),
+  DualCsrStageTimings timings = stage->timings;
+  auto built = buildStagedState(std::move(stage), std::move(timing),
                                 std::move(execution));
   timings.verify_ms = elapsedMilliseconds(verify_started);
   if (auto* failure = std::get_if<DualCsrStageFailure>(&built))
     return std::move(*failure);
-  return DualCsrStageFactoryAccess::makeVerified(
-      exact_committed_before,
-      std::move(std::get<CommittedDualCsrAnalysisState>(built)),
-      timings);
+  auto ready = std::move(std::get<PreparedStage>(built));
+  ready->timings = timings;
+  return DualCsrStageFactoryAccess::makeVerified(std::move(ready));
+}
+
+DualCsrTransactionStatus DualCsrTransactionCoordinator::publish(
+    DualCsrVerifiedStage verified, DualCsrPublishFailpoint failpoint)
+{
+  const auto cancel = [&](DualCsrTransactionCode code) {
+    // A by-value parameter may outlive this call until the caller's full
+    // expression ends. Undo and release pending before reporting rejection.
+    verified._data.reset();
+    return reject(code);
+  };
+  if (_poisoned)
+    return cancel(DualCsrTransactionCode::kPoisoned);
+  if (failpoint != DualCsrPublishFailpoint::kNone
+      && (!incregpusta_debug_checks_enabled
+          || (failpoint != DualCsrPublishFailpoint::kBeforeSwap && failpoint != DualCsrPublishFailpoint::kAfterSwap)))
+    return cancel(DualCsrTransactionCode::kUnknownFailpoint);
+  const auto& stage = verified._data;
+  if (!stage || stage->owner != _committed || _pending.lock() != stage || !stage->expected.matches(*_committed))
+    return cancel(DualCsrTransactionCode::kTraceMismatch);
+  auto& current = *_committed;
+  if (!stage->batch || current.graph.generation.value() != current.generation.value() + 1
+      || (stage->identity && stage->identity->generation != current.graph.generation)
+      || (incregpusta_debug_checks_enabled && !stage->identity))
+    return cancel(DualCsrTransactionCode::kStaleGeneration);
+  auto& batch = *stage->batch;
+  if (batch.semantic.expected_generation != current.generation || batch.execution.generation() != current.graph.generation
+      || !current.baseline)
+    return cancel(DualCsrTransactionCode::kTraceMismatch);
+  if (failpoint == DualCsrPublishFailpoint::kBeforeSwap)
+    return cancel(DualCsrTransactionCode::kPreSwapFault);
+
+  // History, values and undo were fully prepared before apply.
+  using std::swap;
+  swap(current.timing, stage->timing);
+  swap(current.identity, stage->identity);
+  current.semantic_trace.push_back(std::move(batch.semantic));
+  current.execution_trace.push_back(std::move(batch.execution));
+  if constexpr (incregpusta_debug_checks_enabled)
+    current.descriptor_trace.push_back(std::move(*batch.descriptor));
+  current.generation = current.graph.generation;
+  current.traversal_telemetry = current.graph.telemetry.traversal;
+  stage->index_patch.commit();
+  stage->graph_patch.commit();
+  stage->resolver_patch.commit();
+  _pending.reset();
+  if (failpoint == DualCsrPublishFailpoint::kAfterSwap) {
+    _poisoned = true;
+    return {DualCsrTransactionCode::kPostSwapPoisoned, true, true};
+  }
+  return {DualCsrTransactionCode::kOk, true, false};
 }
 
 }  // namespace ista::timing_dual_csr

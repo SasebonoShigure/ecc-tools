@@ -12,38 +12,34 @@
 #include <utility>
 
 #include "DualCsrArcGroupResolverValidation.hpp"
+#include "DualCsrStructuredBatchPreparer.hpp"
 
 namespace ista::timing_dual_csr {
 namespace {
 
-bool prefixMatches(const CommittedDualCsrAnalysisState& committed,
-                   const CommittedDualCsrAnalysisState& staged)
+template<typename T>
+void reserveNext(std::vector<T>& records)
 {
-  if (staged.descriptor_trace.size() != committed.descriptor_trace.size() + 1
-      || staged.semantic_trace.size() != committed.semantic_trace.size() + 1
-      || staged.execution_trace.size()
-             != committed.execution_trace.size() + 1)
-    return false;
-  return std::equal(committed.descriptor_trace.begin(),
-                    committed.descriptor_trace.end(),
-                    staged.descriptor_trace.begin())
-         && std::equal(committed.semantic_trace.begin(),
-                       committed.semantic_trace.end(),
-                       staged.semantic_trace.begin())
-         && std::equal(committed.execution_trace.begin(),
-                       committed.execution_trace.end(),
-                       staged.execution_trace.begin());
+  if (records.size() == records.max_size())
+    throw std::length_error("Dual-CSR history capacity exhausted");
+  if (records.size() == records.capacity()) {
+    const auto capacity = records.capacity();
+    records.reserve(capacity > records.max_size() / 2 ? records.max_size() : std::max<std::size_t>(1, capacity * 2));
+  }
 }
 
 }  // namespace
 
 DualCsrTransactionCoordinator::DualCsrTransactionCoordinator(
     CommittedDualCsrAnalysisState initial)
-    : _committed(std::move(initial))
+    : _committed(std::make_shared<CommittedDualCsrAnalysisState>(std::move(initial)))
 {
-  const auto errors = validateCommittedDualCsrAnalysisState(_committed);
+  if (!_committed->baseline)
+    throw std::invalid_argument("initial Dual-CSR aggregate has no baseline");
+  _committed->baseline = std::make_shared<const timing_edit::BaselineSemanticIdentity>(*_committed->baseline);
+  const auto errors = validateCommittedDualCsrAnalysisState(*_committed);
   const auto binding_errors = validateDualCsrArcGroupResolverFull(
-      _committed.arc_group_index, _committed.resolver);
+      _committed->arc_group_index, _committed->resolver);
   if (!errors.empty() || !binding_errors.empty())
     throw std::invalid_argument("invalid initial Dual-CSR aggregate");
 }
@@ -54,37 +50,29 @@ DualCsrTransactionStatus DualCsrTransactionCoordinator::reject(
   return {code, false, _poisoned};
 }
 
-DualCsrTransactionStatus DualCsrTransactionCoordinator::publish(
-    DualCsrVerifiedStage verified,
-    DualCsrPublishFailpoint failpoint)
+const CommittedDualCsrAnalysisState& DualCsrTransactionCoordinator::committed() const
+{
+  if (!_pending.expired())
+    throw std::logic_error("Dual-CSR query is unavailable during a pending transaction");
+  return *_committed;
+}
+
+PendingStructuredBatch DualCsrTransactionCoordinator::prepareBatch(timing_edit::EditBatch edits) const
 {
   if (_poisoned)
-    return reject(DualCsrTransactionCode::kPoisoned);
-  if (failpoint != DualCsrPublishFailpoint::kNone
-      && (!incregpusta_debug_checks_enabled || (failpoint != DualCsrPublishFailpoint::kBeforeSwap && failpoint != DualCsrPublishFailpoint::kAfterSwap)))
-    return reject(DualCsrTransactionCode::kUnknownFailpoint);
-  if (incregpusta_debug_checks_enabled && !validateCommittedDualCsrAnalysisState(_committed).empty()) {
-    _poisoned = true;
-    return reject(DualCsrTransactionCode::kInvalidCommittedState);
-  }
-  if (!(verified._expected_committed.matches(_committed)))
-    return reject(DualCsrTransactionCode::kTraceMismatch);
+    throw std::logic_error("Dual-CSR prepare is unavailable for a poisoned session");
+  const auto& current = committed();
+  return DualCsrStructuredBatchPreparer::prepareBound(
+      std::move(edits), current.baseline, current.resolver, DualSemanticReadView(current.graph),
+      current.graph, current.identity, current.arc_group_index);
+}
 
-  CommittedDualCsrAnalysisState staged = std::move(verified._state);
-  if (staged.graph.session_token != _committed.graph.session_token
-      || staged.generation.value() != _committed.generation.value() + 1)
-    return reject(DualCsrTransactionCode::kStaleGeneration);
-  if (incregpusta_debug_checks_enabled && !prefixMatches(_committed, staged))
-    return reject(DualCsrTransactionCode::kTraceMismatch);
-  if (failpoint == DualCsrPublishFailpoint::kBeforeSwap)
-    return reject(DualCsrTransactionCode::kPreSwapFault);
-
-  _committed.swap(staged);
-  if (failpoint == DualCsrPublishFailpoint::kAfterSwap) {
-    _poisoned = true;
-    return {DualCsrTransactionCode::kPostSwapPoisoned, true, true};
-  }
-  return {DualCsrTransactionCode::kOk, true, false};
+void DualCsrTransactionCoordinator::reserveHistory()
+{
+  reserveNext(_committed->semantic_trace);
+  reserveNext(_committed->execution_trace);
+  if constexpr (incregpusta_debug_checks_enabled)
+    reserveNext(_committed->descriptor_trace);
 }
 
 }  // namespace ista::timing_dual_csr

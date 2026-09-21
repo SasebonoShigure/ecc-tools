@@ -24,6 +24,8 @@
 #include <vector>
 
 #include "CsrSnapshotObservation.hpp"
+#include "../source/data_manager/DataManager.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "STAInterface.hpp"
 #include "StaProductionLifecycle.hpp"
 #include "py_ista_snapshot.h"
@@ -50,6 +52,7 @@ class FakeProductionOperations final : public ista::StaProductionLifecycleOperat
   ista::StaOperationResult initialize(std::map<std::string, std::any>&) override
   {
     ++initialize_calls;
+    ista::DataManager::initInst();
     return ista::StaOperationResult::success();
   }
 
@@ -67,6 +70,7 @@ class FakeProductionOperations final : public ista::StaProductionLifecycleOperat
   ista::StaOperationResult close() override
   {
     ++close_calls;
+    ista::DataManager::destroyInst();
     return close_result;
   }
 
@@ -194,6 +198,13 @@ void testIncrementalReadyReleased(py::module_& module)
   const std::uint64_t token = requireToken(session, "incremental session");
   session.attr("run_full_baseline")();
 
+  if constexpr (!ista::incregpusta_debug_checks_enabled) {
+    require(session.attr("csr_snapshot_observation").is_none(), "OFF built an observation");
+    session.attr("close")();
+    require(session.attr("csr_snapshot_observation").is_none(), "OFF close built an observation");
+    return;
+  }
+
   py::dict active = py::cast<py::dict>(session.attr("csr_snapshot_observation"));
   requireObservationShape(active, token, "ready");
   active["state"] = "mutated-detached-value";
@@ -213,6 +224,15 @@ void testIncrementalReadyReleased(py::module_& module)
   requireNoRawProperties(session);
 }
 
+void testCloseWithoutObservation(py::module_& module)
+{
+  py::object session = module.attr("create_incremental_sta_session")(request("incremental"));
+  session.attr("initialize")(analysisContext());
+  session.attr("run_full_baseline")();
+  session.attr("close")();
+  require(session.attr("csr_snapshot_observation").is_none(), "close built an unrequested observation");
+}
+
 void testCleanupFailureKeepsReleased(py::module_& module, FakeProductionOperations& operations)
 {
   py::object session = module.attr("create_incremental_sta_session")(request("incremental"));
@@ -220,11 +240,19 @@ void testCleanupFailureKeepsReleased(py::module_& module, FakeProductionOperatio
   const std::uint64_t token = requireToken(session, "cleanup failure session");
   session.attr("run_full_baseline")();
 
+  if constexpr (ista::incregpusta_debug_checks_enabled)
+    requireObservationShape(py::cast<py::dict>(session.attr("csr_snapshot_observation")), token, "ready");
+  else
+    require(session.attr("csr_snapshot_observation").is_none(), "OFF built an observation");
+
   const int close_calls_before = operations.close_calls;
   operations.close_result = ista::StaOperationResult::cleanupFailure("injected cleanup failure");
   requirePythonError([&] { session.attr("close")(); }, module.attr("StaSessionError").ptr(), "cleanup failure close");
   require(py::cast<std::string>(session.attr("state")) == "closed", "cleanup failure did not close the session");
-  requireObservationShape(py::cast<py::dict>(session.attr("csr_snapshot_observation")), token, "released");
+  if constexpr (ista::incregpusta_debug_checks_enabled)
+    requireObservationShape(py::cast<py::dict>(session.attr("csr_snapshot_observation")), token, "released");
+  else
+    require(session.attr("csr_snapshot_observation").is_none(), "OFF close retained an observation");
   session.attr("close")();
   require(operations.close_calls == close_calls_before + 1, "cleanup failure caused a second native close");
 }
@@ -233,14 +261,15 @@ void testCleanupFailureKeepsReleased(py::module_& module, FakeProductionOperatio
 
 int main()
 {
+  py::scoped_interpreter interpreter;
   try {
-    py::scoped_interpreter interpreter;
     py::module_ module = py::module_::import("ista_step7_binding_fixture");
     FakeProductionOperations operations;
     ista::STAInterface::destroyInst();
     ista::STAInterface::getInst().setLifecycleOperationsForTesting(&operations);
     testFactoryAndFull(module, operations);
     testIncrementalReadyReleased(module);
+    testCloseWithoutObservation(module);
     testCleanupFailureKeepsReleased(module, operations);
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

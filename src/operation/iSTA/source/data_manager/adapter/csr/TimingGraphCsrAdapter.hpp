@@ -27,6 +27,7 @@ class Database;
 }
 
 namespace ista::csr {
+namespace detail { class NativeLibraryModels; }
 
 [[nodiscard]] CsrGraphExportResult exportCsrGraphSnapshot(const ista::Database& database);
 [[nodiscard]] NativeGraphProjectionResult decodeNativeGraphProjection(const CsrGraphSnapshot& snapshot);
@@ -55,5 +56,7 @@ using CsrReferenceInputExportResult = std::variant<CsrReferenceInput, CsrReferen
 
 [[nodiscard]] CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Database& database, const StaAnalysisContext& canonical_context,
                                                                              std::uint64_t caller_session_token);
+[[nodiscard]] CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Database& database, const StaAnalysisContext& canonical_context,
+                                                                             std::uint64_t caller_session_token, detail::NativeLibraryModels& models);
 
 }  // namespace ista::csr

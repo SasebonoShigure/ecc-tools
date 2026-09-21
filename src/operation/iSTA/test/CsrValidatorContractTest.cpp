@@ -14,6 +14,7 @@
 //
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <limits>
 #include <string>
@@ -42,7 +43,7 @@ void testValidBaselines()
   const CsrReferenceInput clock = clockInput();
   require(reference.nodes.size() == 2 && reference.arcs.size() == 1 && !reference.start_seeds.empty() && !reference.endpoint_required.empty(),
           "reference fixture must remain nonvacuous");
-  require(cell.arcs[0].transfer.children.size() == 1 && cell.cell_pin_capacitances.size() == 2, "cell fixture must remain nonvacuous");
+  require(cell.arcs[0].transfer.children().size() == 1 && cell.cell_pin_capacitances.size() == 2, "cell fixture must remain nonvacuous");
   requireValid(validateReferenceInput(reference), "reference input");
   requireValid(validateReferenceInput(cell), "cell input");
   requireValid(validateReferenceInput(table), "table input");
@@ -78,7 +79,7 @@ void testMalformedStructureNeverThrows()
   const CsrReferenceInput cell = cellInput();
   rejectMutation(cell, "instance pin duplicate", [](auto& value) { value.instances[0].ordered_pins[1] = NodeId{0}; });
   rejectMutation(cell, "missing cell capacitance", [](auto& value) { value.cell_pin_capacitances.pop_back(); });
-  rejectMutation(cell, "child signature mismatch", [](auto& value) { value.arcs[0].transfer.children[0].signature.library_name = "other.lib"; });
+  rejectMutation(cell, "child signature mismatch", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].signature.library_name = "other.lib"; }); });
 }
 
 void testTablesConstraintsLoadsAndSeeds()
@@ -102,10 +103,10 @@ void testTablesConstraintsLoadsAndSeeds()
   rejectMutation(cell, "negative capacitance", [](auto& value) { value.cell_pin_capacitances[0].default_capacitance = -1.0; });
 
   const CsrReferenceInput table = tableInput();
-  rejectMutation(table, "table value count", [](auto& value) { value.arcs[0].transfer.children[0].delay_tables[0].values.pop_back(); });
-  rejectMutation(table, "table axis order", [](auto& value) { std::ranges::reverse(value.arcs[0].transfer.children[0].delay_tables[0].axes[0]); });
+  rejectMutation(table, "table value count", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0].values.pop_back(); }); });
+  rejectMutation(table, "table axis order", [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { std::ranges::reverse(children[0].delay_tables[0].axes[0]); }); });
   rejectMutation(table, "table NaN",
-                 [](auto& value) { value.arcs[0].transfer.children[0].delay_tables[0].values[0] = std::numeric_limits<double>::quiet_NaN(); });
+                 [](auto& value) { ista::csr::test::mutateChildren(value.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0].values[0] = std::numeric_limits<double>::quiet_NaN(); }); });
 }
 
 void testCaseAndUnsupportedReasons()

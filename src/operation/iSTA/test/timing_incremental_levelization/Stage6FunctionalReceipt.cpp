@@ -106,8 +106,7 @@ Stage6SeparatedReceipt separateStage6FunctionalReceipt(
           .complete = true,
           .level_offsets = source.timing.level_offsets,
           .level_nodes = source.timing.level_nodes,
-          .node_to_level = source.timing.node_to_level,
-          .timing_order = source.timing.timing_order}};
+          .node_to_level = source.timing.node_to_level}};
 }
 
 std::vector<Stage6LevelizationViolation>
@@ -160,29 +159,6 @@ validateStage6LevelizationReceipt(
     reject(errors, Stage6LevelizationViolationCode::kInverse,
            "levelization.node_to_level",
            "inverse map does not match the level permutation");
-
-  bool timing_order_valid
-      = isCompletePermutation(graph, receipt.timing_order);
-  if (timing_order_valid && inverse_valid && offsets_valid) {
-    std::size_t level = 0;
-    for (std::size_t position = 0;
-         position < receipt.timing_order.size(); ++position) {
-      while (level + 1 < receipt.level_offsets.size()
-             && position
-                    >= static_cast<std::size_t>(
-                        receipt.level_offsets[level + 1]))
-        ++level;
-      const auto node = nodeIndex(graph, receipt.timing_order[position]);
-      if (!node || receipt.node_to_level[*node] != level + 1) {
-        timing_order_valid = false;
-        break;
-      }
-    }
-  }
-  if (!timing_order_valid)
-    reject(errors, Stage6LevelizationViolationCode::kTimingOrder,
-           "levelization.timing_order",
-           "timing order must be a complete, level-monotone NodeKey permutation");
 
   if (inverse_valid) {
     for (std::size_t index = 0; index < graph.active_arcs.size(); ++index) {

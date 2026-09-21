@@ -203,7 +203,7 @@ StaStatus IncrementalStaSession::initialize(const csr::StaAnalysisContext& analy
     } catch (...) {
       cleanup_exception = std::current_exception();
     }
-    if (released)
+    if (incregpusta_debug_checks_enabled && released)
       _released_observation = std::move(released);
     _resolved_record.reset();
     _state.store(StaSessionState::kClosed, std::memory_order_release);
@@ -264,31 +264,6 @@ StaExecutionResult IncrementalStaSession::runFullBaseline()
     return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), "STA execution record was not resolved"));
   }
 
-  if (usesCpuSnapshot() && !incregpusta_debug_checks_enabled && (!_context || !_context->hasReadySnapshot())) {
-    _state.store(StaSessionState::kPoisoned, std::memory_order_release);
-    return StaExecutionResult::failure(
-        StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), "incremental STA capture did not publish a ready snapshot"));
-  }
-  if (usesCpuSnapshot() && incregpusta_debug_checks_enabled) {
-    std::unique_ptr<csr::CsrSnapshotObservation> active;
-    try {
-      status = _operations->copyObservation(_token.load(std::memory_order_acquire), _context.get(), &active);
-    } catch (...) {
-      _state.store(StaSessionState::kPoisoned, std::memory_order_release);
-      return StaExecutionResult::failure(
-          StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), "STA snapshot observation read threw: " + exceptionMessage()));
-    }
-    if (!status.ok() || !active) {
-      _state.store(StaSessionState::kPoisoned, std::memory_order_release);
-      const std::string message = status.ok() ? "incremental STA capture did not publish a ready observation" : status.message;
-      return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), message));
-    }
-    if (const auto error = observationOwnershipError(*active)) {
-      _state.store(StaSessionState::kPoisoned, std::memory_order_release);
-      return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), *error));
-    }
-  }
-
   _baseline_executed = true;
   _state.store(StaSessionState::kBaselineExecuted, std::memory_order_release);
   return StaExecutionResult::success(*_resolved_record, state());
@@ -315,7 +290,7 @@ StaStatus IncrementalStaSession::close()
     close_exception = std::current_exception();
   }
 
-  if (released)
+  if (incregpusta_debug_checks_enabled && released)
     _released_observation = std::move(released);
   _state.store(StaSessionState::kClosed, std::memory_order_release);
 
@@ -340,7 +315,7 @@ StaStatus IncrementalStaSession::close()
 StaCsrReferenceAttempt IncrementalStaSession::computeCsrReferenceForTesting()
 {
   SessionApiGuard guard(this, _api_mutex);
-  if (!guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !usesCpuSnapshot() || !_context)
+  if (!incregpusta_debug_checks_enabled || !guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !usesCpuSnapshot() || !_context)
     return invalidReferenceAttempt();
   return _operations->computeCsrReferenceForTesting(_token.load(std::memory_order_acquire), _context.get());
 }
@@ -348,7 +323,7 @@ StaCsrReferenceAttempt IncrementalStaSession::computeCsrReferenceForTesting()
 StaCsrScatterAttempt IncrementalStaSession::scatterCsrTimingResultForTesting(const csr::CsrTimingResult& result)
 {
   SessionApiGuard guard(this, _api_mutex);
-  if (!guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !usesCpuSnapshot() || !_context)
+  if (!incregpusta_debug_checks_enabled || !guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !usesCpuSnapshot() || !_context)
     return invalidScatterAttempt();
   StaCsrScatterAttempt attempt = _operations->scatterCsrTimingResultForTesting(_token.load(std::memory_order_acquire), _context.get(), result);
   if (attempt.value.scatter_result.code == csr::CsrScatterCode::kSnapshotInvalidated)
@@ -361,6 +336,9 @@ std::unique_ptr<csr::CsrSnapshotObservation> IncrementalStaSession::snapshotObse
   SessionApiGuard guard(this, _api_mutex);
   if (!guard)
     throw StaSessionException(invalidState("reentrant STA snapshot observation read is not allowed"), _request);
+
+  if constexpr (!incregpusta_debug_checks_enabled)
+    return nullptr;
 
   if (state() == StaSessionState::kClosed) {
     if (!_released_observation)

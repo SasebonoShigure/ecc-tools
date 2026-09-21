@@ -13,11 +13,9 @@
 
 #include "CsrSessionSnapshotAdapter.hpp"
 #include "Database.hpp"
-#include "NativeDatabaseCandidate.hpp"
 #include "NativeDesignEditTranslator.hpp"
 #include "NativeTimingEditPreparer.hpp"
 #include "ParasiticNet.hpp"
-#include "TimingEditCoordinator.hpp"
 #include "TimingEditNativeFixture.hpp"
 #include "TimingEditResolver.hpp"
 
@@ -47,15 +45,15 @@ void installSourceParasitics(Database& database)
           "failed to install the source parasitic net");
 }
 
-void requireUntouchedDetachedCandidate(
+void requireUntouchedDatabase(
     Database& database, const TokenMaterialization& names)
 {
   require(database.get_instance_map().empty()
               && !database.get_instance_map().contains(names.instance_name),
-          "detached candidate materialized an instance");
+          "database materialized an instance");
   const auto& pins = database.get_pin_map();
   require(pins.size() == 2 && pins.contains("in") && pins.contains("out"),
-          "detached candidate changed the baseline pin inventory");
+          "database changed the baseline pin inventory");
   const Pin& input = pins.at("in");
   const Pin& output = pins.at("out");
   require(input.get_full_name() == "in" && input.get_pin_name() == "in"
@@ -67,19 +65,19 @@ void requireUntouchedDetachedCandidate(
               && output.get_instance_name().empty()
               && output.get_net_name() == "n0" && output.get_is_port()
               && output.get_direction() == PinDirection::kOutput,
-          "detached candidate changed baseline pin fields");
+          "database changed baseline pin fields");
   const auto& nets = database.get_net_map();
   require(nets.size() == 1 && nets.contains("n0")
               && !nets.contains(names.output_net_name),
-          "detached candidate changed the baseline net inventory");
+          "database changed the baseline net inventory");
   const Net& net = nets.at("n0");
   require(net.get_net_name() == "n0"
               && net.get_pin_name_list()
                      == std::vector<std::string>{"in", "out"}
-              && net.get_driver_pin().empty()
-              && net.get_driver_pin_list().empty()
-              && net.get_load_pin_list().empty(),
-          "detached candidate changed raw net membership or reset state");
+              && net.get_driver_pin() == "in"
+              && net.get_driver_pin_list() == std::vector<std::string>{"in"}
+              && net.get_load_pin_list() == std::vector<std::string>{"out"},
+          "database changed raw net membership or reset state");
   const auto& parasitics = database.get_parasitic_library();
   require(parasitics.get_spef_file_path() == "stage4_boundary.spef"
               && parasitics.get_capacitive_unit() == "PF"
@@ -89,29 +87,15 @@ void requireUntouchedDetachedCandidate(
               && parasitics.get_net_map().at("n0").get_net_name() == "n0"
               && parasitics.get_net_map().at("n0").get_lumped_capacitance()
                      == 0.25,
-          "detached candidate changed source parasitic fields");
-  require(database.get_arc_list().empty()
-              && database.get_outgoing_arc_list_map().empty()
-              && database.get_incoming_arc_list_map().empty()
-              && database.get_timing_point_map().empty()
-              && database.get_start_point_list().empty()
-              && database.get_end_point_list().empty()
-              && database.get_timing_order_list().empty()
-              && database.get_timing_path_group_list().empty(),
-          "detached candidate repopulated derived timing state");
-}
-
-struct SessionSignalRecorder
-{
-  SessionTransactionState state{SessionTransactionState::kBaselineExecuted};
-  std::uint64_t writes{0};
-};
-
-void recordSessionState(void* context, SessionTransactionState state) noexcept
-{
-  auto& recorder = *static_cast<SessionSignalRecorder*>(context);
-  recorder.state = state;
-  ++recorder.writes;
+          "database changed source parasitic fields");
+  require(database.get_arc_list().size() == 1
+              && database.get_outgoing_arc_list_map().at("in") == std::vector<std::size_t>{0}
+              && database.get_incoming_arc_list_map().at("out") == std::vector<std::size_t>{0}
+              && database.get_timing_point_map().size() == 2
+              && database.get_start_point_list() == std::vector<std::string>{"in"}
+              && database.get_end_point_list() == std::vector<std::string>{"out"}
+              && database.get_timing_order_list() == std::vector<std::string>{"in", "out"},
+          "unsupported edit changed derived timing state");
 }
 
 void testRealParasiticsRequireRecordedFullWithoutPublication()
@@ -148,45 +132,23 @@ void testRealParasiticsRequireRecordedFullWithoutPublication()
                          "source net parasitics require a recorded full rebuild"},
           "real parasitics did not produce the exact full_with_record receipt");
 
-  SessionSignalRecorder session;
-  TimingEditCoordinator coordinator(
-      kSession, SessionStateSignal{&session, &recordSessionState}, baseline,
-      initial_identity, CumulativeEditTrace{}, resolver);
-  const TransactionStatus incremental_status
-      = coordinator.beginPrepare(prepared);
-  require(!incremental_status.ok()
-              && coordinator.state() == TimingEditCoordinatorState::kIdle
-              && coordinator.committedIdentity() == initial_identity
-              && coordinator.cumulativeTrace().batches.empty()
-              && coordinator.deviceState().generation == kGeneration
-              && coordinator.commitMarker().generation == kGeneration
-              && coordinator.resolverState() == resolver && session.writes == 0,
-          "full_with_record policy entered the incremental coordinator");
   const TimingEditResolverState staged = resolver.stage(prepared);
 
-  NativeDatabaseCandidate candidate
-      = NativeDatabaseCandidate::create(fixture.database());
   const TokenMaterialization& names = prepared.tokenMaterializations().front();
-  requireUntouchedDetachedCandidate(candidate.database(), names);
+  requireUntouchedDatabase(fixture.database(), names);
   const NativeTranslationResult translated
       = NativeDesignEditTranslator::applyNormalizedBatch(
-          candidate.database(), prepared, staged);
+          fixture.database(), prepared, staged);
   require(translated.disposition == EditDisposition::kFullWithRecord
               && translated.reasons == prepared.policyReceipt().reasons,
           "translator did not preserve the recorded-full policy receipt");
-  requireUntouchedDetachedCandidate(candidate.database(), names);
+  requireUntouchedDatabase(fixture.database(), names);
 
   const CommittedEditIdentity final_identity
       = NativeTimingEditPreparer::captureCurrentIdentity(
           fixture.database(), kGeneration, analysis_context, kSession);
-  require(coordinator.state() == TimingEditCoordinatorState::kIdle
-              && coordinator.committedIdentity() == initial_identity
-              && coordinator.cumulativeTrace().batches.empty()
-              && coordinator.deviceState().generation == kGeneration
-              && coordinator.commitMarker().generation == kGeneration
-              && coordinator.resolverState() == resolver
-              && session.writes == 0 && final_identity == initial_identity,
-          "full_with_record boundary changed or published generation zero");
+  require(final_identity == initial_identity,
+          "full_with_record boundary changed generation zero");
   const auto& source_parasitics
       = fixture.database().get_parasitic_library();
   require(fixture.database().get_instance_map().empty()

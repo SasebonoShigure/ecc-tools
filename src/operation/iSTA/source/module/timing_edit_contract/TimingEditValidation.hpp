@@ -53,6 +53,7 @@ struct TimingEditContractViolation
 };
 
 using TimingEditContractViolations = std::vector<TimingEditContractViolation>;
+using EditBatchNormalization = std::variant<EditBatch, TimingEditContractViolations>;
 using DesignEditPlanNormalization = std::variant<DesignEditPlan, TimingEditContractViolations>;
 using TimingGraphDeltaNormalization = std::variant<TimingGraphDelta, TimingEditContractViolations>;
 
@@ -64,6 +65,8 @@ using TimingGraphDeltaNormalization = std::variant<TimingGraphDelta, TimingEditC
                                                                              std::string_view field = "baseline");
 [[nodiscard]] TimingEditContractViolations validateCommittedEditIdentity(const CommittedEditIdentity& value,
                                                                           std::string_view field = "committed_identity");
+[[nodiscard]] TimingEditContractViolations validateEditBatch(const EditBatch& value);
+[[nodiscard]] EditBatchNormalization normalizeEditBatch(EditBatch value);
 [[nodiscard]] TimingEditContractViolations validateDesignEditPlan(const DesignEditPlan& value);
 [[nodiscard]] DesignEditPlanNormalization normalizeDesignEditPlan(DesignEditPlan value);
 [[nodiscard]] TimingEditContractViolations validateTimingGraphDelta(const TimingGraphDelta& value, std::string_view field = "delta");

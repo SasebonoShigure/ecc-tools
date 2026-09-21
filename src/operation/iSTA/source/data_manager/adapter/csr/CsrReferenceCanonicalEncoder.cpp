@@ -210,8 +210,8 @@ void appendTransfer(CanonicalEncoder& encoder, const CellTransferModel& transfer
   encoder.appendBool(transfer.is_clock_arc);
   encoder.appendBool(transfer.is_disabled);
   encoder.appendBool(transfer.is_clear_or_preset);
-  encoder.appendU64(transfer.children.size());
-  for (const auto& child : transfer.children)
+  encoder.appendU64(transfer.children().size());
+  for (const auto& child : transfer.children())
     detail::appendChildTimingArcModelFields(encoder, child);
 }
 
@@ -278,8 +278,8 @@ void appendLibraryCell(CanonicalEncoder& encoder, const ReferencedLibraryCellMod
     encoder.appendString(token(check.kind));
     encoder.appendDouble(check.check_time);
     encoder.appendString(token(check.clock_transition));
-    encoder.appendU64(check.children.size());
-    for (const auto& child : check.children)
+    encoder.appendU64(check.children().size());
+    for (const auto& child : check.children())
       detail::appendChildTimingArcModelFields(encoder, child);
   }
 }

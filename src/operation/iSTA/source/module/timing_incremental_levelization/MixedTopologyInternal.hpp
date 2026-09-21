@@ -6,6 +6,7 @@
 #include "CorrectedMixedKahnLevelizer.hpp"
 #include "MixedLevelizationInternal.hpp"
 #include "MixedLevelizationValidation.hpp"
+#include "MixedLevelReconstructor.hpp"
 
 namespace ista::timing_incremental_levelization::detail {
 
@@ -41,6 +42,8 @@ inline TopologyTraversal topologyTraversal(const csr::ActiveCsrEdgeView& edges)
 // Arbitrary callers use the public ActiveCsrEdgeView/graph entry points.
 [[nodiscard]] MixedGraphBuildAttempt buildOwnedMixedGraph(const TopologyTraversal& edges, const PreviousLevels& previous,
                                                           const MixedLevelizationRequest& request);
+[[nodiscard]] MixedReconstructionAttempt reconstructOwnedMixedLevelization(
+    const MixedIdDomain& domain, const PreviousLevels& previous, const MixedKahnLevelization& mixed);
 [[nodiscard]] MixedValidationResult validateBuiltMixedResult(const MixedPrecedenceGraph& graph, const MixedKahnLevelization& levels);
 [[nodiscard]] MixedKahnAttempt levelizeBuiltMixedGraph(const MixedPrecedenceGraph& graph);
 [[nodiscard]] ActualDagClassification classifyActualDag(const TopologyTraversal& edges);

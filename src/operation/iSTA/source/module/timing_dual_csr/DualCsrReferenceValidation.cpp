@@ -8,6 +8,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cmath>
+#include <map>
+#include <set>
+#include <string_view>
 #include <cstdint>
 #include <numeric>
 #include <optional>
@@ -16,6 +20,7 @@
 #include <vector>
 
 #include "CsrReferenceValidator.hpp"
+#include "CsrReferenceNativeModelValidatorInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
 #include "DualCsrValidationInternal.hpp"
@@ -117,6 +122,7 @@ void projectInstances(const DualCsrReferencePayload& payload,
                       csr::CsrReferenceInput& input)
 {
   input.instances = payload.instances;
+  std::ranges::sort(input.instances, [](const auto& a, const auto& b) { return byteStringLess(a.instance_name, b.instance_name); });
   for (auto& instance : input.instances)
     remapNodeList(instance.ordered_pins, old_to_new);
 }
@@ -254,6 +260,7 @@ void projectReferencePayload(const DualCsrState& state,
         = remap(endpoint.resolved_data_node, old_to_new);
   }
   input.referenced_library_cells = payload.referenced_library_cells;
+  std::ranges::sort(input.referenced_library_cells, [](const auto& a, const auto& b) { return byteStringLess(a.cell_name, b.cell_name); });
   input.parasitics = payload.parasitics;
   input.start_seeds = payload.start_seeds;
   for (auto& seed : input.start_seeds) {
@@ -267,6 +274,11 @@ void projectReferencePayload(const DualCsrState& state,
   input.cell_pin_capacitances = payload.cell_pin_capacitances;
   for (auto& capacitance : input.cell_pin_capacitances)
     capacitance.node = remap(capacitance.node, old_to_new);
+  std::ranges::sort(input.cell_pin_capacitances, [&](const auto& a, const auto& b) {
+    if (a.node.value() >= input.nodes.size() || b.node.value() >= input.nodes.size())
+      return a.node.value() < b.node.value();
+    return byteStringLess(input.nodes[a.node.value()].key.full_name, input.nodes[b.node.value()].key.full_name);
+  });
   input.unsupported_reasons = payload.unsupported_reasons;
   // Stage 2 derives roots from non-disabled native arcs. The Stage 5 root
   // contract is checked separately with exact levelization eligibility.
@@ -309,7 +321,208 @@ void validateEligibleRoots(const DualCsrState& state,
            "ordered roots must exactly equal the levelization-eligible indegree-zero set in frozen full-name order");
 }
 
+template <typename T>
+void validateExpected(const std::optional<ValueReplacement<T>>& change,
+                      const T& current, const std::string& field,
+                      DualCsrViolations& violations)
+{
+  if (change && !(change->expected == current))
+    reject(violations, DualCsrViolationCode::kExpectedValue, field,
+           "expected-before value does not match committed payload");
+}
+template <typename T>
+void validateAppend(const std::optional<RecordAppend<T>>& change, const std::vector<T>& current,
+                    const std::string& field, DualCsrViolations& violations)
+{
+  if (!change)
+    return;
+  if (change->expected_size != current.size())
+    reject(violations, DualCsrViolationCode::kExpectedValue, field, "append size differs from committed payload");
+  if (change->values.size() > current.max_size() - current.size())
+    reject(violations, DualCsrViolationCode::kCapacity, field, "append exceeds container capacity");
+}
+void validateReferenceAppends(const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor,
+                             DualCsrViolations& violations)
+{
+  const auto& delta = descriptor.reference_payload;
+  const auto& current = committed.reference_payload;
+  const auto rejectField = [&](const char* field, const char* message) {
+    reject(violations, DualCsrViolationCode::kExpectedValue, std::string{"reference_payload."} + field, message);
+  };
+  if (delta.referenced_library_cells) {
+    std::set<std::string_view> names;
+    for (const auto& cell : delta.referenced_library_cells->values) {
+      if (cell.cell_name.empty() || !names.insert(cell.cell_name).second
+          || std::ranges::find(current.referenced_library_cells, cell.cell_name, &csr::ReferencedLibraryCellModel::cell_name)
+                 != current.referenced_library_cells.end())
+        rejectField("referenced_library_cells", "appended cell names must be nonempty and new");
+      std::vector<csr::CsrContractViolation> errors;
+      csr::detail::validateLibraryCell(cell, errors);
+      for (const auto& error : errors)
+        reject(violations, DualCsrViolationCode::kExpectedValue, error.field, error.message);
+    }
+  }
+  std::set<std::uint64_t> expected_pins;
+  for (const auto& append : descriptor.node_appends)
+    if (!append.payload.is_port)
+      expected_pins.insert(append.id.value());
+  std::map<std::uint64_t, const csr::LibraryPortModel*> pin_models;
+  if (delta.instances) {
+    std::set<std::string_view> names;
+    for (const auto& instance : delta.instances->values) {
+      if (instance.instance_name.empty() || instance.cell_name.empty() || !names.insert(instance.instance_name).second
+          || std::ranges::find(current.instances, instance.instance_name, &csr::InstanceRecord::instance_name) != current.instances.end())
+        rejectField("instances", "appended instance names must be nonempty and new");
+      const auto old_cell = std::ranges::find(current.referenced_library_cells, instance.cell_name, &csr::ReferencedLibraryCellModel::cell_name);
+      const csr::ReferencedLibraryCellModel* cell = old_cell == current.referenced_library_cells.end() ? nullptr : &*old_cell;
+      if (!cell && delta.referenced_library_cells) {
+        const auto found = std::ranges::find(delta.referenced_library_cells->values, instance.cell_name, &csr::ReferencedLibraryCellModel::cell_name);
+        if (found != delta.referenced_library_cells->values.end())
+          cell = &*found;
+      }
+      if (!cell || instance.is_sequential != (cell->present && cell->is_sequential)
+          || instance.is_clock_gating != (cell->present && cell->is_clock_gating) || instance.is_macro != (cell->present && cell->is_macro))
+        rejectField("instances", "appended instance requires matching model roles");
+      std::optional<std::string_view> previous_pin;
+      for (const auto id : instance.ordered_pins) {
+        if (id.value() < descriptor.before.node_slots || id.value() - descriptor.before.node_slots >= descriptor.node_appends.size()
+            || pin_models.contains(id.value())) {
+          rejectField("instances", "appended pins must be distinct new NodeIds");
+          continue;
+        }
+        const auto& node = descriptor.node_appends[id.value() - descriptor.before.node_slots].payload;
+        if (node.is_port || node.key.instance_name != instance.instance_name || node.instance_cell != instance.cell_name
+            || node.is_sequential != instance.is_sequential)
+          rejectField("instances", "appended pin identity differs from instance");
+        if (previous_pin && !std::lexicographical_compare(previous_pin->begin(), previous_pin->end(), node.key.full_name.begin(), node.key.full_name.end(),
+                                                        [](unsigned char a, unsigned char b) { return a < b; }))
+          rejectField("instances", "appended pins must follow strict full-name order");
+        previous_pin = node.key.full_name;
+        const csr::LibraryPortModel* port = nullptr;
+        if (cell && cell->present) {
+          const auto found = std::ranges::find(cell->ports, node.key.pin_name, &csr::LibraryPortModel::name);
+          if (found != cell->ports.end())
+            port = &*found;
+        }
+        pin_models.emplace(id.value(), port);
+        if (cell && (node.is_clock_pin != (cell->present && node.key.pin_name == cell->clock_pin_name)
+                     || node.is_data_pin != (cell->present && node.key.pin_name == cell->data_pin_name)
+                     || node.is_output_pin != (cell->present && node.key.pin_name == cell->output_pin_name)
+                     || (port && node.direction != port->direction)))
+          rejectField("instances", "appended pin roles differ from its model");
+      }
+    }
+  }
+  if (pin_models.size() != expected_pins.size()
+      || !std::ranges::all_of(expected_pins, [&](auto id) { return pin_models.contains(id); }))
+    rejectField("instances", "instances must cover every appended non-port node exactly once");
+  if (delta.referenced_library_cells)
+    for (const auto& cell : delta.referenced_library_cells->values)
+      if (!delta.instances || std::ranges::none_of(delta.instances->values, [&](const auto& instance) { return instance.cell_name == cell.cell_name; }))
+        rejectField("referenced_library_cells", "appended model must be referenced by an appended instance");
+  std::set<std::uint64_t> capacitance_pins;
+  if (delta.cell_pin_capacitances) {
+    for (const auto& cap : delta.cell_pin_capacitances->values) {
+      const bool valid_node = cap.node.value() >= descriptor.before.node_slots
+                              && cap.node.value() - descriptor.before.node_slots < descriptor.node_appends.size();
+      if (!valid_node || !capacitance_pins.insert(cap.node.value()).second
+          || (valid_node && descriptor.node_appends[cap.node.value() - descriptor.before.node_slots].payload.is_port))
+        rejectField("cell_pin_capacitances", "appended capacitance must name one new instance pin");
+      const auto model = pin_models.find(cap.node.value());
+      const auto* port = model == pin_models.end() ? nullptr : model->second;
+      if (cap.default_capacitance != (port ? port->default_capacitance : 0.0)
+          || cap.transition_capacitance != (port ? port->transition_capacitance : csr::OptionalLaneMatrix{}))
+        rejectField("cell_pin_capacitances", "appended capacitance differs from the referenced Liberty port");
+      if (!std::isfinite(cap.default_capacitance) || cap.default_capacitance < 0)
+        rejectField("cell_pin_capacitances", "capacitance must be finite and nonnegative");
+      for (const auto& row : cap.transition_capacitance)
+        for (const auto& value : row)
+          if (value && (!std::isfinite(*value) || *value < 0))
+            rejectField("cell_pin_capacitances", "transition capacitance must be finite and nonnegative");
+    }
+  }
+  if (capacitance_pins != expected_pins)
+    rejectField("cell_pin_capacitances", "capacitance append must cover every new instance pin exactly once");
+  if (delta.clock_owner_by_node) {
+    if (delta.clock_owner_by_node->values.size() != descriptor.node_appends.size())
+      rejectField("clock_owner_by_node", "owner append must cover the new nodes");
+    for (const auto& owner : delta.clock_owner_by_node->values)
+      if (owner && std::ranges::find(current.clocks, *owner, &csr::ClockConstraintModel::map_key) == current.clocks.end())
+        rejectField("clock_owner_by_node", "clock owner must resolve in the session");
+  }
+}
+
 }  // namespace
+
+void validateReferenceDelta(const DualCsrState& committed,
+                            const DualCsrBatchDescriptor& descriptor,
+                            DualCsrViolations& violations)
+{
+  const auto& delta = descriptor.reference_payload;
+  const auto& current = committed.reference_payload;
+  validateExpected(delta.schema_version, current.schema_version,
+                   "reference_payload.schema_version", violations);
+  validateExpected(delta.source_identity, current.source_identity,
+                   "reference_payload.source_identity", violations);
+  validateExpected(delta.analysis_context, current.analysis_context,
+                   "reference_payload.analysis_context", violations);
+  validateExpected(delta.analysis_order, current.analysis_order,
+                   "reference_payload.analysis_order", violations);
+  validateExpected(delta.path_source_order, current.path_source_order,
+                   "reference_payload.path_source_order", violations);
+  validateExpected(delta.transition_order, current.transition_order,
+                   "reference_payload.transition_order", violations);
+  validateAppend(delta.instances, current.instances,
+                   "reference_payload.instances", violations);
+  validateExpected(delta.ordered_root_ids, current.ordered_root_ids,
+                   "reference_payload.ordered_root_ids", violations);
+  validateExpected(delta.ordered_start_ids, current.ordered_start_ids,
+                   "reference_payload.ordered_start_ids", violations);
+  validateExpected(delta.ordered_end_ids, current.ordered_end_ids,
+                   "reference_payload.ordered_end_ids", violations);
+  validateExpected(delta.clock_tags, current.clock_tags,
+                   "reference_payload.clock_tags", violations);
+  validateExpected(delta.clocks, current.clocks,
+                   "reference_payload.clocks", violations);
+  validateAppend(delta.clock_owner_by_node, current.clock_owner_by_node,
+                   "reference_payload.clock_owner_by_node", violations);
+  validateExpected(delta.port_constraints, current.port_constraints,
+                   "reference_payload.port_constraints", violations);
+  validateExpected(delta.case_analysis_constraints,
+                   current.case_analysis_constraints,
+                   "reference_payload.case_analysis_constraints", violations);
+  validateExpected(delta.timing_check_endpoints,
+                   current.timing_check_endpoints,
+                   "reference_payload.timing_check_endpoints", violations);
+  validateAppend(delta.referenced_library_cells,
+                   current.referenced_library_cells,
+                   "reference_payload.referenced_library_cells", violations);
+  validateExpected(delta.parasitics, current.parasitics,
+                   "reference_payload.parasitics", violations);
+  validateExpected(delta.start_seeds, current.start_seeds,
+                   "reference_payload.start_seeds", violations);
+  validateExpected(delta.endpoint_required, current.endpoint_required,
+                   "reference_payload.endpoint_required", violations);
+  validateAppend(delta.cell_pin_capacitances,
+                   current.cell_pin_capacitances,
+                   "reference_payload.cell_pin_capacitances", violations);
+  validateExpected(delta.unsupported_reasons, current.unsupported_reasons,
+                   "reference_payload.unsupported_reasons", violations);
+  if (!delta.source_identity) {
+    reject(violations, DualCsrViolationCode::kGeneration,
+           "reference_payload.source_identity",
+           "every batch must declare the expected and replacement identity");
+  } else {
+    const auto& replacement = delta.source_identity->replacement;
+    if (replacement.session_token != descriptor.session_token.value()
+        || replacement.graph_generation
+               != descriptor.target_generation.value())
+      reject(violations, DualCsrViolationCode::kGeneration,
+             "reference_payload.source_identity.replacement",
+             "replacement identity must bind target session/generation");
+  }
+  validateReferenceAppends(committed, descriptor, violations);
+}
 
 void validateReferencePayload(const DualCsrState& state,
                               DualCsrViolations& violations)

@@ -49,6 +49,7 @@ namespace ista::csr {
 // These comparators order valid keys exactly as their canonical encoded bytes.
 // Unknown enum values throw std::invalid_argument through the token functions.
 [[nodiscard]] bool nodeKeyLess(const NodeKey& lhs, const NodeKey& rhs);
+[[nodiscard]] bool arcKeyBaseLess(const ArcKeyBase& lhs, const ArcKeyBase& rhs);
 [[nodiscard]] bool arcKeyLess(const ArcKey& lhs, const ArcKey& rhs);
 
 // Validates every key, returns canonical-byte order, and rejects any canonical

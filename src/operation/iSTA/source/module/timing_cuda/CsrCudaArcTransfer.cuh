@@ -85,7 +85,7 @@ __device__ inline void initializeArc(DeviceView view, Index index)
           if (!childSelected(child, input, output) || !child.delay[output].present)
             continue;
           const double candidate = lookupTable(view, child.delay[output], child, 0.0, arc.load[analysis * 2 + output]);
-          ChildState& cache = view.child_state[child_index];
+          ChildState& cache = view.child_state[arc.child_state_begin + local];
           if (!cache.delay[lane].present) {
             cache.delay[lane] = {candidate, true};
             cache.fallback[lane] = 1;
@@ -154,7 +154,7 @@ __device__ inline DynamicValue dynamicArc(DeviceView view, Index index, unsigned
       const double load = arc.load[analysis * 2 + output];
       if (child.delay[output].present) {
         const double candidate = lookupTable(view, child.delay[output], child, source_slew, load);
-        ChildState& cache = view.child_state[child_index];
+        ChildState& cache = view.child_state[arc.child_state_begin + local];
         if (!cache.delay[lane].present) {
           *view.status = Status::invariant;
           return value;

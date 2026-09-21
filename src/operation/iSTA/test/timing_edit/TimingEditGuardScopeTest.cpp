@@ -58,7 +58,7 @@ void testInstalledOwnerCannotEscapeOperationGuard()
   GuardedTestSession session;
   PreparedNativeTransaction transaction
       = prepareNativeTransaction(session.token());
-  std::optional<InstalledNativeDatabase> escaped_owner;
+  std::optional<NativeEditTransaction> escaped_owner;
   CommittedEditIdentity installed_identity;
   TokenMaterialization materialization;
   Database* installed_address{nullptr};
@@ -100,10 +100,8 @@ void testInstalledOwnerCannotEscapeOperationGuard()
   bool database_access_rejected = false;
   try {
     static_cast<void>(escaped_owner->database());
-  } catch (const std::logic_error& error) {
-    database_access_rejected
-        = std::string(error.what()).find("no longer active")
-          != std::string::npos;
+  } catch (const std::logic_error&) {
+    database_access_rejected = true;
   }
   require(database_access_rejected && &STADM.getDatabase() == installed_address,
           "escaped owner retained guard-external Database access");
@@ -160,10 +158,8 @@ void testInstalledOwnerIsBoundToGuardThread()
                   outcome.active_on_wrong_thread = owner.active();
                   try {
                     static_cast<void>(owner.database());
-                  } catch (const std::logic_error& error) {
-                    outcome.database_access_rejected
-                        = std::string(error.what()).find("no longer active")
-                          != std::string::npos;
+                  } catch (const std::logic_error&) {
+                    outcome.database_access_rejected = true;
                   }
                   outcome.rollback_status = owner.rollbackStatus();
                 });

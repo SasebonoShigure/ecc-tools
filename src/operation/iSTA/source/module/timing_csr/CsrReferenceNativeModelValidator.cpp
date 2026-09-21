@@ -169,8 +169,8 @@ void validateTransfer(const CellTransferModel& transfer, Violations& errors, con
   if (!isFinite(transfer.delay) || !isFinite(transfer.delay_min) || !isFinite(transfer.delay_max))
     reject(errors, field, "fallback delay is non-finite");
   std::vector<std::int32_t> child_indices;
-  child_indices.reserve(transfer.children.size());
-  for (const auto& child : transfer.children) {
+  child_indices.reserve(transfer.children().size());
+  for (const auto& child : transfer.children()) {
     validateChild(child, errors, field + ".children");
     child_indices.push_back(child.signature.arc_index);
   }
@@ -270,7 +270,7 @@ void validateInstanceLibraryMirrors(const CsrReferenceInput& input, Violations& 
 bool isUnitFallbackTransfer(const ArcRecord& arc)
 {
   return arc.transfer.delay == 1.0 && arc.transfer.delay_min == 1.0 && arc.transfer.delay_max == 1.0 && arc.transfer.is_clock_arc == arc.is_clock_arc
-         && arc.transfer.is_disabled == arc.is_disabled && !arc.transfer.is_clear_or_preset && arc.transfer.children.empty();
+         && arc.transfer.is_disabled == arc.is_disabled && !arc.transfer.is_clear_or_preset && arc.transfer.children().empty();
 }
 
 using FallbackArcKey = std::tuple<std::string, std::uint64_t, std::uint64_t>;
@@ -324,7 +324,7 @@ void validateConvertedLoadRanges(const CsrReferenceInput& input, Violations& err
   for (const auto& arc : input.arcs) {
     if (!arc.output_load)
       continue;
-    for (const auto& child : arc.transfer.children) {
+    for (const auto& child : arc.transfer.children()) {
       if (std::abs(child.capacitance_unit_scale - 1.0) < kStaError)
         continue;
       for (const auto& analysis : *arc.output_load) {
@@ -353,48 +353,8 @@ void validateLibraryClosure(const CsrReferenceInput& input, Violations& errors)
   if (actual_cells != expected_cells)
     reject(errors, "referenced_library_cells", "closure must exactly cover sorted unique referenced cell names");
 
-  for (const auto& cell : input.referenced_library_cells) {
-    if (!cell.present) {
-      if (!cell.library_name.empty() || cell.is_sequential || cell.is_clock_gating || cell.is_macro || !cell.clock_pin_name.empty()
-          || !cell.data_pin_name.empty() || !cell.output_pin_name.empty() || !cell.ports.empty() || !cell.cell_arcs.empty() || !cell.timing_checks.empty()) {
-        reject(errors, "referenced_library_cells", "missing cell must own no present payload");
-      }
-      continue;
-    }
-    if (cell.library_name.empty())
-      reject(errors, "referenced_library_cells.library_name", "present cell requires a library name");
-    for (std::size_t port_index = 0; port_index < cell.ports.size(); ++port_index) {
-      const auto& port = cell.ports[port_index];
-      if (!knownEnum(port.direction))
-        reject(errors, "referenced_library_cells.ports.direction", "port direction enum is unknown");
-      if (port_index != 0 && !byteStringLess(cell.ports[port_index - 1].name, port.name))
-        reject(errors, "referenced_library_cells.ports", "ports must follow strict native map-key byte order");
-      const bool output_direction = port.direction == PinDirection::kOutput || port.direction == PinDirection::kInout;
-      if (port.is_output != output_direction)
-        reject(errors, "referenced_library_cells.ports.is_output", "output role differs from direction");
-      if (!isFinite(port.default_capacitance) || port.default_capacitance < 0)
-        reject(errors, "referenced_library_cells.ports.default_capacitance", "capacitance must be finite and nonnegative");
-      validateOptionalMatrix(port.transition_capacitance, true, errors, "referenced_library_cells.ports.transition_capacitance");
-    }
-    for (const auto& arc : cell.cell_arcs) {
-      if (arc.source_port.empty() || arc.sink_port.empty())
-        reject(errors, "referenced_library_cells.cell_arcs", "cell arc ports must be nonempty");
-      else if (findLibraryPort(cell, arc.source_port) == nullptr || findLibraryPort(cell, arc.sink_port) == nullptr)
-        reject(errors, "referenced_library_cells.cell_arcs", "cell arc ports must resolve in the referenced port map");
-      validateTransfer(arc.transfer, errors, "referenced_library_cells.cell_arcs.transfer");
-    }
-    for (const auto& check : cell.timing_checks) {
-      if (!knownEnum(check.kind))
-        reject(errors, "referenced_library_cells.timing_checks.kind", "timing-check kind is unknown");
-      if (!isFinite(check.check_time))
-        reject(errors, "referenced_library_cells.timing_checks.check_time", "check time must be finite");
-      if (!knownEnum(check.clock_transition) || check.clock_transition == Transition::kNone)
-        reject(errors, "referenced_library_cells.timing_checks.clock_transition", "clock transition must be rise or fall");
-      for (const auto& child : check.children)
-        validateChild(child, errors, "referenced_library_cells.timing_checks.children");
-    }
-    validateLibraryRoleDerivation(cell, errors);
-  }
+  for (const auto& cell : input.referenced_library_cells)
+    validateLibraryCell(cell, errors);
   validateInstanceLibraryMirrors(input, errors);
 }
 
@@ -436,6 +396,50 @@ std::vector<CsrContractViolation> validateParasiticContextCrossField(const CsrRe
   return errors;
 }
 
+void validateLibraryCell(const ReferencedLibraryCellModel& cell, Violations& errors)
+{
+    if (!cell.present) {
+      if (!cell.library_name.empty() || cell.is_sequential || cell.is_clock_gating || cell.is_macro || !cell.clock_pin_name.empty()
+          || !cell.data_pin_name.empty() || !cell.output_pin_name.empty() || !cell.ports.empty() || !cell.cell_arcs.empty() || !cell.timing_checks.empty()) {
+        reject(errors, "referenced_library_cells", "missing cell must own no present payload");
+      }
+      return;
+    }
+    if (cell.library_name.empty())
+      reject(errors, "referenced_library_cells.library_name", "present cell requires a library name");
+    for (std::size_t port_index = 0; port_index < cell.ports.size(); ++port_index) {
+      const auto& port = cell.ports[port_index];
+      if (!knownEnum(port.direction))
+        reject(errors, "referenced_library_cells.ports.direction", "port direction enum is unknown");
+      if (port_index != 0 && !byteStringLess(cell.ports[port_index - 1].name, port.name))
+        reject(errors, "referenced_library_cells.ports", "ports must follow strict native map-key byte order");
+      const bool output_direction = port.direction == PinDirection::kOutput || port.direction == PinDirection::kInout;
+      if (port.is_output != output_direction)
+        reject(errors, "referenced_library_cells.ports.is_output", "output role differs from direction");
+      if (!isFinite(port.default_capacitance) || port.default_capacitance < 0)
+        reject(errors, "referenced_library_cells.ports.default_capacitance", "capacitance must be finite and nonnegative");
+      validateOptionalMatrix(port.transition_capacitance, true, errors, "referenced_library_cells.ports.transition_capacitance");
+    }
+    for (const auto& arc : cell.cell_arcs) {
+      if (arc.source_port.empty() || arc.sink_port.empty())
+        reject(errors, "referenced_library_cells.cell_arcs", "cell arc ports must be nonempty");
+      else if (findLibraryPort(cell, arc.source_port) == nullptr || findLibraryPort(cell, arc.sink_port) == nullptr)
+        reject(errors, "referenced_library_cells.cell_arcs", "cell arc ports must resolve in the referenced port map");
+      validateTransfer(arc.transfer, errors, "referenced_library_cells.cell_arcs.transfer");
+    }
+    for (const auto& check : cell.timing_checks) {
+      if (!knownEnum(check.kind))
+        reject(errors, "referenced_library_cells.timing_checks.kind", "timing-check kind is unknown");
+      if (!isFinite(check.check_time))
+        reject(errors, "referenced_library_cells.timing_checks.check_time", "check time must be finite");
+      if (!knownEnum(check.clock_transition) || check.clock_transition == Transition::kNone)
+        reject(errors, "referenced_library_cells.timing_checks.clock_transition", "clock transition must be rise or fall");
+      for (const auto& child : check.children())
+        validateChild(child, errors, "referenced_library_cells.timing_checks.children");
+    }
+    validateLibraryRoleDerivation(cell, errors);
+}
+
 void validateReferenceNativeModels(const CsrReferenceInput& input, Violations& errors)
 {
   for (const auto& arc : input.arcs) {
@@ -450,10 +454,10 @@ void validateReferenceNativeModels(const CsrReferenceInput& input, Violations& e
     } else if (arc.transfer.is_clock_arc != arc.is_clock_arc || arc.transfer.is_disabled != arc.is_disabled) {
       reject(errors, "arcs.transfer", "cell transfer and ArcRecord flags differ");
     }
-    if (arc.transfer.children.size() != arc.key.base.library_arcs.size())
+    if (arc.transfer.children().size() != arc.key.base.library_arcs.size())
       reject(errors, "arcs.transfer.children", "child count differs from ArcKey signature");
-    for (std::size_t child = 0; child < arc.transfer.children.size() && child < arc.key.base.library_arcs.size(); ++child)
-      if (!(arc.transfer.children[child].signature == arc.key.base.library_arcs[child]))
+    for (std::size_t child = 0; child < arc.transfer.children().size() && child < arc.key.base.library_arcs.size(); ++child)
+      if (!(arc.transfer.children()[child].signature == arc.key.base.library_arcs[child]))
         reject(errors, "arcs.transfer.children.signature", "child signature differs from ArcKey");
     if (arc.output_load)
       for (const auto& analysis : *arc.output_load)

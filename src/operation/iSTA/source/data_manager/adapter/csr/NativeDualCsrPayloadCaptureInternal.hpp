@@ -12,10 +12,11 @@
 #include "TimingEditResolver.hpp"
 
 namespace ista { class Database; }
+namespace ista::csr::detail { class NativeLibraryModels; }
 namespace ista::timing_dual_csr::detail {
 [[nodiscard]] NativeCaptureResult captureNativeDualCsrPayload(
-    const ista::Database&, const DualSemanticReadView&,
+    const ista::Database&, csr::detail::NativeLibraryModels&, const DualSemanticReadView&,
     const DualCsrArcGroupIndex&,
-    const timing_edit::TimingEditResolverState&,
+    timing_edit::TimingEditResolverView,
     const AffectedCapturePlan&);
 }

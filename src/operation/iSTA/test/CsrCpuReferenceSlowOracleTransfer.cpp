@@ -37,9 +37,9 @@ bool childHasRelation(const ChildTimingArcModel& child, std::size_t output)
 
 bool inputTriggered(const ArcRecord& arc, std::size_t input)
 {
-  if (arc.transfer.children.empty() || !arc.transfer.is_clock_arc)
+  if (arc.transfer.children().empty() || !arc.transfer.is_clock_arc)
     return true;
-  const Transition trigger = arc.transfer.children.front().signature.trigger_transition;
+  const Transition trigger = arc.transfer.children().front().signature.trigger_transition;
   if (trigger == Transition::kFall)
     return input == 1;
   return input == 0;
@@ -57,7 +57,7 @@ RelationMode relationMode(const ArcRecord& arc)
   bool negative = false;
   bool nonnegative = false;
   bool non_unate = false;
-  for (const auto& child : arc.transfer.children) {
+  for (const auto& child : arc.transfer.children()) {
     negative = negative || child.signature.sense == TimingSense::kNegativeUnate;
     non_unate = non_unate || child.signature.sense == TimingSense::kNonUnate;
     nonnegative = nonnegative || child.signature.sense == TimingSense::kPositiveUnate || child.signature.sense == TimingSense::kNoneUsesPositiveFallback;
@@ -90,7 +90,7 @@ SlowOracleStatus initializeSimpleArc(const ArcRecord& arc, std::size_t arc_index
 {
   auto& result = state.result.arcs;
   const bool net = arc.kind == ArcKind::kNet;
-  const bool empty_cell = arc.kind == ArcKind::kCell && arc.transfer.children.empty();
+  const bool empty_cell = arc.kind == ArcKind::kCell && arc.transfer.children().empty();
   const double maximum = net ? 0.0 : arc.transfer.delay_max;
   const double minimum = net ? 0.0 : arc.transfer.delay_min;
   result.delays.values[arc_index] = maximum;
@@ -124,15 +124,15 @@ SlowOracleStatus initializeChildArc(const ArcRecord& arc, std::size_t arc_index,
         if (!relationAllowed(mode, input_transition, output_transition))
           continue;
         bool relation = false;
-        for (const auto& child : arc.transfer.children)
+        for (const auto& child : arc.transfer.children())
           relation = relation || childHasRelation(child, output_transition);
         if (!relation)
           continue;
 
         bool delay_written = false;
         double selected_delay = arc.transfer.delay;
-        for (std::size_t child_index = 0; child_index < arc.transfer.children.size(); ++child_index) {
-          const auto& child = arc.transfer.children[child_index];
+        for (std::size_t child_index = 0; child_index < arc.transfer.children().size(); ++child_index) {
+          const auto& child = arc.transfer.children()[child_index];
           if (!childAllowed(child, input_transition, output_transition) || !child.delay_tables[output_transition].present)
             continue;
           if (!arc.output_load)
@@ -222,7 +222,6 @@ SlowOracleStatus slowOracleInitialize(const CsrReferenceInput& input, const Slow
   state.result.level_offsets = levelization.level_offsets;
   state.result.level_nodes = levelization.level_nodes;
   state.result.node_to_level = levelization.node_to_level;
-  state.result.timing_order = levelization.level_nodes;
   state.result.nodes.is_clock_point = requiredSoa<std::uint8_t>(nodes, 0);
   state.result.nodes.arrivals = requiredSoa(nodes, -std::numeric_limits<double>::infinity());
   state.result.nodes.requireds = requiredSoa(nodes, std::numeric_limits<double>::infinity());
@@ -251,7 +250,7 @@ SlowOracleStatus slowOracleInitialize(const CsrReferenceInput& input, const Slow
   state.result.arcs.transition_types = resetSoa(arcs * kTransitionCount, Transition::kNone);
   state.result.arcs.timing_arc_row_offsets = {0};
   for (const auto& arc : input.arcs) {
-    for (const auto& child : arc.transfer.children)
+    for (const auto& child : arc.transfer.children())
       state.result.arcs.timing_arc_indices.push_back(child.signature.arc_index);
     state.result.arcs.timing_arc_row_offsets.push_back(state.result.arcs.timing_arc_indices.size());
   }
@@ -267,7 +266,7 @@ SlowOracleStatus slowOracleInitializeArcs(const CsrReferenceInput& input, SlowOr
   for (std::size_t arc_index = 0; arc_index < input.arcs.size(); ++arc_index) {
     const ArcRecord& arc = input.arcs[arc_index];
     const SlowOracleStatus status
-        = arc.kind == ArcKind::kCell && !arc.transfer.children.empty() ? initializeChildArc(arc, arc_index, state) : initializeSimpleArc(arc, arc_index, state);
+        = arc.kind == ArcKind::kCell && !arc.transfer.children().empty() ? initializeChildArc(arc, arc_index, state) : initializeSimpleArc(arc, arc_index, state);
     if (status != SlowOracleStatus::kSuccess)
       return status;
   }

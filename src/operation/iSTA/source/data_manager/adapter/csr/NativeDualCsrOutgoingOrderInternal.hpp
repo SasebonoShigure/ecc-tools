@@ -49,7 +49,7 @@ using NativeArcOrderResult
     const ista::Database& database,
     const DualSemanticReadView& committed,
     const DualCsrArcGroupIndex& committed_index,
-    const timing_edit::TimingEditResolverState& staged,
+    timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan,
     std::span<const NativeCandidateArcOrderFact> candidates);
 

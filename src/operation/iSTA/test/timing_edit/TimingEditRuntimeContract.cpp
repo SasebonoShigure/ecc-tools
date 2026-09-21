@@ -5,55 +5,82 @@
 
 #include "DataManager.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
+#include "NativeTimingEditPreparer.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
 
-namespace ista::timing_edit::test {
 namespace {
+using namespace ista;
+using namespace ista::timing_edit;
+using namespace ista::timing_edit::test;
 void require(bool condition, const std::string& message)
 {
   if (!condition)
     throw std::runtime_error(message);
 }
-}  // namespace
-
-void testTimingEditRuntimeContract()
+void testCommitAndRollback()
 {
-  // Both real commit and real rollback on a rejected generation run without injection.
-  for (bool reject_generation : {false, true}) {
+  for (bool commit : {false, true}) {
     installNativeTransactionBaseline();
     GuardedTestSession session;
-    auto transaction = prepareNativeTransaction(session.token());
-    TimingEditCoordinator coordinator(session.token(), StaTimingEditSessionProbeAccess::stateSignal(session.session()), transaction.baseline,
-                                      transaction.initial_identity, {}, transaction.resolver, buildNativeHostSnapshot(STADM.getDatabase(), session.token()));
-    require(coordinator.beginPrepare(transaction.prepared).ok() && coordinator.markStaged().ok() && coordinator.markExecuting().ok(),
-            "runtime transaction did not enter execution");
-    auto guarded = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(session.session(), [&](std::uint64_t, StaCsrSessionContext& context,
-                                                                                                       const NativeExecutionAuthority& authority) {
-      auto executed = executeNativeTransaction(authority, context, transaction);
-      require(executed.csr_full_receipt.hasFullExactProof() == incregpusta_debug_checks_enabled, "execution authorization falsely reported a full exact proof");
-      require(coordinator.sealVerified(transaction.prepared, executed.post_identity).ok(), "runtime transaction did not seal");
-      auto trace = nativeSuccessorTrace(transaction);
-      const auto materialization = executed.materialization;
-      if (reject_generation) {
-        // A receipt for another generation is a necessary identity failure.
-        executed.csr_full_receipt
-            = StaTimingEditSessionProbeAccess::proveCsrFullExact(authority, *executed.host_snapshot, executed.installed.database(), TransactionGeneration{2});
-      }
-      VerifiedPublishBundle bundle(std::move(executed.installed), std::move(executed.host_snapshot), std::move(executed.csr_full_receipt),
-                                   std::move(transaction.prepared), std::move(trace), std::move(executed.staged_resolver));
-      auto status = coordinator.publish(authority, std::move(bundle));
-      require(status.ok() != reject_generation, "runtime publish result differs from generation binding");
-      const auto& database = STADM.getDatabase();
-      require(database.get_instance_map().contains(materialization.instance_name) != reject_generation
-                  && database.get_net_map().contains(materialization.output_net_name) != reject_generation,
-              "native commit or rollback did not update the actual database");
-      require(coordinator.committedIdentity().generation == TransactionGeneration{reject_generation ? 0U : 1U},
-              "rejected publish changed generation or successful commit was lost");
-      return StaStatus::success(session.session().state());
-    });
-    require(guarded.ok(), "runtime transaction guard failed: " + guarded.message);
-    require(session.closeAndRelease().ok(), "runtime transaction did not close");
+    auto prepared = prepareNativeTransaction(session.token());
+    auto guarded = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
+        session.session(), [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority& authority) {
+          requireReleasedSnapshotForNativeMutation(context, authority.sessionToken());
+          PreparedTimingEditResolverPatch resolver_patch(
+              prepared.resolver, prepared.resolver.prepare(prepared.prepared));
+          auto installed = NativeEditTransaction::prepareFull(
+              authority, prepared.prepared, resolver_patch.view());
+          const auto names = prepared.prepared.tokenMaterializations().front();
+          NativeCandidateExecutor::executeFull(installed);
+          resolver_patch.apply();
+          if constexpr (incregpusta_debug_checks_enabled) {
+            auto host = buildNativeHostSnapshot(installed.database(), session.token());
+            StaTimingEditSessionProbeAccess::requireCsrFullExact(*host, installed.database());
+          }
+          if (commit) {
+            installed.commit();
+            resolver_patch.commit();
+          } else {
+            require(installed.rollback(), "native full failed actual rollback");
+            resolver_patch.rollback();
+          }
+          auto& database = STADM.getDatabase();
+          require(database.get_instance_map().contains(names.instance_name) == commit
+                      && database.get_net_map().contains(names.output_net_name) == commit,
+                  "native commit/rollback lost its raw edit");
+          const auto identity = NativeTimingEditPreparer::captureCurrentIdentity(
+              database, TransactionGeneration{commit ? 1U : 0U}, editTestAnalysisContext(), session.token());
+          if (!commit)
+            require(identity == prepared.initial_identity, "rollback did not restore the committed identity");
+          if (commit) {
+            bool stale_rejected = false;
+            try {
+              auto stale = NativeEditTransaction::prepareFull(
+                  authority, prepared.prepared, prepared.resolver);
+              static_cast<void>(stale);
+            } catch (const std::invalid_argument&) {
+              stale_rejected = true;
+            }
+            require(stale_rejected && authority.readyForQuery(),
+                    "already applied batch was accepted or retained pending ownership");
+          }
+          // Both publication and rollback release pending ownership for the next operation.
+          auto next = NativeEditTransaction::prepareFull(authority);
+          NativeCandidateExecutor::executeFull(next);
+          next.commit();
+          require(NativeTimingEditPreparer::captureCurrentIdentity(
+                      database, identity.generation, editTestAnalysisContext(), session.token()) == identity,
+                  "continued full execution changed the raw design");
+          return StaStatus::success(session.session().state());
+        });
+    require(guarded.ok(), "native full guard failed: " + guarded.message);
+    require(session.closeAndRelease().ok(), "native full session cleanup failed");
   }
 }
-}  // namespace ista::timing_edit::test
+}
+int main()
+{
+  NativeTransactionRuntime runtime;
+  testCommitAndRollback();
+}

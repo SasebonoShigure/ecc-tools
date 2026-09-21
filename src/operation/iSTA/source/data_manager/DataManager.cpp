@@ -74,12 +74,6 @@ void DataManager::output()
 
 DataManager* DataManager::_dm_instance = nullptr;
 
-std::unique_ptr<Database> DataManager::exchangeDatabase(std::unique_ptr<Database> replacement) noexcept
-{
-  _database.swap(replacement);
-  return replacement;
-}
-
 #if 1  // build
 
 void DataManager::buildConfig()

@@ -176,7 +176,7 @@ timing_edit::BaselineSemanticIdentity parseBaseline(const Json& value)
   const std::vector<Json> edits{Json::array({proxyEdit(1, proxyToken(1))})};
   return parseStage3(stage3Envelope(value, edits)).baseline;
 }
-std::vector<timing_edit::DesignEditPlan> parsePlans(const Json& value, const Json& baseline_json, std::string_view field)
+std::vector<timing_edit::EditBatch> parsePlans(const Json& value, const Json& baseline_json, std::string_view field)
 {
   if (!value.is_array())
     throw WireError(BufferTraceContractCode::kInvalidValue, std::string(field), "expected array");
@@ -198,16 +198,15 @@ std::vector<timing_edit::DesignEditPlan> parsePlans(const Json& value, const Jso
     edits.push_back(value[index].at("edits"));
   }
   auto trace = parseStage3(stage3Envelope(baseline_json, edits));
-  std::vector<timing_edit::DesignEditPlan> result;
+  std::vector<timing_edit::EditBatch> result;
   result.reserve(trace.batches.size());
   for (std::size_t index = 0; index < trace.batches.size(); ++index)
-    result.push_back(timing_edit::DesignEditPlan{.baseline = trace.baseline,
-                                                 .expected_generation = timing_edit::TransactionGeneration{index},
+    result.push_back(timing_edit::EditBatch{.expected_generation = timing_edit::TransactionGeneration{index},
                                                  .edits = std::move(trace.batches[index].edits)});
   return result;
 }
 timing_edit::TimingEditTrace makeStage3Trace(const timing_edit::BaselineSemanticIdentity& baseline,
-                                             const std::vector<timing_edit::DesignEditPlan>& plans)
+                                             const std::vector<timing_edit::EditBatch>& plans)
 {
   timing_edit::TimingEditTrace trace;
   trace.profile = plans.front().edits.front().creation_token.profile_id;
@@ -228,7 +227,7 @@ timing_edit::TimingEditTrace makeStage3Trace(const timing_edit::BaselineSemantic
   }
   return trace;
 }
-Json plansJson(const timing_edit::BaselineSemanticIdentity& baseline, const std::vector<timing_edit::DesignEditPlan>& plans)
+Json plansJson(const timing_edit::BaselineSemanticIdentity& baseline, const std::vector<timing_edit::EditBatch>& plans)
 {
   const Json trace = Json::parse(timing_edit::timingEditTraceToJson(makeStage3Trace(baseline, plans)));
   Json result = Json::array();
@@ -315,7 +314,7 @@ Json proxyEditJson(const timing_edit::BaselineSemanticIdentity& baseline, const 
     token_value.accepted_ordinal = 0;
   }
   const std::uint64_t ordinal = token_value.batch_ordinal;
-  std::vector<timing_edit::DesignEditPlan> plans;
+  std::vector<timing_edit::EditBatch> plans;
   for (std::uint64_t batch = 1; batch < ordinal; ++batch) {
     std::uint64_t maximum = 0;
     for (const auto& reference : references)
@@ -332,10 +331,10 @@ Json proxyEditJson(const timing_edit::BaselineSemanticIdentity& baseline, const 
                        {timing_edit::ExistingNodeRef{{csr::NodeKind::kPort, "__buffer_wire_pin_" + suffix, "", ""}}},
                        library, timing_edit::UnplacedInputs{}, timing_edit::NoParasiticRcInputs{}, std::move(dummy)});
     }
-    plans.push_back({.baseline = baseline, .expected_generation = timing_edit::TransactionGeneration{batch - 1}, .edits = std::move(edits)});
+    plans.push_back({.expected_generation = timing_edit::TransactionGeneration{batch - 1}, .edits = std::move(edits)});
   }
   timing_edit::BufferInsertionMutation target{net, {sink}, library, timing_edit::UnplacedInputs{}, timing_edit::NoParasiticRcInputs{}, token_value};
-  plans.push_back({.baseline = baseline, .expected_generation = timing_edit::TransactionGeneration{ordinal - 1}, .edits = {std::move(target)}});
+  plans.push_back({.expected_generation = timing_edit::TransactionGeneration{ordinal - 1}, .edits = {std::move(target)}});
   return plansJson(baseline, plans).back().at("edits").at(0);
 }
 Json defaultBaselineJson()
@@ -355,7 +354,7 @@ Json baselineJson(const timing_edit::BaselineSemanticIdentity& baseline)
   const timing_edit::BufferInsertionMutation edit{timing_edit::ExistingNetRef{"__buffer_wire_net__"},
       {timing_edit::ExistingNodeRef{{csr::NodeKind::kPort, "__buffer_wire_pin__", "", ""}}}, library,
       timing_edit::UnplacedInputs{}, timing_edit::NoParasiticRcInputs{}, creation_token};
-  return plansJson(baseline, {{.baseline = baseline, .expected_generation = timing_edit::TransactionGeneration{0}, .edits = {edit}}})
+  return plansJson(baseline, {{.expected_generation = timing_edit::TransactionGeneration{0}, .edits = {edit}}})
       .front().at("baseline");
 }
 ReplayHeader parseHeader(const Json& value)
@@ -408,8 +407,8 @@ ReplayProgram parseReplay(const Json& value)
                                    parseRecipe<SdcRecipe>(recipe.at("sdc"), "replay.workload.source_recipe.sdc"),
                                    text(recipe.at("top"), "replay.workload.source_recipe.top")};
     const Json baseline_json = workload.at("batches").empty() ? Json{} : workload.at("batches").at(0).at("baseline");
-    result.workload = SyntheticReplayPayload{std::move(source), workload.at("batches").empty()
-                                                                      ? std::vector<timing_edit::DesignEditPlan>{}
+    result.workload = SyntheticReplayPayload{std::move(source), baseline_json.is_null() ? timing_edit::BaselineSemanticIdentity{} : parseBaseline(baseline_json), workload.at("batches").empty()
+                                                                      ? std::vector<timing_edit::EditBatch>{}
                                                                       : parsePlans(workload.at("batches"), baseline_json, "replay.workload.batches")};
   } else if (kind == "real_design") {
     exactObject(workload, "replay.workload", {"kind", "artifacts", "baseline", "batches"});
@@ -457,16 +456,9 @@ GainComputationReceipt parseNumeric(const Json& value, std::string_view field)
 }
 const timing_edit::BaselineSemanticIdentity& replayBaseline(const ReplayProgram& replay)
 {
-  return std::visit([](const auto& payload) -> const timing_edit::BaselineSemanticIdentity& {
-    using Payload = std::decay_t<decltype(payload)>;
-    if constexpr (std::is_same_v<Payload, RealReplayPayload>)
-      return payload.baseline;
-    else {
-      if (payload.batches.empty())
-        throw WireError(BufferTraceContractCode::kInvalidValue, "generation_only", "generation receipt requires a replay baseline");
-      return payload.batches.front().baseline;
-    }
-  }, replay.workload);
+  if (replay.baseline() == timing_edit::BaselineSemanticIdentity{})
+    throw WireError(BufferTraceContractCode::kInvalidValue, "generation_only", "generation receipt requires a replay baseline");
+  return replay.baseline();
 }
 Json replayBaselineJson(const Json& replay)
 {
@@ -528,7 +520,7 @@ Json toReplay(const ReplayProgram& value)
       return {{"kind", "synthetic"}, {"source_recipe", {{"tech_lef", recipe(payload.source_recipe.tech_lef)},
                {"cell_lef", recipe(payload.source_recipe.cell_lef)}, {"liberty", recipe(payload.source_recipe.liberty)},
                {"verilog", recipe(payload.source_recipe.verilog)}, {"sdc", recipe(payload.source_recipe.sdc)}, {"top", payload.source_recipe.top}}},
-              {"batches", payload.batches.empty() ? Json::array() : plansJson(payload.batches.front().baseline, payload.batches)}};
+              {"batches", payload.batches.empty() ? Json::array() : plansJson(payload.baseline, payload.batches)}};
     } else {
       const Json plan_values = payload.batches.empty() ? Json::array() : plansJson(payload.baseline, payload.batches);
       const Json baseline_json = payload.baseline == timing_edit::BaselineSemanticIdentity{} ? defaultBaselineJson()

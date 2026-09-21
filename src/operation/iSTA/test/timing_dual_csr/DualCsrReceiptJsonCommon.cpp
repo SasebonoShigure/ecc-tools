@@ -82,7 +82,7 @@ Json transfer(const csr::CellTransferModel& value)
           {"is_clock_arc", value.is_clock_arc},
           {"is_disabled", value.is_disabled},
           {"is_clear_or_preset", value.is_clear_or_preset},
-          {"children", arrayOf(value.children, childArc)}};
+          {"children", arrayOf(value.children(), childArc)}};
 }
 
 Json libraryPort(const csr::LibraryPortModel& value)
@@ -108,7 +108,7 @@ Json libraryCell(const csr::ReferencedLibraryCellModel& value)
                 {"kind", csr::token(arc.kind)},
                 {"check_time", number(arc.check_time)},
                 {"clock_transition", csr::token(arc.clock_transition)},
-                {"children", arrayOf(arc.children, childArc)}};
+                {"children", arrayOf(arc.children(), childArc)}};
   };
   return {{"cell_name", value.cell_name},
           {"present", value.present},

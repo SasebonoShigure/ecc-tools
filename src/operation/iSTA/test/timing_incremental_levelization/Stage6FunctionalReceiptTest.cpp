@@ -69,7 +69,6 @@ FunctionalSemanticReceipt makeReceipt(bool noncompact)
     receipt.timing.level_nodes = {a, b, c};
     receipt.timing.node_to_level = {1, 1, 2};
   }
-  receipt.timing.timing_order = {a, b, c};
   return receipt;
 }
 
@@ -107,25 +106,25 @@ int main()
           "inconsistent inverse passed");
 
   auto order = compact.levelization;
-  order.timing_order[2] = order.timing_order[1];
+  order.level_nodes[2] = order.level_nodes[1];
   require(!validateStage6LevelizationReceipt(
                compact.functional.graph, order, 7)
                .empty(),
-          "duplicate timing-order node passed");
+          "duplicate level-order node passed");
 
   auto same_level_order = compact.levelization;
-  same_level_order.timing_order = {key("b"), key("a"), key("c")};
+  same_level_order.level_nodes = {key("b"), key("a"), key("c")};
   require(validateStage6LevelizationReceipt(
               compact.functional.graph, same_level_order, 7)
               .empty(),
-          "legal within-level timing-order permutation failed");
+          "legal within-level level-order permutation failed");
 
   auto reverse_level_order = compact.levelization;
-  reverse_level_order.timing_order = {key("c"), key("a"), key("b")};
+  reverse_level_order.level_nodes = {key("c"), key("a"), key("b")};
   require(!validateStage6LevelizationReceipt(
                compact.functional.graph, reverse_level_order, 7)
                .empty(),
-          "cross-level reversed timing-order permutation passed");
+          "cross-level reversed level-order permutation passed");
 
   auto edge = compact.levelization;
   edge.level_offsets = {0, 2, 3};

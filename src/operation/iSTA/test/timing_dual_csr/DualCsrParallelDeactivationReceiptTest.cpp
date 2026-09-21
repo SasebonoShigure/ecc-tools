@@ -102,7 +102,7 @@ DualCsrTimingResult timingFor(const DualCsrState& state)
       = std::get_if<csr::CsrTimingResult>(&output.computation.outcome);
   require(values != nullptr,
           "fresh parallel state did not compute timing");
-  DualCsrTimingResult timing{*values, activeMask(state)};
+  DualCsrTimingResult timing{*values};
   const auto violations = validateDualCsrTimingResult(state, timing);
   require(violations.empty(),
           "fresh parallel timing was rejected"
@@ -140,9 +140,9 @@ void sameMembershipRowsFollowCandidateOrder()
   auto noncanonical = descriptor;
   std::swap(noncanonical.affected_base_in_rows[0],
             noncanonical.affected_base_in_rows[1]);
-  const auto rejected = DualCsrUpdater::stage(before, noncanonical);
-  require(!rejected.success()
-              && hasCode(rejected.violations,
+  const auto rejected = validateDualCsrDescriptor(before, noncanonical);
+  require(!rejected.empty()
+              && hasCode(rejected,
                          DualCsrViolationCode::kExpectedValue),
           "descriptor accepted noncanonical BaseIn row ordering");
 

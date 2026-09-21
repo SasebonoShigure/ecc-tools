@@ -40,11 +40,11 @@ CsrCpuReferenceStageStatus clockToQ(const CellTransferModel* transfer, AnalysisM
   value = {true, 0.0, clock_slew};
   if (transfer == nullptr)
     return CsrCpuReferenceStageStatus::kSuccess;
-  value.delay = transfer->children.empty() ? (analysis == AnalysisMode::kMax ? transfer->delay_max : transfer->delay_min) : transfer->delay;
+  value.delay = transfer->children().empty() ? (analysis == AnalysisMode::kMax ? transfer->delay_max : transfer->delay_min) : transfer->delay;
   bool delay_seen = false;
   bool slew_seen = false;
   const auto output = csrTransitionIndex(output_transition);
-  for (const auto& child : transfer->children) {
+  for (const auto& child : transfer->children()) {
     if (!csrChildSelected(child, clock_transition, output_transition))
       continue;
     const auto accumulate = [&](const TimingTableModel& table, double& result, bool& seen) {
@@ -72,8 +72,8 @@ CsrCpuReferenceStageStatus initializeSeed(const ActiveCsrEdgeView& edges, const 
   const auto& record = payloads.nodeRecords()[node];
   const auto selected = std::ranges::find_if(cell.cell_arcs, [](const LibraryCellArcModel& arc) { return arc.transfer.is_clock_arc; });
   const CellTransferModel* transfer = selected == cell.cell_arcs.end() ? nullptr : &selected->transfer;
-  const Transition trigger = transfer != nullptr && !transfer->children.empty()
-                                 && transfer->children.front().signature.trigger_transition == Transition::kFall ? Transition::kFall : Transition::kRise;
+  const Transition trigger = transfer != nullptr && !transfer->children().empty()
+                                 && transfer->children().front().signature.trigger_transition == Transition::kFall ? Transition::kFall : Transition::kRise;
   const bool is_clock = clock_node == seed.seed_node;
   const bool has_output = cell.present && (transfer != nullptr || std::ranges::any_of(cell.ports, [](const LibraryPortModel& port) {
     return port.is_output && !port.is_clock;

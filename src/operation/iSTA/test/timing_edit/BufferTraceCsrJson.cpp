@@ -166,7 +166,7 @@ Json transfer(const csr::CellTransferModel& value)
           {"is_clock_arc", value.is_clock_arc},
           {"is_disabled", value.is_disabled},
           {"is_clear_or_preset", value.is_clear_or_preset},
-          {"children", arrayOf(value.children, childArc)}};
+          {"children", arrayOf(value.children(), childArc)}};
 }
 
 Json nodeRecord(const csr::NodeRecord& value)
@@ -289,7 +289,7 @@ Json libraryCell(const csr::ReferencedLibraryCellModel& value)
                 {"kind", csr::token(arc.kind)},
                 {"check_time", number(arc.check_time)},
                 {"clock_transition", csr::token(arc.clock_transition)},
-                {"children", arrayOf(arc.children, childArc)}};
+                {"children", arrayOf(arc.children(), childArc)}};
   };
   return {{"cell_name", value.cell_name},
           {"present", value.present},
@@ -509,7 +509,6 @@ Json csrTimingValuesToJson(const csr::CsrTimingValues& result)
   return {{"level_offsets", scalarArray(result.level_offsets)},
           {"level_nodes", ids(result.level_nodes)},
           {"node_to_level", scalarArray(result.node_to_level)},
-          {"timing_order", ids(result.timing_order)},
           {"nodes", nodeResult(result.nodes)},
           {"effective_clock", clockResult(result.effective_clock)},
           {"physical_clock", clockResult(result.physical_clock)},

@@ -248,10 +248,6 @@ void projectLevelization(
                               members.begin(), members.end());
     result.level_offsets.push_back(result.level_nodes.size());
   }
-  result.timing_order.reserve(source.timing_order.size());
-  for (const auto id : source.timing_order)
-    result.timing_order.push_back(
-        detail::semanticNodeKey(state, id));
   result.node_to_level.reserve(index.node_ids.size());
   for (const auto id : index.node_ids)
     result.node_to_level.push_back(source.node_to_level.at(id));

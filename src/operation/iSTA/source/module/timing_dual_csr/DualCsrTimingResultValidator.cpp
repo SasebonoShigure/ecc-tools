@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <ranges>
 #include <optional>
 #include <string>
 #include <vector>
@@ -90,7 +91,7 @@ bool validateSoaDomain(const csr::OptionalSoa<T>& values,
 
 template <typename T>
 bool requirePresent(const csr::OptionalSoa<T>& values,
-                    const std::vector<std::uint8_t>& expected,
+                    const auto& expected,
                     const std::string& field,
                     DualCsrViolations& violations)
 {
@@ -108,7 +109,7 @@ bool requirePresent(const csr::OptionalSoa<T>& values,
 
 template <typename T, typename Predicate>
 bool requirePresentDomain(const csr::OptionalSoa<T>& values,
-                          const std::vector<std::uint8_t>& expected,
+                          const auto& expected,
                           const std::string& field, Predicate predicate,
                           const std::string& message,
                           DualCsrViolations& violations)
@@ -153,11 +154,10 @@ void validateLevelization(const DualCsrState& state,
 {
   const std::size_t node_count = state.nodes.size();
   if (result.level_nodes.size() != node_count
-      || result.node_to_level.size() != node_count
-      || result.timing_order != result.level_nodes) {
+      || result.node_to_level.size() != node_count) {
     reject(violations, DualCsrViolationCode::kTimingResult,
            "result.levelization",
-           "level nodes, node-to-level, and timing order must cover all nodes");
+           "level nodes and node-to-level must cover all nodes");
     return;
   }
   if (result.level_offsets.empty() || result.level_offsets.front() != 0
@@ -317,7 +317,7 @@ void validateNodeAndPathResults(const DualCsrState& state,
 }
 
 void validateInactiveArcLanes(const csr::OptionalSoa<double>& values,
-                              const std::vector<std::uint8_t>& active,
+                              const auto& active,
                               std::size_t width, const std::string& field,
                               DualCsrViolations& violations)
 {
@@ -337,11 +337,13 @@ void validateArcResults(const DualCsrState& state,
 {
   const std::size_t arc_slots = state.arc_slots.size();
   const auto& arcs = result.values.arcs;
-  requirePresent(arcs.delays, result.active_arc_mask,
+  const auto active = state.arc_slots | std::views::transform(
+      [](const DualCsrArcSlot& slot) { return slot.active ? 1U : 0U; });
+  requirePresent(arcs.delays, active,
                  "result.arcs.delays", violations);
-  requirePresent(arcs.min_delays, result.active_arc_mask,
+  requirePresent(arcs.min_delays, active,
                  "result.arcs.min_delays", violations);
-  requirePresent(arcs.max_delays, result.active_arc_mask,
+  requirePresent(arcs.max_delays, active,
                  "result.arcs.max_delays", violations);
 
   constexpr std::size_t transition_width
@@ -349,17 +351,14 @@ void validateArcResults(const DualCsrState& state,
   constexpr std::size_t graph_width
       = transition_width * csr::kTransitionCount;
   constexpr std::size_t type_width = csr::kTransitionCount;
-  std::vector<std::uint8_t> active_transitions(arc_slots * transition_width);
-  for (std::size_t arc = 0; arc < arc_slots; ++arc)
-    for (std::size_t lane = arc * transition_width;
-         lane < (arc + 1) * transition_width; ++lane)
-      active_transitions[lane] = result.active_arc_mask[arc];
+  const auto active_transitions = std::views::iota(std::size_t{0}, arc_slots * transition_width)
+      | std::views::transform([&](std::size_t lane) { return active[lane / transition_width]; });
   requirePresent(arcs.transition_delays, active_transitions,
                  "result.arcs.transition_delays", violations);
   validateInactiveArcLanes(arcs.input_output_delays,
-                           result.active_arc_mask, graph_width,
+                           active, graph_width,
                            "result.arcs.input_output_delays", violations);
-  validateInactiveArcLanes(arcs.graph_delays, result.active_arc_mask,
+  validateInactiveArcLanes(arcs.graph_delays, active,
                            graph_width, "result.arcs.graph_delays",
                            violations);
   if (validateSoa(arcs.transition_types, arc_slots * type_width,
@@ -369,7 +368,7 @@ void validateArcResults(const DualCsrState& state,
            lane < (arc + 1) * type_width; ++lane) {
         const auto presence = arcs.transition_types.presence[lane];
         const auto value = arcs.transition_types.values[lane];
-        if (result.active_arc_mask[arc] == 0 && presence != 0)
+        if (active[arc] == 0 && presence != 0)
           reject(violations, DualCsrViolationCode::kTimingResult,
                  "result.arcs.transition_types",
                  "inactive ArcId lanes must be absent");
@@ -389,8 +388,8 @@ void validateArcResults(const DualCsrState& state,
     for (std::size_t arc = 0; arc < arc_slots; ++arc) {
       const auto begin = arcs.timing_arc_row_offsets[arc];
       const auto end = arcs.timing_arc_row_offsets[arc + 1];
-      const auto& children = state.arc_slots[arc].payload.transfer.children;
-      if (result.active_arc_mask[arc] == 0) {
+      const auto& children = state.arc_slots[arc].payload.transfer.children();
+      if (active[arc] == 0) {
         if (begin != end)
           reject(violations, DualCsrViolationCode::kTimingResult,
                  "result.arcs.timing_arc_row_offsets",
@@ -452,20 +451,6 @@ DualCsrViolations validateDualCsrTimingResult(
     reject(violations, DualCsrViolationCode::kTimingResult,
            "result.source_identity",
            "source identity must match the installed Dual state");
-
-  if (result.active_arc_mask.size() != state.arc_slots.size()) {
-    reject(violations, DualCsrViolationCode::kTimingResult,
-           "result.active_arc_mask",
-           "active mask must contain one lane per stable ArcId");
-    return violations;
-  }
-  for (std::size_t arc = 0; arc < state.arc_slots.size(); ++arc) {
-    const auto expected = state.arc_slots[arc].active ? 1U : 0U;
-    if (result.active_arc_mask[arc] != expected)
-      reject(violations, DualCsrViolationCode::kTimingResult,
-             "result.active_arc_mask",
-             "active mask must exactly match logical arc activity");
-  }
 
   validateLevelization(state, result.values, violations);
   validateNodeAndPathResults(state, result.values, violations);

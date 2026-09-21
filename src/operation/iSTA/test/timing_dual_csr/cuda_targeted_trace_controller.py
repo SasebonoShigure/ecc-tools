@@ -22,12 +22,12 @@ def require_performance_result(result: dict, strategy: str, expected_prefix: int
         "performance child generated a diagnostic receipt",
     )
     require(
-        result["schema_version"] == f"ista-cuda-{protocol}-trace/1.0.0"
+        result["schema_version"] == f"ista-cuda-{protocol}-trace/3.0.0"
         and result["debug_checks_enabled"] is False
         and result["correctness_comparison"] == "not_run"
         and result["executed_backend"] == "cuda"
         and result["executed_strategy"] == strategy
-        and result["native_final_rollback_completed"],
+        and result["lifecycle_cleanup_completed"],
         "performance child did not complete the declared workload/lifecycle",
     )
     require(
@@ -55,7 +55,8 @@ def require_execution(timing: dict, strategy: str) -> None:
     incremental = strategy == "incremental"
     record = timing["execution"]
     require(
-        record == {
+        record
+        == {
             "requested_backend": "cuda",
             "requested_update_strategy": "incremental" if incremental else "full",
             "fallback_policy": "error",
@@ -96,7 +97,8 @@ def run(args: argparse.Namespace) -> int:
     require(isinstance(batches, list) and batches, "frozen trace requires nonempty batches")
     root.mkdir(parents=True, exist_ok=True)
     names = (
-        ["warmup.json"] + [f"sample-{i}.json" for i in range(args.samples)]
+        [f"warmup-{i}.json" for i in range(args.warmup_runs)]
+        + [f"sample-{i}.json" for i in range(args.samples)]
         if args.performance
         else [
             f"{role}-{prefix}.json"
@@ -108,12 +110,19 @@ def run(args: argparse.Namespace) -> int:
     for name in names:
         (root / name).unlink(missing_ok=True)
     if args.performance:
-        warmup, _ = run_child(
-            probe, performance_mode, trace, len(batches),
-            root / "warmup.json", args.timeout_seconds,
-            input_flag=input_flag,
-        )
-        require_performance_result(warmup, args.strategy, len(batches))
+        warmups = []
+        for index in range(args.warmup_runs):
+            warmup, duration = run_child(
+                probe,
+                performance_mode,
+                trace,
+                len(batches),
+                root / f"warmup-{index}.json",
+                args.timeout_seconds,
+                input_flag=input_flag,
+            )
+            require_performance_result(warmup, args.strategy, len(batches))
+            warmups.append({"process_ms": duration, "result": warmup})
         samples = []
         for index in range(args.samples):
             result, duration = run_child(
@@ -122,18 +131,24 @@ def run(args: argparse.Namespace) -> int:
                 trace,
                 len(batches),
                 root / f"sample-{index}.json",
-                args.timeout_seconds, input_flag=input_flag,
+                args.timeout_seconds,
+                input_flag=input_flag,
             )
             require_performance_result(result, args.strategy, len(batches))
             samples.append({"process_ms": duration, "result": result})
         write_json(
             root / "performance.json",
             {
-                "schema_version": f"ista-cuda-{protocol}-performance/1.0.0",
+                "schema_version": f"ista-cuda-{protocol}-performance/4.0.0",
                 "debug_checks_enabled": False,
                 "correctness_comparison": "not_run",
                 "build": build,
                 "samples": samples,
+                "warmup": warmups,
+                "sampling_kind": "short_smoke"
+                if args.warmup_runs < 5 or args.samples < 30
+                else "engineering",
+                "stage12_performance_acceptance": "not_run",
             },
         )
         return 0
@@ -147,16 +162,34 @@ def run(args: argparse.Namespace) -> int:
     for prefix in range(1, len(batches) + 1):
         # Preserve independent processes without overlapping multi-GiB snapshots.
         targeted, targeted_ms = run_child(
-            probe, protocol, trace, prefix, root / f"targeted-{prefix}.json",
-            args.timeout_seconds, input_flag=input_flag)
+            probe,
+            protocol,
+            trace,
+            prefix,
+            root / f"targeted-{prefix}.json",
+            args.timeout_seconds,
+            input_flag=input_flag,
+        )
         full, full_ms = run_child(
-            full_probe, "cuda", trace, prefix, root / f"cuda-full-{prefix}.json",
-            args.timeout_seconds, input_flag=input_flag)
+            full_probe,
+            "cuda",
+            trace,
+            prefix,
+            root / f"cuda-full-{prefix}.json",
+            args.timeout_seconds,
+            input_flag=input_flag,
+        )
         fresh, fresh_ms = run_child(
-            full_probe, "fresh", trace, prefix, root / f"fresh-{prefix}.json",
-            args.timeout_seconds, input_flag=input_flag)
+            full_probe,
+            "fresh",
+            trace,
+            prefix,
+            root / f"fresh-{prefix}.json",
+            args.timeout_seconds,
+            input_flag=input_flag,
+        )
         require(
-            targeted["schema_version"] == f"ista-cuda-{protocol}-trace/1.0.0"
+            targeted["schema_version"] == f"ista-cuda-{protocol}-trace/3.0.0"
             and targeted["executed_backend"] == "cuda"
             and targeted["executed_strategy"] == args.strategy
             and targeted["fallback_count"] == 0,
@@ -167,8 +200,8 @@ def run(args: argparse.Namespace) -> int:
             and len(targeted["batches"]) == prefix
             and len(targeted["batch_timings"]) == prefix
             and len(targeted["device_checks"]) == prefix
-            and targeted["native_final_rollback_completed"],
-            "targeted prefix omitted a batch, device observation or rollback",
+            and targeted["lifecycle_cleanup_completed"],
+            "targeted prefix omitted a batch, device observation or lifecycle cleanup",
         )
         for ordinal, (values, full_values) in enumerate(
             zip(targeted["batches"], full["batches"], strict=True)
@@ -188,8 +221,10 @@ def run(args: argparse.Namespace) -> int:
                 "actual device decode differs from canonical graph",
             )
         compare_values(
-            targeted["batches"][-1], fresh["functional"],
-            f"fresh CPU/full prefix {prefix}", incremental=incremental,
+            targeted["batches"][-1],
+            fresh["functional"],
+            f"fresh CPU/full prefix {prefix}",
+            incremental=incremental,
         )
         require(
             first_difference(targeted["batches"][:-1], previous_batches) is None,
@@ -208,18 +243,23 @@ def run(args: argparse.Namespace) -> int:
         )
     if len(batches) >= 2:
         recovered, _ = run_child(
-            probe, rollback_mode, trace, len(batches), root / "rollback.json", args.timeout_seconds,
+            probe,
+            rollback_mode,
+            trace,
+            len(batches),
+            root / "rollback.json",
+            args.timeout_seconds,
             input_flag=input_flag,
         )
         require(
             first_difference(recovered["batches"], previous_batches) is None
-            and recovered["native_final_rollback_completed"],
-            "recovered healthy trace changed values or omitted rollback",
+            and recovered["lifecycle_cleanup_completed"],
+            "recovered healthy trace changed values or omitted lifecycle cleanup",
         )
     write_json(
         root / "verdict.json",
         {
-            "schema_version": f"ista-cuda-{protocol}-verdict/1.0.0",
+            "schema_version": f"ista-cuda-{protocol}-verdict/3.0.0",
             "build": build,
             "full_oracle_build": full_build,
             "prefixes": verdicts,
@@ -238,14 +278,16 @@ def main() -> int:
     parser.add_argument("--run-root", type=pathlib.Path, required=True)
     parser.add_argument("--timeout-seconds", type=int, default=900)
     parser.add_argument(
-        "--strategy", choices=("targeted-full-levelization", "incremental"),
+        "--strategy",
+        choices=("targeted-full-levelization", "incremental"),
         default="targeted-full-levelization",
     )
     parser.add_argument("--performance", action="store_true")
-    parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument("--samples", type=int, default=30)
+    parser.add_argument("--warmup-runs", type=int, default=5)
     args = parser.parse_args()
-    if args.samples <= 0 or args.timeout_seconds <= 0:
-        parser.error("samples and timeout must be positive")
+    if args.warmup_runs <= 0 or args.samples <= 0 or args.timeout_seconds <= 0:
+        parser.error("samples, warmups and timeout must be positive")
     return run(args)
 
 

@@ -331,8 +331,8 @@ std::string encodeSnapshotCandidate(const CsrReferenceInput& input)
 NeutralWire encodeReferenceTiming(const CsrReferenceInput& input, const CsrTimingResult& result)
 {
   NeutralWire wire;
-  wire.timing_order.reserve(result.timing_order.size());
-  for (NodeId id : result.timing_order) {
+  wire.timing_order.reserve(result.level_nodes.size());
+  for (NodeId id : result.level_nodes) {
     wire.timing_order.push_back(nodeKey(input, id));
   }
   for (std::size_t node = 0; node < input.nodes.size(); ++node) {

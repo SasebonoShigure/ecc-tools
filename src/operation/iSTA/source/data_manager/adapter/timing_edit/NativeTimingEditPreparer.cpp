@@ -85,13 +85,15 @@ CanonicalPreStateEvidence evidenceOf(const Database& database, const csr::CsrRef
 }
 
 CurrentCapture capture(const Database& database, TransactionGeneration generation,
-                       const csr::StaAnalysisContext& analysis_context, TimingEditSessionToken session_token)
+                       const csr::StaAnalysisContext& analysis_context, TimingEditSessionToken session_token,
+                        csr::detail::NativeLibraryModels* models = nullptr)
 {
   if (session_token.value() == 0) {
     invalid("session token must be nonzero");
   }
   csr::CsrReferenceInputExportResult exported
-      = csr::exportCsrReferenceInputCandidate(database, analysis_context, session_token.value());
+      = models ? csr::exportCsrReferenceInputCandidate(database, analysis_context, session_token.value(), *models)
+               : csr::exportCsrReferenceInputCandidate(database, analysis_context, session_token.value());
   auto* input = std::get_if<csr::CsrReferenceInput>(&exported);
   if (input == nullptr) {
     const auto& failure = std::get<csr::CsrReferenceInputExportFailure>(exported);
@@ -99,23 +101,10 @@ CurrentCapture capture(const Database& database, TransactionGeneration generatio
   }
 
   CurrentCapture result{std::move(*input), {}};
-  result.identity.generation = generation;
-  result.identity.current_fingerprints = fingerprintsOf(result.input.source_identity);
-  result.identity.canonical_pre_state = evidenceOf(database, result.input);
-  if (auto errors = validateCommittedEditIdentity(result.identity, "captured_current_identity"); !errors.empty()) {
-    invalidContract(errors);
-  }
+  result.identity = NativeTimingEditPreparer::identityFromInput(database, result.input, generation);
   return result;
 }
 
-DesignEditPlan requireNormalizedPlan(DesignEditPlan plan)
-{
-  DesignEditPlanNormalization normalized = normalizeDesignEditPlan(std::move(plan));
-  if (const auto* errors = std::get_if<TimingEditContractViolations>(&normalized)) {
-    invalidContract(*errors);
-  }
-  return std::get<DesignEditPlan>(std::move(normalized));
-}
 
 TimingGraphDelta requireNormalizedDelta(TimingGraphDelta delta, std::string_view field)
 {
@@ -535,6 +524,31 @@ CommittedEditIdentity NativeTimingEditPreparer::captureCurrentIdentity(const Dat
   return capture(active_database, generation, analysis_context, session_token).identity;
 }
 
+CommittedEditIdentity NativeTimingEditPreparer::identityFromInput(const Database& database,
+                                                                 const csr::CsrReferenceInput& input,
+                                                                 TransactionGeneration generation)
+{
+  CommittedEditIdentity identity;
+  identity.generation = generation;
+  identity.current_fingerprints = fingerprintsOf(input.source_identity);
+  identity.canonical_pre_state = evidenceOf(database, input);
+  if (auto errors = validateCommittedEditIdentity(identity, "captured_current_identity"); !errors.empty())
+    invalidContract(errors);
+  return identity;
+}
+
+void NativeTimingEditPreparer::requireBaselineIdentity(const Database& database, const csr::CsrReferenceInput& input,
+                                                        const BaselineSemanticIdentity& baseline)
+{
+  if (auto errors = validateBaselineSemanticIdentity(baseline); !errors.empty())
+    invalidContract(errors);
+  if (input.source_identity.session_token == 0 || input.source_identity.graph_generation != 0
+      || database.get_design_name() != baseline.design_name
+      || fingerprintsOf(input.source_identity) != baseline.fingerprints
+      || evidenceOf(database, input) != baseline.canonical_pre_state)
+    invalid("baseline identity differs from the loaded generation-zero state");
+}
+
 bool NativeTimingEditPreparer::matchesDesignName(Database& active_database, std::string_view expected_design_name)
 {
   return active_database.get_design_name() == expected_design_name;
@@ -547,14 +561,40 @@ void NativeTimingEditPreparer::requireExactResolverCoverage(const Database& acti
   requireResolverCoverage(active_database, current_input, resolver);
 }
 
-PreparedBatch NativeTimingEditPreparer::prepare(const Database& active_database, DesignEditPlan plan,
+TimingEditPrepareContext::TimingEditPrepareContext(TimingEditSessionToken token, const BaselineSemanticIdentity& baseline,
+                                                   const CommittedEditIdentity& identity, csr::StaAnalysisContext analysis)
+    : session_token(token), current_identity(identity), analysis_context(std::move(analysis)),
+      _baseline(std::make_shared<const BaselineSemanticIdentity>(baseline))
+{
+  if (const auto errors = validateBaselineSemanticIdentity(*_baseline); !errors.empty())
+    invalidContract(errors);
+}
+
+TimingEditPrepareContext::TimingEditPrepareContext(TimingEditSessionToken token, std::shared_ptr<const BaselineSemanticIdentity> baseline,
+                                                   const CommittedEditIdentity& identity, csr::StaAnalysisContext analysis)
+    : session_token(token), current_identity(identity), analysis_context(std::move(analysis)), _baseline(std::move(baseline))
+{
+}
+
+PreparedBatch NativeTimingEditPreparer::prepare(const Database& active_database, const DesignEditPlan& plan,
                                                  const TimingEditPrepareContext& context,
                                                  const TimingEditResolverState& resolver)
 {
-  DesignEditPlan normalized_plan = requireNormalizedPlan(std::move(plan));
-  if (normalized_plan.baseline != context.session_baseline) {
-    invalid("plan baseline identity does not match the active session baseline");
-  }
+  if (!context._baseline || plan.schema_version != kDesignEditPlanSchema || plan.baseline != *context._baseline)
+    invalid("plan schema/baseline does not match the active session");
+  return prepare(active_database, EditBatch{plan.expected_generation, plan.edits}, context, resolver);
+}
+
+PreparedBatch NativeTimingEditPreparer::prepare(const Database& active_database, EditBatch edits,
+                                                 const TimingEditPrepareContext& context,
+                                                 const TimingEditResolverState& resolver)
+{
+  if (!context._baseline)
+    invalid("native prepare context has no baseline owner");
+  auto normalized = normalizeEditBatch(std::move(edits));
+  if (const auto* errors = std::get_if<TimingEditContractViolations>(&normalized))
+    invalidContract(*errors);
+  auto normalized_plan = std::get<EditBatch>(std::move(normalized));
   if (normalized_plan.expected_generation != context.current_identity.generation) {
     invalid("plan generation does not match the committed generation");
   }
@@ -562,10 +602,15 @@ PreparedBatch NativeTimingEditPreparer::prepare(const Database& active_database,
   // This re-export is the authoritative pre-write stale-state gate. Equality
   // includes exact canonical names/keys as well as component fingerprints.
   CurrentCapture current = capture(active_database, context.current_identity.generation, context.analysis_context,
-                                   context.session_token);
+                                   context.session_token, context.library_models);
   if (current.identity != context.current_identity) {
     invalid("active native state no longer matches the committed identity");
   }
+  if (context.current_identity.generation.value() == 0
+      && (active_database.get_design_name() != context._baseline->design_name
+          || current.identity.current_fingerprints != context._baseline->fingerprints
+          || current.identity.canonical_pre_state != context._baseline->canonical_pre_state))
+    invalid("generation-zero identity differs from the bound baseline");
   requireResolverCoverage(active_database, current.input, resolver);
 
   BatchBuilder builder(resolver.highWater());
@@ -590,7 +635,7 @@ PreparedBatch NativeTimingEditPreparer::prepare(const Database& active_database,
   data.session_token = context.session_token;
   data.expected_generation = normalized_plan.expected_generation;
   data.target_generation = TransactionGeneration{normalized_plan.expected_generation.value() + 1};
-  data.baseline = normalized_plan.baseline;
+  data.baseline = context._baseline;
   data.expected_pre_committed_identity = context.current_identity;
   data.normalized_edits = std::move(normalized_plan.edits);
   data.normalized_forward = std::move(builder.forward);
@@ -600,9 +645,7 @@ PreparedBatch NativeTimingEditPreparer::prepare(const Database& active_database,
   data.invalidation_closure = closureFrom(data.normalized_forward);
   data.policy_receipt = std::move(policy);
 
-  PreparedBatch prepared = PreparedBatch::create(std::move(data));
-  static_cast<void>(resolver.stage(prepared));
-  return prepared;
+  return PreparedBatch(std::move(data));
 }
 
 }  // namespace ista::timing_edit

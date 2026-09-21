@@ -20,7 +20,7 @@ target_link_libraries(ista_timing_dual_csr_transaction
     ista_timing_edit_contract
     ista_timing_incremental_levelization
     PRIVATE
-    ista_timing_edit_transaction
+    ista_timing_edit_native
 )
 
 target_compile_features(ista_timing_dual_csr_transaction PUBLIC cxx_std_20)
@@ -35,6 +35,7 @@ target_compile_options(ista_timing_dual_csr_transaction PRIVATE
 if(BUILD_TESTING)
     add_executable(ista_timing_dual_csr_transaction_test
         ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrTransactionCoordinatorTest.cpp
+        ${ISTA_TEST}/AllocationFailureSupport.cpp
         ${ISTA_TEST}/timing_dual_csr/DualCsrStructuredBatchTestSupport.cpp
         ${ISTA_TEST}/timing_edit/StaTimingEditSessionProbeAccess.cpp
         ${ISTA_TEST}/timing_edit/StaTimingEditCsrReceiptProbe.cpp
@@ -49,14 +50,14 @@ if(BUILD_TESTING)
         PRIVATE
         ${ISTA_MODULE}/timing_csr_snapshot
         ${ISTA_TEST}/timing_dual_csr
+        ${ISTA_TEST}
         ${ISTA_TEST}/timing_edit
     )
     target_link_libraries(ista_timing_dual_csr_transaction_test
         PRIVATE
         ista_timing_dual_csr_transaction
-        ista_timing_edit_transaction
-        ista_timing_dual_csr_native
         ista_timing_edit_native
+        ista_timing_dual_csr_native
         ista_timing_graph_csr_adapter
         ista_timing_database_headers
         ista_interface

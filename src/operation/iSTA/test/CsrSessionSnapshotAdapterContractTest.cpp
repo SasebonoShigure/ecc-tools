@@ -26,181 +26,7 @@
 #include "CsrSnapshotObservationTransition.hpp"
 #include "Database.hpp"
 
-namespace csr_session_allocation_failpoint {
-namespace {
-
-struct AllocationState
-{
-  bool enabled{false};
-  bool inject_failure{false};
-  std::size_t failure_ordinal{0};
-  std::size_t allocation_count{0};
-};
-
-thread_local AllocationState state;
-
-void beforeAllocation()
-{
-  if (!state.enabled)
-    return;
-  const std::size_t ordinal = state.allocation_count++;
-  if (state.inject_failure && ordinal == state.failure_ordinal)
-    throw std::bad_alloc{};
-}
-
-}  // namespace
-
-void armCountOnly() noexcept
-{
-  state = AllocationState{true, false, 0, 0};
-}
-
-void armFailure(std::size_t ordinal) noexcept
-{
-  state = AllocationState{true, true, ordinal, 0};
-}
-
-[[nodiscard]] std::size_t disable() noexcept
-{
-  const std::size_t result = state.allocation_count;
-  state = AllocationState{};
-  return result;
-}
-
-[[nodiscard]] void* allocate(std::size_t size)
-{
-  beforeAllocation();
-  if (void* allocation = std::malloc(size == 0 ? 1 : size))
-    return allocation;
-  throw std::bad_alloc{};
-}
-
-[[nodiscard]] void* allocateAligned(std::size_t size, std::size_t alignment)
-{
-  beforeAllocation();
-  void* allocation = nullptr;
-  if (::posix_memalign(&allocation, alignment, size == 0 ? 1 : size) == 0)
-    return allocation;
-  throw std::bad_alloc{};
-}
-
-}  // namespace csr_session_allocation_failpoint
-
-void* operator new(std::size_t size)
-{
-  return csr_session_allocation_failpoint::allocate(size);
-}
-
-void* operator new[](std::size_t size)
-{
-  return csr_session_allocation_failpoint::allocate(size);
-}
-
-void* operator new(std::size_t size, const std::nothrow_t&) noexcept
-{
-  try {
-    return csr_session_allocation_failpoint::allocate(size);
-  } catch (...) {
-    return nullptr;
-  }
-}
-
-void* operator new[](std::size_t size, const std::nothrow_t&) noexcept
-{
-  try {
-    return csr_session_allocation_failpoint::allocate(size);
-  } catch (...) {
-    return nullptr;
-  }
-}
-
-void* operator new(std::size_t size, std::align_val_t alignment)
-{
-  return csr_session_allocation_failpoint::allocateAligned(size, static_cast<std::size_t>(alignment));
-}
-
-void* operator new[](std::size_t size, std::align_val_t alignment)
-{
-  return csr_session_allocation_failpoint::allocateAligned(size, static_cast<std::size_t>(alignment));
-}
-
-void* operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept
-{
-  try {
-    return csr_session_allocation_failpoint::allocateAligned(size, static_cast<std::size_t>(alignment));
-  } catch (...) {
-    return nullptr;
-  }
-}
-
-void* operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t&) noexcept
-{
-  try {
-    return csr_session_allocation_failpoint::allocateAligned(size, static_cast<std::size_t>(alignment));
-  } catch (...) {
-    return nullptr;
-  }
-}
-
-void operator delete(void* allocation) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete(void* allocation, std::size_t) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation, std::size_t) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete(void* allocation, const std::nothrow_t&) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation, const std::nothrow_t&) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete(void* allocation, std::align_val_t) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation, std::align_val_t) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete(void* allocation, std::size_t, std::align_val_t) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation, std::size_t, std::align_val_t) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete(void* allocation, std::align_val_t, const std::nothrow_t&) noexcept
-{
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation, std::align_val_t, const std::nothrow_t&) noexcept
-{
-  std::free(allocation);
-}
+#include "AllocationFailureSupport.hpp"
 
 namespace {
 
@@ -349,13 +175,13 @@ void exerciseAllocationOrdinals(const std::string& name, MakeCase make_case, Inv
   std::size_t allocation_count = 0;
   {
     auto fixture = make_case();
-    csr_session_allocation_failpoint::armCountOnly();
+    ista_test_allocation::armCountOnly();
     try {
       auto outcome = invoke(*fixture);
-      allocation_count = csr_session_allocation_failpoint::disable();
+      allocation_count = ista_test_allocation::disable();
       verify_success(*fixture, outcome, name + " count-only");
     } catch (...) {
-      static_cast<void>(csr_session_allocation_failpoint::disable());
+      static_cast<void>(ista_test_allocation::disable());
       throw;
     }
   }
@@ -369,17 +195,17 @@ void exerciseAllocationOrdinals(const std::string& name, MakeCase make_case, Inv
     bool returned = false;
     std::size_t observed_allocations = 0;
     std::exception_ptr unexpected_exception;
-    csr_session_allocation_failpoint::armFailure(ordinal);
+    ista_test_allocation::armFailure(ordinal);
     try {
       auto outcome = invoke(*fixture);
-      observed_allocations = csr_session_allocation_failpoint::disable();
+      observed_allocations = ista_test_allocation::disable();
       static_cast<void>(outcome);
       returned = true;
     } catch (const std::bad_alloc&) {
-      observed_allocations = csr_session_allocation_failpoint::disable();
+      observed_allocations = ista_test_allocation::disable();
       caught_bad_alloc = true;
     } catch (...) {
-      observed_allocations = csr_session_allocation_failpoint::disable();
+      observed_allocations = ista_test_allocation::disable();
       unexpected_exception = std::current_exception();
     }
 
@@ -394,12 +220,12 @@ void exerciseAllocationOrdinals(const std::string& name, MakeCase make_case, Inv
   const std::size_t success_ordinal = allocation_count + 1;
   std::size_t observed_allocations = 0;
   try {
-    csr_session_allocation_failpoint::armFailure(success_ordinal);
+    ista_test_allocation::armFailure(success_ordinal);
     auto outcome = invoke(*fixture);
-    observed_allocations = csr_session_allocation_failpoint::disable();
+    observed_allocations = ista_test_allocation::disable();
     verify_success(*fixture, outcome, name + " total+1");
   } catch (...) {
-    static_cast<void>(csr_session_allocation_failpoint::disable());
+    static_cast<void>(ista_test_allocation::disable());
     throw;
   }
   require(observed_allocations == allocation_count, name + " total+1 allocation count changed");

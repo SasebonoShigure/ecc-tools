@@ -22,94 +22,51 @@ std::optional<NarrowCaptureError> buildReferenceDelta(
     const std::vector<std::optional<csr::NodeKey>>& captured_node_keys,
     NarrowTimingRecords& records)
 {
-  auto instances = committed.referencePayload().instances;
+  const auto& before = committed.referencePayload();
+  RecordAppend<csr::InstanceRecord> instances{before.instances.size(), {}};
   for (const auto& captured : records.instances) {
-    if (std::ranges::any_of(instances, [&](const auto& existing) {
-          return existing.instance_name == captured.record.instance_name;
-        }))
+    const auto same_name = [&](const auto& existing) { return existing.instance_name == captured.record.instance_name; };
+    if (std::ranges::any_of(before.instances, same_name) || std::ranges::any_of(instances.values, same_name))
       return NarrowCaptureError::kDuplicateRequest;
-    instances.push_back(captured.record);
+    instances.values.push_back(captured.record);
   }
-  std::ranges::sort(instances, [](const auto& lhs, const auto& rhs) {
-    return byteLess(lhs.instance_name, rhs.instance_name);
-  });
-  if (instances != committed.referencePayload().instances)
-    records.reference_payload.instances
-        = ValueReplacement<std::vector<csr::InstanceRecord>>{
-            committed.referencePayload().instances, std::move(instances)};
+  if (!instances.values.empty())
+    records.reference_payload.instances = std::move(instances);
 
-  auto cells = committed.referencePayload().referenced_library_cells;
+  RecordAppend<csr::ReferencedLibraryCellModel> cells{before.referenced_library_cells.size(), {}};
   for (const auto& captured : records.library_cells) {
-    const auto found = std::ranges::find_if(
-        cells, [&](const auto& existing) {
-          return existing.cell_name == captured.model.cell_name;
-        });
-    if (found != cells.end()) {
+    const auto found = std::ranges::find(before.referenced_library_cells, captured.model.cell_name, &csr::ReferencedLibraryCellModel::cell_name);
+    if (found != before.referenced_library_cells.end()) {
       if (*found != captured.model)
         return NarrowCaptureError::kUnplannedDependency;
     } else {
-      cells.push_back(captured.model);
+      cells.values.push_back(captured.model);
     }
   }
-  std::ranges::sort(cells, [](const auto& lhs, const auto& rhs) {
-    return byteLess(lhs.cell_name, rhs.cell_name);
-  });
-  if (cells != committed.referencePayload().referenced_library_cells)
-    records.reference_payload.referenced_library_cells
-        = ValueReplacement<
-            std::vector<csr::ReferencedLibraryCellModel>>{
-            committed.referencePayload().referenced_library_cells,
-            std::move(cells)};
+  if (!cells.values.empty())
+    records.reference_payload.referenced_library_cells = std::move(cells);
 
-  const auto nodeKeyForId = [&](csr::NodeId id)
-      -> std::optional<csr::NodeKey> {
-    if (id.value() < plan.before.node_slots) {
-      const auto node = committed.nodeById(id);
-      if (!node)
-        return std::nullopt;
-      return node.value().key;
-    }
-    if (id.value() >= captured_node_keys.size())
-      return std::nullopt;
-    return captured_node_keys[id.value()];
-  };
-
-  auto caps = committed.referencePayload().cell_pin_capacitances;
+  RecordAppend<csr::CellPinCapacitanceModel> caps{before.cell_pin_capacitances.size(), {}};
   for (const auto& captured : records.cell_pin_capacitances) {
-    const auto found = std::ranges::find_if(
-        caps, [&](const auto& existing) {
-          return existing.node == captured.model.node;
-        });
-    if (found != caps.end()) {
+    const auto id = captured.model.node.value();
+    if (id >= plan.after.node_slots || (id >= plan.before.node_slots && (id >= captured_node_keys.size() || !captured_node_keys[id])))
+      return NarrowCaptureError::kMalformedNativeRecord;
+    const auto found = std::ranges::find(before.cell_pin_capacitances, captured.model.node, &csr::CellPinCapacitanceModel::node);
+    if (found != before.cell_pin_capacitances.end()) {
       if (*found != captured.model)
         return NarrowCaptureError::kUnplannedDependency;
     } else {
-      caps.push_back(captured.model);
+      caps.values.push_back(captured.model);
     }
   }
-  for (const auto& cap : caps)
-    if (!nodeKeyForId(cap.node))
-      return NarrowCaptureError::kMalformedNativeRecord;
-  std::ranges::sort(caps, [&](const auto& lhs, const auto& rhs) {
-    return byteLess(nodeKeyForId(lhs.node)->full_name,
-                    nodeKeyForId(rhs.node)->full_name);
-  });
-  if (caps != committed.referencePayload().cell_pin_capacitances)
-    records.reference_payload.cell_pin_capacitances
-        = ValueReplacement<
-            std::vector<csr::CellPinCapacitanceModel>>{
-            committed.referencePayload().cell_pin_capacitances,
-            std::move(caps)};
+  if (!caps.values.empty())
+    records.reference_payload.cell_pin_capacitances = std::move(caps);
 
-  const auto& old_owners = committed.referencePayload().clock_owner_by_node;
-  if (old_owners.size() != plan.before.node_slots)
+  if (before.clock_owner_by_node.size() != plan.before.node_slots)
     return NarrowCaptureError::kMalformedNativeRecord;
-  auto owners = old_owners;
-  owners.resize(plan.after.node_slots, std::nullopt);
-  if (owners != old_owners)
-    records.reference_payload.clock_owner_by_node
-        = ValueReplacement<std::vector<std::optional<std::string>>>{
-            old_owners, std::move(owners)};
+  if (plan.after.node_slots > plan.before.node_slots)
+    records.reference_payload.clock_owner_by_node = RecordAppend<std::optional<std::string>>{
+        plan.before.node_slots, std::vector<std::optional<std::string>>(plan.after.node_slots - plan.before.node_slots)};
   return std::nullopt;
 }
 
@@ -156,10 +113,10 @@ std::optional<NarrowCaptureError> finalizeNativeDualCsrReferenceCapture(
 {
   if (captured_node_keys.size() != plan.after.node_slots)
     return NarrowCaptureError::kInvalidHighWater;
+  canonicalizeOutput(records);
   if (const auto error = buildReferenceDelta(
           committed, plan, captured_node_keys, records))
     return error;
-  canonicalizeOutput(records);
   return std::nullopt;
 }
 

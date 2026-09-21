@@ -4,10 +4,10 @@
 import bisect
 import copy
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from dual_csr_descriptor_row_validator import (
-    validate_candidate_rows, validate_expected_rows)
+from dual_csr_descriptor_row_validator import validate_candidate_rows, validate_expected_rows
 
 Require = Callable[[bool, str], None]
 
@@ -127,9 +127,9 @@ def _row_for_slot(offsets: list[int], physical_slot: int, label: str,
 
 def _aux_shadow(value: dict[str, Any]) -> dict[int, list[int]]:
     result: dict[int, list[int]] = {}
-    offsets = value["row_offsets"]
-    for row, source in enumerate(value["row_sources"]):
-        result[source] = list(value["arc_ids"][offsets[row]:offsets[row + 1]])
+    for source, arcs in zip(value["row_sources"], value["row_arcs"], strict=True):
+        if arcs:
+            result[source] = list(arcs)
     return result
 
 
@@ -495,7 +495,7 @@ def run_descriptor_replay_self_test(require: Require) -> None:
            "owner_name": "n", "library_source_port": "",
            "library_sink_port": "", "library_arcs": [], "parallel_ordinal": 0}
 
-    def payload(delay: dict[str, Any], semantic: bool) -> dict[str, Any]:
+    def payload(delay: dict[str, Any], *, semantic: bool) -> dict[str, Any]:
         return {"key": key, "source": node_a if semantic else 0,
                 "sink": node_b if semantic else 1, "kind": "net",
                 "is_clock_arc": False, "is_disabled": False,
@@ -520,20 +520,20 @@ def run_descriptor_replay_self_test(require: Require) -> None:
         "after": {"node_slots": 2, "net_slots": 1, "arc_slots": 1},
         "node_appends": [], "arc_appends": [], "node_payload_changes": [],
         "logical_deactivations": [], "arc_group_index_delta": [],
-        "payload_changes": [{"id": 0, "expected": payload(number0, False),
-                             "replacement": payload(number1, False)}],
+        "payload_changes": [{"id": 0, "expected": payload(number0, semantic=False),
+                             "replacement": payload(number1, semantic=False)}],
         "removes": [], "changes": [], "reverse_changes": [],
         "aux_rows": [], "appended_base_out_rows": [],
         "affected_base_out_rows": [], "affected_base_in_rows": []}
     functional = {"graph": {"nodes": functional_nodes,
-                              "active_arcs": [payload(number1, True)]}}
+                              "active_arcs": [payload(number1, semantic=True)]}}
     structural = {"high_water": {"node_slots": 2, "net_slots": 1, "arc_slots": 1},
         "arc_group_index": {"slots": [{"arc_id": 0,
                                        "current_active_key": key}]},
         "inactive_arcs": [],
         "base_out": {"row_offsets": [0, 1, 1], "physical_slots": [0]},
         "base_in": {"row_offsets": [0, 0, 1], "physical_slots": [0]},
-        "aux_out": {"row_offsets": [0], "row_sources": [], "arc_ids": []}}
+        "aux_out": {"row_arcs": [], "row_sources": []}}
     resolver = {"node_bindings": [
         {"ref": {"kind": "existing", "baseline_key": node_a},
          "binding": {"slot": 0, "native_name": "a", "tombstone": False}},
@@ -546,7 +546,7 @@ def run_descriptor_replay_self_test(require: Require) -> None:
         "node_ids_by_key": [{"key": node_a, "id": 0},
                             {"key": node_b, "id": 1}],
         "arcs": [{"id": 0, "native_traversal_rank": 0,
-                  **payload(number0, False)}],
+                  **payload(number0, semantic=False)}],
         "arc_ids_by_key": [{"key": key, "id": 0}],
         "out_row_offsets": [0, 1, 1], "out_arc_ids": [0],
         "in_row_offsets": [0, 0, 1], "in_arc_ids": [0]}
@@ -585,10 +585,10 @@ def run_descriptor_replay_self_test(require: Require) -> None:
     require(errors, "generation-zero arc payload tamper was accepted")
     key2 = copy.deepcopy(key)
     key2["parallel_ordinal"] = 1
-    semantic0 = payload(number0, True)
-    semantic1 = payload(number0, True)
+    semantic0 = payload(number0, semantic=True)
+    semantic1 = payload(number0, semantic=True)
     semantic1["key"] = key2
-    raw1 = payload(number0, False)
+    raw1 = payload(number0, semantic=False)
     raw1["key"] = key2
     ordered_anchor = copy.deepcopy(baseline)
     ordered_anchor["arcs"].append(

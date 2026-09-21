@@ -54,7 +54,7 @@ class BufferTraceReplayer final
 
  private:
   [[nodiscard]] static FunctionalBatchReceipt applyNextBatch(
-      BufferReplayContext& context, const timing_edit::DesignEditPlan& plan,
+      BufferReplayContext& context, const timing_edit::EditBatch& plan,
       std::size_t batch_ordinal);
   [[nodiscard]] static ReplayReceipt finishCurrent(
       BufferReplayContext& context, const ReplayProgram& program,

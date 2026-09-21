@@ -171,13 +171,6 @@ Json preState(const timing_edit::CanonicalPreStateEvidence& value)
           {"arcs", arrayOf(value.arcs, arcKey)}};
 }
 
-Json baseline(const timing_edit::BaselineSemanticIdentity& value)
-{
-  return {{"design_name", value.design_name},
-          {"fingerprints", fingerprints(value.fingerprints)},
-          {"canonical_pre_state", preState(value.canonical_pre_state)}};
-}
-
 Json identity(const timing_edit::CommittedEditIdentity& value)
 {
   return {{"generation", value.generation.value()},
@@ -185,13 +178,7 @@ Json identity(const timing_edit::CommittedEditIdentity& value)
           {"canonical_pre_state", preState(value.canonical_pre_state)}};
 }
 
-Json plan(const timing_edit::DesignEditPlan& value)
-{
-  return {{"schema_version", value.schema_version},
-          {"baseline", baseline(value.baseline)},
-          {"expected_generation", value.expected_generation.value()},
-          {"edits", arrayOf(value.edits, mutation)}};
-}
+
 
 Json resolver(const timing_edit::TimingEditResolverState& value)
 {
@@ -292,7 +279,6 @@ Json replayReceiptToJson(const ReplayReceipt& receipt)
           {"prefix_batches", receipt.prefix_batches},
           {"batches", arrayOf(receipt.batches, batch)},
           {"committed_identity", identity(receipt.committed_identity)},
-          {"cumulative_trace", arrayOf(receipt.cumulative_trace.batches, plan)},
           {"resolver_state", resolver(receipt.resolver_state)},
           {"final_database", nativeDatabase(receipt.final_database)},
           {"final_csr_input", csrReferenceInputToJson(receipt.final_csr_input)},

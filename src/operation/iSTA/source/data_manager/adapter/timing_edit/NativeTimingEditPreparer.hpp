@@ -7,12 +7,15 @@
 // ***************************************************************************************
 #pragma once
 
+#include <span>
 #include <string_view>
 
 #include "TimingEditTypes.hpp"
 
 namespace ista {
+namespace buffer_trace { class BufferTraceReplayer; }
 class Database;
+namespace csr::detail { class NativeLibraryModels; }
 }
 
 namespace ista::timing_edit {
@@ -21,10 +24,19 @@ class TimingEditResolverState;
 
 struct TimingEditPrepareContext
 {
+  TimingEditPrepareContext(TimingEditSessionToken token, const BaselineSemanticIdentity& baseline,
+                           const CommittedEditIdentity& identity, csr::StaAnalysisContext analysis);
   TimingEditSessionToken session_token;
-  BaselineSemanticIdentity session_baseline;
-  CommittedEditIdentity current_identity;
+  const CommittedEditIdentity& current_identity;
   csr::StaAnalysisContext analysis_context;
+  csr::detail::NativeLibraryModels* library_models{nullptr};
+
+ private:
+  TimingEditPrepareContext(TimingEditSessionToken token, std::shared_ptr<const BaselineSemanticIdentity> baseline,
+                           const CommittedEditIdentity& identity, csr::StaAnalysisContext analysis);
+  std::shared_ptr<const BaselineSemanticIdentity> _baseline;
+  friend class NativeTimingEditPreparer;
+  friend class ista::buffer_trace::BufferTraceReplayer;
 };
 
 // The only native DesignEditPlan -> PreparedBatch expansion path. It captures
@@ -37,6 +49,15 @@ class NativeTimingEditPreparer final
                                                                     TransactionGeneration generation,
                                                                     const csr::StaAnalysisContext& analysis_context,
                                                                     TimingEditSessionToken session_token);
+
+  // Consume an already exported native input; no second graph/model export.
+  [[nodiscard]] static CommittedEditIdentity identityFromInput(const Database& database,
+                                                               const csr::CsrReferenceInput& input,
+                                                               TransactionGeneration generation);
+
+  // Bind a supplied generation-zero identity to an already exported input.
+  static void requireBaselineIdentity(const Database& database, const csr::CsrReferenceInput& input,
+                                      const BaselineSemanticIdentity& baseline);
 
   [[nodiscard]] static bool matchesDesignName(Database& active_database, std::string_view expected_design_name);
 
@@ -52,9 +73,13 @@ class NativeTimingEditPreparer final
                                                 const csr::CsrReferenceInput& current_input,
                                                 const TimingEditResolverState& resolver,
                                                 const BaselineSemanticIdentity& baseline,
-                                                const std::vector<DesignEditPlan>& committed_trace);
+                                                std::span<const EditBatch> committed_trace,
+                                                std::span<const BufferInsertionMutation> pending_edits = {});
 
-  [[nodiscard]] static PreparedBatch prepare(const Database& active_database, DesignEditPlan plan,
+  [[nodiscard]] static PreparedBatch prepare(const Database& active_database, const DesignEditPlan& plan,
+                                             const TimingEditPrepareContext& context,
+                                             const TimingEditResolverState& resolver);
+  [[nodiscard]] static PreparedBatch prepare(const Database& active_database, EditBatch edits,
                                              const TimingEditPrepareContext& context,
                                              const TimingEditResolverState& resolver);
 };

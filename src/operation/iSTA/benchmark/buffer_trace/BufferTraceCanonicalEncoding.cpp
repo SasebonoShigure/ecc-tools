@@ -97,11 +97,11 @@ void appendSources(CanonicalEncoder& encoder, const SourceArtifactRefs& value)
   encoder.appendString(value.analysis_context.temperature);
   encoder.appendString(value.analysis_context.rc_corner);
 }
-void appendPlans(CanonicalEncoder& encoder, const std::vector<timing_edit::DesignEditPlan>& plans)
+void appendPlans(CanonicalEncoder& encoder, const timing_edit::BaselineSemanticIdentity& baseline, const std::vector<timing_edit::EditBatch>& plans)
 {
   encoder.appendU64(plans.size());
   for (const auto& plan : plans)
-    encoder.appendBytes(timing_edit::canonicalDesignEditPlanBytes(plan));
+    encoder.appendBytes(timing_edit::canonicalDesignEditPlanBytes(baseline, plan));
 }
 void appendPlacement(CanonicalEncoder& encoder, const timing_edit::PlacementInputs& value)
 {
@@ -179,12 +179,12 @@ bool knownEnum(Enum value, auto token_function)
     return false;
   }
 }
-void validatePlan(const timing_edit::DesignEditPlan& plan, std::string field, BufferTraceContractViolations& errors)
+void validatePlan(const timing_edit::EditBatch& plan, std::string field, BufferTraceContractViolations& errors)
 {
-  for (const auto& violation : timing_edit::validateDesignEditPlan(plan))
+  for (const auto& violation : timing_edit::validateEditBatch(plan))
     reject(errors, BufferTraceContractCode::kInvalidValue, field + "." + violation.field, violation.message);
-  auto normalized = timing_edit::normalizeDesignEditPlan(plan);
-  if (const auto* value = std::get_if<timing_edit::DesignEditPlan>(&normalized); value && *value != plan)
+  auto normalized = timing_edit::normalizeEditBatch(plan);
+  if (const auto* value = std::get_if<timing_edit::EditBatch>(&normalized); value && *value != plan)
     reject(errors, BufferTraceContractCode::kNotCanonical, std::move(field), "design edit plan must be Stage 3 canonical");
 }
 template <typename Ref>
@@ -199,14 +199,13 @@ std::optional<timing_edit::CreationToken> referencedToken(const Ref& ref)
       },
       ref);
 }
-void validateReplayBatches(const ReplayProgram& program, const std::vector<timing_edit::DesignEditPlan>& batches,
-                           const timing_edit::BaselineSemanticIdentity* explicit_baseline, BufferTraceContractViolations& errors)
+void validateReplayBatches(const ReplayProgram& program, const std::vector<timing_edit::EditBatch>& batches,
+                           BufferTraceContractViolations& errors)
 {
   if (batches.empty()) {
     reject(errors, BufferTraceContractCode::kInvalidValue, "replay.workload.batches", "at least one batch is required");
     return;
   }
-  const auto& baseline = explicit_baseline ? *explicit_baseline : batches.front().baseline;
   std::set<timing_edit::CreationToken> known_tokens;
   std::optional<std::string> case_id;
   std::optional<std::uint64_t> seed;
@@ -217,8 +216,6 @@ void validateReplayBatches(const ReplayProgram& program, const std::vector<timin
     if (plan.expected_generation.value() != batch_index)
       reject(errors, BufferTraceContractCode::kGenerationMismatch, field + ".expected_generation",
              "cumulative replay batches must start at generation zero and be contiguous");
-    if (plan.baseline != baseline)
-      reject(errors, BufferTraceContractCode::kIdentityMismatch, field + ".baseline", "all replay batches must use one exact baseline identity");
     std::vector<timing_edit::CreationToken> current_tokens;
     for (std::size_t edit_index = 0; edit_index < plan.edits.size(); ++edit_index) {
       const auto& edit = plan.edits[edit_index];
@@ -260,7 +257,7 @@ void validateReplayBatches(const ReplayProgram& program, const std::vector<timin
     known_tokens.insert(current_tokens.begin(), current_tokens.end());
   }
 }
-void validateEvaluationEvidence(const CandidateEvaluationReceipt& evaluation, const timing_edit::BaselineSemanticIdentity& baseline, ProfileId profile,
+void validateEvaluationEvidence(const CandidateEvaluationReceipt& evaluation, ProfileId profile,
                                 const std::string& field, BufferTraceContractViolations& errors)
 {
   const auto append = [&](const timing_edit::TimingEditContractViolations& violations) {
@@ -270,11 +267,11 @@ void validateEvaluationEvidence(const CandidateEvaluationReceipt& evaluation, co
   append(timing_edit::validateStableNodeRef(evaluation.driver, "driver"));
   append(timing_edit::validateStableNodeRef(evaluation.candidate_pin, "candidate_pin"));
   timing_edit::CreationToken probe_token{.case_id = "__buffer_receipt_validation__", .profile_id = std::string(token(profile)), .batch_ordinal = 1};
-  timing_edit::DesignEditPlan probe{
-      .baseline = baseline, .expected_generation = timing_edit::TransactionGeneration{0},
+  timing_edit::EditBatch probe{
+      .expected_generation = timing_edit::TransactionGeneration{0},
       .edits = {{evaluation.net, {evaluation.candidate_pin}, evaluation.buffer, timing_edit::UnplacedInputs{}, timing_edit::NoParasiticRcInputs{}, std::move(probe_token)}}};
   constexpr std::string_view kLibraryPrefix = "plan.edits[0].library_cell";
-  for (const auto& violation : timing_edit::validateDesignEditPlan(probe)) {
+  for (const auto& violation : timing_edit::validateEditBatch(probe)) {
     if (!violation.field.starts_with(kLibraryPrefix)) continue;
     reject(errors, BufferTraceContractCode::kInvalidValue, field + ".buffer" + violation.field.substr(kLibraryPrefix.size()), violation.message);
   }
@@ -421,12 +418,12 @@ Bytes canonicalReplayProgramBytes(const ReplayProgram& program)
           if constexpr (std::is_same_v<Workload, SyntheticReplayPayload>) {
             encoder.appendString("synthetic");
             encoder.appendBytes(canonicalSyntheticArtifactRecipeBytes(workload.source_recipe));
-            appendPlans(encoder, workload.batches);
+            appendPlans(encoder, workload.baseline, workload.batches);
           } else {
             encoder.appendString("real_design");
             encoder.appendBytes(canonicalSourceArtifactRefsBytes(workload.artifacts));
             encoder.appendBytes(timing_edit::canonicalBaselineSemanticIdentityBytes(workload.baseline));
-            appendPlans(encoder, workload.batches);
+            appendPlans(encoder, workload.baseline, workload.batches);
           }
         },
         program.workload);
@@ -504,6 +501,8 @@ BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program
     reject(errors, BufferTraceContractCode::kInvalidTaggedUnion, "replay.workload", "header workload kind must match the payload alternative");
     return errors;
   }
+  for (const auto& violation : timing_edit::validateBaselineSemanticIdentity(program.baseline()))
+    reject(errors, BufferTraceContractCode::kIdentityMismatch, "replay.workload.baseline." + violation.field, violation.message);
   if (synthetic_value) {
     const auto& payload = std::get<SyntheticReplayPayload>(program.workload);
     const auto& recipe = payload.source_recipe;
@@ -517,7 +516,7 @@ BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program
         || recipe.tech_lef.source_text == recipe.cell_lef.source_text)
       reject(errors, BufferTraceContractCode::kInvalidSourceArtifacts, "replay.workload.source_recipe",
              "five named source recipes must be nonempty and distinct, including separate tech/cell LEF content");
-    validateReplayBatches(program, payload.batches, nullptr, errors);
+    validateReplayBatches(program, payload.batches, errors);
   } else {
     const auto& payload = std::get<RealReplayPayload>(program.workload);
     const auto& refs = payload.artifacts;
@@ -533,25 +532,24 @@ BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program
         || !std::all_of(paths.begin(), paths.end(), [&](const std::string& path) { return unique_paths.insert(path).second; }))
       reject(errors, BufferTraceContractCode::kInvalidSourceArtifacts, "replay.workload.artifacts",
              "real source lists/context must be nonempty and paths pairwise distinct");
-    for (const auto& violation : timing_edit::validateBaselineSemanticIdentity(payload.baseline))
-      reject(errors, BufferTraceContractCode::kIdentityMismatch, "replay.workload.baseline." + violation.field, violation.message);
-    validateReplayBatches(program, payload.batches, &payload.baseline, errors);
+    validateReplayBatches(program, payload.batches, errors);
   }
   return errors;
 }
 BufferTraceContractViolations validateReplayTemplate(const ReplayProgram& program)
 {
-  const auto* real = std::get_if<RealReplayPayload>(&program.workload);
-  const bool default_real_baseline
-      = real != nullptr && real->batches.empty() && real->baseline == timing_edit::BaselineSemanticIdentity{};
+  const bool default_baseline = program.baseline() == timing_edit::BaselineSemanticIdentity{};
   BufferTraceContractViolations errors = validateReplayProgram(program);
-  errors.erase(std::remove_if(errors.begin(), errors.end(), [default_real_baseline](const BufferTraceContractViolation& violation) {
+  errors.erase(std::remove_if(errors.begin(), errors.end(), [default_baseline](const BufferTraceContractViolation& violation) {
                  const bool empty_batches = violation.code == BufferTraceContractCode::kInvalidValue
                                             && violation.field == "replay.workload.batches"
                                             && violation.message == "at least one batch is required";
-                 return empty_batches || (default_real_baseline && violation.field.starts_with("replay.workload.baseline"));
+                 return empty_batches || (default_baseline && violation.field.starts_with("replay.workload.baseline"));
                }),
                errors.end());
+  if (std::holds_alternative<SyntheticReplayPayload>(program.workload) && !default_baseline)
+    reject(errors, BufferTraceContractCode::kIdentityMismatch, "replay.workload.baseline",
+           "synthetic generation templates cannot carry a baseline before edits exist");
   const bool empty = std::visit([](const auto& payload) { return payload.batches.empty(); }, program.workload);
   if (!empty)
     reject(errors, BufferTraceContractCode::kInvalidValue, "replay.workload.batches",
@@ -571,16 +569,8 @@ BufferTraceContractViolations validateBufferTraceArtifact(const BufferTraceArtif
   if (!knownEnum(artifact.generation_only.stop_reason, static_cast<std::string_view (*)(GenerationStopReason)>(token))) reject(errors, BufferTraceContractCode::kInvalidValue, "generation_only.stop_reason", "unknown generation stop reason");
   if (artifact.generation_only.rounds.empty() || artifact.generation_only.rounds.size() > artifact.generation_only.profile.rounds)
     reject(errors, BufferTraceContractCode::kGenerationMismatch, "generation_only.rounds", "round count must be within the frozen profile");
-  const auto& replay_batches = std::visit([](const auto& payload) -> const std::vector<timing_edit::DesignEditPlan>& {
+  const auto& replay_batches = std::visit([](const auto& payload) -> const std::vector<timing_edit::EditBatch>& {
     return payload.batches;
-  }, artifact.replay.workload);
-  const timing_edit::BaselineSemanticIdentity* receipt_baseline = std::visit([](const auto& payload) {
-    using Payload = std::decay_t<decltype(payload)>;
-    if constexpr (std::is_same_v<Payload, RealReplayPayload>)
-      return &payload.baseline;
-    else
-      return payload.batches.empty() ? static_cast<const timing_edit::BaselineSemanticIdentity*>(nullptr)
-                                     : &payload.batches.front().baseline;
   }, artifact.replay.workload);
   std::set<timing_edit::CreationToken> generation_tokens;
   std::vector<std::vector<timing_edit::CreationToken>> generated_batch_tokens;
@@ -608,8 +598,8 @@ BufferTraceContractViolations validateBufferTraceArtifact(const BufferTraceArtif
       const auto& evaluation = round.evaluations[evaluation_index];
       const std::string evaluation_field = field + ".evaluations[" + std::to_string(evaluation_index) + "]";
       if (!knownEnum(evaluation.decision, static_cast<std::string_view (*)(CandidateDecision)>(token)) || (evaluation.rejection_reason && !knownEnum(*evaluation.rejection_reason, static_cast<std::string_view (*)(CandidateRejectionReason)>(token)))) reject(errors, BufferTraceContractCode::kInvalidValue, evaluation_field, "unknown candidate decision or rejection reason");
-      if (receipt_baseline && replay_profile_known)
-        validateEvaluationEvidence(evaluation, *receipt_baseline, artifact.replay.header.profile_id, evaluation_field, errors);
+      if (replay_profile_known)
+        validateEvaluationEvidence(evaluation, artifact.replay.header.profile_id, evaluation_field, errors);
       detail::appendEvaluationContractViolations(
           evaluation, artifact.generation_only.profile, evaluation_field, errors);
       if (evaluation.numeric) {

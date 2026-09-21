@@ -20,7 +20,8 @@
 #include "CsrValidatorTestFixture.hpp"
 #include "DualCsrBaselineFactory.hpp"
 #include "DualCsrFunctionalProjection.hpp"
-#include "DualCsrUpdater.hpp"
+#include "DualCsrDescriptorValidation.hpp"
+#include "DualCsrUpdaterInternal.hpp"
 
 namespace ista::timing_dual_csr::test {
 
@@ -185,12 +186,7 @@ inline std::vector<csr::ArcId> evidenceAuxRow(
   if (mapped < 0)
     return {};
   const auto row = static_cast<std::size_t>(mapped);
-  const auto begin = state.aux_out.row_offsets[row];
-  const auto end = state.aux_out.row_offsets[row + 1];
-  return {state.aux_out.arc_ids.begin()
-              + static_cast<std::ptrdiff_t>(begin),
-          state.aux_out.arc_ids.begin()
-              + static_cast<std::ptrdiff_t>(end)};
+  return state.aux_out.row_arcs.at(row);
 }
 
 inline std::vector<csr::ArcId> evidenceBaseRow(
@@ -354,11 +350,10 @@ inline void completeReferencePayload(
   replaceReference(descriptor.reference_payload.ordered_end_ids,
                    state.reference_payload.ordered_end_ids, ends);
 
-  auto owners = state.reference_payload.clock_owner_by_node;
-  owners.resize(nodes.size());
-  replaceReference(descriptor.reference_payload.clock_owner_by_node,
-                   state.reference_payload.clock_owner_by_node,
-                   std::move(owners));
+  const auto owner_count = state.reference_payload.clock_owner_by_node.size();
+  if (nodes.size() > owner_count)
+    descriptor.reference_payload.clock_owner_by_node = RecordAppend<std::optional<std::string>>{
+        owner_count, std::vector<std::optional<std::string>>(nodes.size() - owner_count)};
 
   std::vector<csr::StartSeedModel> seeds;
   for (const auto id : starts) {
@@ -443,18 +438,16 @@ inline void replaceRoots(DualCsrBatchDescriptor& descriptor,
           std::move(replacement)};
 }
 
-inline DualCsrState apply(const DualCsrState& state,
-                          const DualCsrBatchDescriptor& descriptor)
+inline DualCsrState apply(DualCsrState state, const DualCsrBatchDescriptor& descriptor)
 {
-  auto attempt = DualCsrUpdater::stage(state, descriptor);
-  if (!attempt.success()) {
-    const auto message = attempt.violations.empty()
-                             ? std::string{"unknown update failure"}
-                             : attempt.violations.front().field + ": "
-                                   + attempt.violations.front().message;
-    throw std::runtime_error(message);
-  }
-  return std::move(*attempt.state);
+  const auto violations = validateDualCsrDescriptor(state, descriptor);
+  if (!violations.empty())
+    throw std::runtime_error(violations.front().field + ": " + violations.front().message);
+  detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+  patch.apply();
+  require(validateDualCsrState(state).empty(), "local update produced an invalid graph");
+  patch.commit();
+  return state;
 }
 
 inline bool hasCode(const DualCsrViolations& violations,
@@ -464,15 +457,6 @@ inline bool hasCode(const DualCsrViolations& violations,
     if (violation.code == code)
       return true;
   return false;
-}
-
-inline std::vector<std::uint8_t> activeMask(const DualCsrState& state)
-{
-  std::vector<std::uint8_t> result;
-  result.reserve(state.arc_slots.size());
-  for (const auto& slot : state.arc_slots)
-    result.push_back(slot.active ? 1 : 0);
-  return result;
 }
 
 inline void requireOffsetPrefix(const std::vector<std::uint64_t>& before,

@@ -19,6 +19,8 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <memory>
+#include <tuple>
 #include <string>
 #include <vector>
 
@@ -62,9 +64,24 @@ struct CellTransferModel
   bool is_clock_arc{false};
   bool is_disabled{false};
   bool is_clear_or_preset{false};
-  std::vector<ChildTimingArcModel> children;
+  [[nodiscard]] const std::vector<ChildTimingArcModel>& children() const noexcept
+  {
+    static const std::vector<ChildTimingArcModel> empty;
+    return _children ? *_children : empty;
+  }
+  [[nodiscard]] const std::shared_ptr<const std::vector<ChildTimingArcModel>>& childrenOwner() const noexcept { return _children; }
+  void setChildren(const std::vector<ChildTimingArcModel>& values)
+  {
+    _children = values.empty() ? nullptr : std::make_shared<const std::vector<ChildTimingArcModel>>(values);
+  }
+  friend bool operator==(const CellTransferModel& lhs, const CellTransferModel& rhs)
+  {
+    return std::tie(lhs.delay, lhs.delay_min, lhs.delay_max, lhs.is_clock_arc, lhs.is_disabled, lhs.is_clear_or_preset) == std::tie(rhs.delay, rhs.delay_min, rhs.delay_max, rhs.is_clock_arc, rhs.is_disabled, rhs.is_clear_or_preset)
+        && (lhs._children == rhs._children || lhs.children() == rhs.children());
+  }
 
-  friend bool operator==(const CellTransferModel&, const CellTransferModel&) = default;
+ private:
+  std::shared_ptr<const std::vector<ChildTimingArcModel>> _children;
 };
 
 struct ArcEligibility
@@ -246,9 +263,24 @@ struct LibraryTimingCheckArcModel
   TimingCheckKind kind{TimingCheckKind::kNone};
   double check_time{0.0};
   Transition clock_transition{Transition::kRise};
-  std::vector<ChildTimingArcModel> children;
+  [[nodiscard]] const std::vector<ChildTimingArcModel>& children() const noexcept
+  {
+    static const std::vector<ChildTimingArcModel> empty;
+    return _children ? *_children : empty;
+  }
+  [[nodiscard]] const std::shared_ptr<const std::vector<ChildTimingArcModel>>& childrenOwner() const noexcept { return _children; }
+  void setChildren(const std::vector<ChildTimingArcModel>& values)
+  {
+    _children = values.empty() ? nullptr : std::make_shared<const std::vector<ChildTimingArcModel>>(values);
+  }
+  friend bool operator==(const LibraryTimingCheckArcModel& lhs, const LibraryTimingCheckArcModel& rhs)
+  {
+    return std::tie(lhs.clock_port, lhs.data_port, lhs.kind, lhs.check_time, lhs.clock_transition) == std::tie(rhs.clock_port, rhs.data_port, rhs.kind, rhs.check_time, rhs.clock_transition)
+        && (lhs._children == rhs._children || lhs.children() == rhs.children());
+  }
 
-  friend bool operator==(const LibraryTimingCheckArcModel&, const LibraryTimingCheckArcModel&) = default;
+ private:
+  std::shared_ptr<const std::vector<ChildTimingArcModel>> _children;
 };
 
 struct ReferencedLibraryCellModel

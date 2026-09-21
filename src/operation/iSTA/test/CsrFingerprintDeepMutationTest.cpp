@@ -14,6 +14,7 @@
 //
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <array>
 #include <stdexcept>
@@ -105,7 +106,7 @@ CsrReferenceInput inputFixture()
   arc.source = NodeId{0};
   arc.sink = NodeId{1};
   arc.kind = ArcKind::kCell;
-  arc.transfer.children = {child, second_child};
+  arc.transfer.setChildren({child, second_child});
   input.arcs = {arc};
   input.arc_ids_by_key = {{arc.key, arc.id}};
   return input;
@@ -168,15 +169,18 @@ enum class SignatureSite
   kReverseLookup
 };
 
-LibraryArcSignature& signatureAt(CsrReferenceInput& input, SignatureSite site)
+void mutateSignature(CsrReferenceInput& input, SignatureSite site, const auto& mutate)
 {
   switch (site) {
     case SignatureSite::kArcKey:
-      return input.arcs[0].key.base.library_arcs[0];
+      mutate(input.arcs[0].key.base.library_arcs[0]);
+      return;
     case SignatureSite::kChild:
-      return input.arcs[0].transfer.children[0].signature;
+      ista::csr::test::mutateChildren(input.arcs[0].transfer, [&](auto& children) { mutate(children[0].signature); });
+      return;
     case SignatureSite::kReverseLookup:
-      return input.arc_ids_by_key[0].key.base.library_arcs[0];
+      mutate(input.arc_ids_by_key[0].key.base.library_arcs[0]);
+      return;
   }
   throw std::runtime_error("unreachable signature site");
 }
@@ -193,7 +197,7 @@ void testLibrarySignatureFieldFamilies()
 
   for (const auto& [site, prefix] : sites) {
     const auto check = [&](std::string_view field, auto mutate) {
-      requireMutation(baseline, std::string(prefix) + " " + std::string(field), [=](auto& input) { mutate(signatureAt(input, site)); });
+      requireMutation(baseline, std::string(prefix) + " " + std::string(field), [=](auto& input) { mutateSignature(input, site, mutate); });
     };
     check("library name", [](auto& signature) { signature.library_name = "fast.lib"; });
     check("signed arc index", [](auto& signature) { signature.arc_index = 0; });
@@ -224,8 +228,8 @@ void testTimingTableModelFieldFamilies()
       const std::string prefix = std::string(family) + " " + std::to_string(transition);
       const auto check = [&](std::string_view field, auto mutate) {
         requireMutation(baseline, prefix + " " + std::string(field), [=](auto& input) {
-          auto& table = (input.arcs[0].transfer.children[0].*member)[transition];
-          mutate(table);
+          ista::csr::test::mutateChildren(input.arcs[0].transfer, [&](auto& children) { auto& table = (children[0].*member)[transition];
+          mutate(table); });
         });
       };
       check("presence", [](auto& table) { table.present = false; });
@@ -241,8 +245,8 @@ void testTimingTableModelFieldFamilies()
       check("values order", [](auto& table) { std::ranges::reverse(table.values); });
     }
   }
-  requireMutation(baseline, "child arc container length", [](auto& input) { input.arcs[0].transfer.children.clear(); });
-  requireMutation(baseline, "child arc container order", [](auto& input) { std::ranges::reverse(input.arcs[0].transfer.children); });
+  requireMutation(baseline, "child arc container length", [](auto& input) { input.arcs[0].transfer.setChildren({}); });
+  requireMutation(baseline, "child arc container order", [](auto& input) { ista::csr::test::mutateChildren(input.arcs[0].transfer, [&](auto& children) { std::ranges::reverse(children); }); });
 }
 
 void testTimingTableStateDistinctions()
@@ -250,7 +254,7 @@ void testTimingTableStateDistinctions()
   const CsrReferenceInput baseline = inputFixture();
   const auto encode = [&](const TimingTableModel& table) {
     CsrReferenceInput input = baseline;
-    input.arcs[0].transfer.children[0].delay_tables[0] = table;
+    ista::csr::test::mutateChildren(input.arcs[0].transfer, [&](auto& children) { children[0].delay_tables[0] = table; });
     return canonicalReferenceInputBytes(input);
   };
 

@@ -30,12 +30,11 @@
 #include "IndependentOracleObservation.hpp"
 #include "IncrementalStaSession.hpp"
 #include "NativeCandidateExecutor.hpp"
-#include "NativeDatabaseCandidate.hpp"
+#include "NativeEditTransaction.hpp"
 #include "NativeDesignEditTranslator.hpp"
 #include "NativeTimingEditPreparer.hpp"
 #include "ProductionFreshSessionLoader.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
-#include "TimingEditCoordinator.hpp"
 #include "TimingEditOracleCli.hpp"
 #include "TimingEditResolver.hpp"
 
@@ -48,16 +47,6 @@ namespace ista::csr::test {
 
 namespace ista::timing_edit::oracle {
 namespace {
-
-class CsrFullMismatch final : public std::runtime_error
-{
- public:
-  CsrFullMismatch()
-      : std::runtime_error(
-            "CSR CPU/full differs from native timing readback field-by-field")
-  {
-  }
-};
 
 [[noreturn]] void fail(std::string message)
 {
@@ -103,14 +92,6 @@ BaselineSemanticIdentity baselineIdentity(const ProductionFreshSessionView& view
           canonicalEvidence(view.database, view.reference_input)};
 }
 
-void requireOk(TransactionStatus status, std::string_view operation)
-{
-  if (!status.ok()) {
-    fail(std::string(operation) + " failed with status "
-         + std::to_string(static_cast<std::uint32_t>(status.code)));
-  }
-}
-
 std::unique_ptr<csr::CsrCommittedSessionSnapshot> buildHostSnapshot(
     const Database& database, TimingEditSessionToken token, const csr::StaAnalysisContext& context)
 {
@@ -129,17 +110,14 @@ struct CsrFullEqualityReceipt
   std::size_t ordinal{0};
   std::size_t node_count{0};
   std::size_t arc_count{0};
-  CsrExecutionAuthorization proof;
 };
 
 CsrFullEqualityReceipt requireCsrFullExact(
     csr::CsrCommittedSessionSnapshot& snapshot, const Database& database,
-    std::size_t ordinal, const NativeExecutionAuthority& authority,
-    TransactionGeneration target_generation)
+    std::size_t ordinal)
 {
-  return {ordinal, snapshot.input.nodes.size(), snapshot.input.arcs.size(),
-          StaTimingEditSessionProbeAccess::proveCsrFullExact(
-              authority, snapshot, database, target_generation)};
+  StaTimingEditSessionProbeAccess::requireCsrFullExact(snapshot, database);
+  return {ordinal, snapshot.input.nodes.size(), snapshot.input.arcs.size()};
 }
 
 csr::NodeKey baselineNode(const TimingEditTrace& trace, std::string_view full_name)
@@ -171,31 +149,6 @@ DesignEditPlan planFor(const TimingEditTrace& trace, std::size_t index,
     }
   }
   return plan;
-}
-
-struct InstalledRollback
-{
-  InstalledNativeDatabase* installed{nullptr};
-};
-
-bool rollbackInstalled(void* context) noexcept
-{
-  auto& rollback = *static_cast<InstalledRollback*>(context);
-  return rollback.installed != nullptr && rollback.installed->rollback();
-}
-
-[[noreturn]] void rollbackAndFail(TimingEditCoordinator& coordinator,
-                                  InstalledNativeDatabase& installed,
-                                  std::string message)
-{
-  InstalledRollback context{&installed};
-  const TransactionStatus rollback
-      = coordinator.rollbackPrecommit({&context, &rollbackInstalled});
-  if (!rollback.ok()) {
-    message += "; explicit rollback failed with status "
-               + std::to_string(static_cast<std::uint32_t>(rollback.code));
-  }
-  fail(std::move(message));
 }
 
 std::vector<ElectricalLoadObservation> captureElectricalLoads(Database& database)
@@ -278,36 +231,26 @@ void installDerivedTimingTamper(Database& database)
 }
 
 void requireExactGenerationZeroAfterTamper(
-    const ProductionFreshSessionView& view, TimingEditCoordinator& coordinator,
-    const CommittedEditIdentity& initial_identity,
+    const ProductionFreshSessionView& view, const TimingEditResolverState& resolver,
+    const CommittedEditIdentity& identity, const CommittedEditIdentity& initial_identity,
     const TimingEditResolverState& initial_resolver,
-    const csr::CsrCommittedSessionSnapshot* initial_host,
-    const PreparedBatch& prepared, const InstalledNativeDatabase& installed,
-    const RawDesignObservation& raw_baseline, TimingEditSessionToken token)
+    const NativeEditTransaction& installed, const RawDesignObservation& raw_baseline)
 {
-  const CommittedEditIdentity active_identity
-      = NativeTimingEditPreparer::captureCurrentIdentity(
-          STADM.getDatabase(), TransactionGeneration{0}, view.reference_input.analysis_context, token);
-  const std::vector<std::string> raw_mismatches
-      = compareRawDesign(raw_baseline, captureRawDesign(STADM.getDatabase()));
-  if (installed.active() || prepared.sealed()
-      || coordinator.state() != TimingEditCoordinatorState::kIdle
-      || coordinator.committedIdentity() != initial_identity
-      || !coordinator.cumulativeTrace().batches.empty()
-      || coordinator.resolverState() != initial_resolver
-      || coordinator.hostSnapshot() != initial_host
-      || coordinator.deviceState().generation != TransactionGeneration{0}
-      || coordinator.commitMarker().generation != TransactionGeneration{0}
+  const auto active_identity = NativeTimingEditPreparer::captureCurrentIdentity(
+      STADM.getDatabase(), TransactionGeneration{0}, view.reference_input.analysis_context,
+      TimingEditSessionToken{view.session_token});
+  const auto raw_mismatches = compareRawDesign(raw_baseline, captureRawDesign(STADM.getDatabase()));
+  if (installed.active() || identity != initial_identity || resolver != initial_resolver
       || active_identity != initial_identity || !raw_mismatches.empty()
-      || view.session.state() != StaSessionState::kBaselineExecuted) {
+      || view.session.state() != StaSessionState::kBaselineExecuted
+      || !view.authority.active())
     fail("derived-tamper rollback did not preserve exact generation zero");
-  }
 }
 
 std::string derivedTamperReceiptText()
 {
-  return "schema|ista-timing-edit-derived-tamper-receipt/1.0.0\n"
-         "derived_tamper_detected|csr_full_exact|prepublish|sealed=false|"
+  return "schema|ista-timing-edit-derived-tamper-receipt/2.0.0\n"
+         "derived_tamper_detected|csr_full_exact|prepublish|"
          "published=false|database_generation=0|raw=unchanged|"
          "transaction_generation=0\n";
 }
@@ -332,117 +275,53 @@ void applyPrefix(const ProductionFreshSessionView& view, const TimingEditTrace& 
 
   TimingEditResolverState resolver = TimingEditResolverState::bindBaseline(view.database);
   const TimingEditResolverState initial_resolver = resolver;
-  std::unique_ptr<csr::CsrCommittedSessionSnapshot> initial_host
-      = buildHostSnapshot(view.database, token, view.reference_input.analysis_context);
-  const csr::CsrCommittedSessionSnapshot* const initial_host_address
-      = initial_host.get();
-  const StaCsrCaptureAttempt baseline_capture
-      = StaTimingEditSessionProbeAccess::captureSnapshotForTesting(
-          view.session_context, view.database);
-  const auto* captured
-      = std::get_if<csr::CsrCaptureResult>(&baseline_capture.value);
-  if (captured == nullptr || captured->error) {
-    fail("fresh analyzed baseline CSR observation capture failed");
+  auto identity = initial_identity;
+  {
+    std::unique_ptr<csr::CsrSnapshotObservation> released;
+    StaTimingEditSessionProbeAccess::releaseSnapshotForMutation(view.session_context, &released);
   }
-  std::unique_ptr<csr::CsrSnapshotObservation> released_context_snapshot;
-  StaTimingEditSessionProbeAccess::releaseSnapshotForMutation(
-      view.session_context, &released_context_snapshot);
-  if (released_context_snapshot == nullptr) {
-    fail("mutation did not release the pre-edit session CSR observation");
-  }
-
-  TimingEditCoordinator coordinator(
-      token, StaTimingEditSessionProbeAccess::stateSignal(view.session), trace.baseline,
-      initial_identity, {}, std::move(resolver), std::move(initial_host));
-
   std::vector<CsrFullEqualityReceipt> csr_receipts;
+  csr_receipts.reserve(options.prefix);
+  const TimingEditPrepareContext prepare_context{
+      token, trace.baseline, identity, view.reference_input.analysis_context};
   for (std::size_t index = 0; index < options.prefix; ++index) {
-    DesignEditPlan plan
-        = planFor(trace, index, coordinator.committedIdentity(), options.subject);
-    const TimingEditPrepareContext prepare_context{
-        token, trace.baseline, coordinator.committedIdentity(), view.reference_input.analysis_context};
-    PreparedBatch prepared = NativeTimingEditPreparer::prepare(
-        STADM.getDatabase(), plan, prepare_context, coordinator.resolverState());
-    requireOk(coordinator.beginPrepare(prepared), "beginPrepare");
-    TimingEditResolverState staged = coordinator.resolverState().stage(prepared);
-    requireOk(coordinator.markStaged(), "markStaged");
-
-    NativeDatabaseCandidate candidate
-        = NativeDatabaseCandidate::create(STADM.getDatabase());
-    const NativeTranslationResult translated
-        = NativeDesignEditTranslator::applyNormalizedBatch(candidate.database(), prepared,
-                                                            staged);
-    if (!translated.applied() || !translated.reasons.empty()) {
-      fail("production native translation did not apply the supported batch");
-    }
-    requireOk(coordinator.markExecuting(), "markExecuting");
-    InstalledNativeDatabase installed = NativeCandidateExecutor::installAndExecute(
-        view.authority, std::move(candidate));
-
-    std::unique_ptr<csr::CsrCommittedSessionSnapshot> host_snapshot;
-    CommittedEditIdentity post_identity;
-    try {
-      host_snapshot = buildHostSnapshot(installed.database(), token, view.reference_input.analysis_context);
-      if (options.subject == OracleSubject::kDerivedTamper) {
-        installDerivedTimingTamper(installed.database());
-        bool exact_mismatch_detected = false;
-        try {
-          static_cast<void>(requireCsrFullExact(
-              *host_snapshot, installed.database(), index + 1, view.authority,
-              prepared.targetGeneration()));
-        } catch (const CsrFullExactMismatch&) {
-          exact_mismatch_detected = true;
-        }
-        if (!exact_mismatch_detected) {
-          fail("derived timing tamper escaped the CSR full exact gate");
-        }
-      } else {
-        csr_receipts.push_back(
-            requireCsrFullExact(*host_snapshot, installed.database(), index + 1,
-                                view.authority, prepared.targetGeneration()));
-        post_identity = NativeTimingEditPreparer::captureCurrentIdentity(
-            installed.database(), prepared.targetGeneration(), view.reference_input.analysis_context, token);
-      }
-    } catch (...) {
-      const std::exception_ptr failure = std::current_exception();
-      InstalledRollback rollback{&installed};
-      const TransactionStatus rollback_status
-          = coordinator.rollbackPrecommit({&rollback, &rollbackInstalled});
-      if (!rollback_status.ok()) {
-        fail("post-execution verification threw and explicit rollback failed");
-      }
-      std::rethrow_exception(failure);
-    }
+    auto plan = planFor(trace, index, identity, options.subject);
+    auto prepared = NativeTimingEditPreparer::prepare(
+        STADM.getDatabase(), plan, prepare_context, resolver);
+    PreparedTimingEditResolverPatch resolver_patch(resolver, resolver.prepare(prepared));
+    auto installed = NativeEditTransaction::prepareFull(
+        view.authority, prepared, resolver_patch.view());
+    NativeCandidateExecutor::executeFull(installed);
+    resolver_patch.apply();
+    auto host_snapshot = buildHostSnapshot(installed.database(), token, view.reference_input.analysis_context);
     if (options.subject == OracleSubject::kDerivedTamper) {
-      InstalledRollback rollback{&installed};
-      requireOk(coordinator.rollbackPrecommit({&rollback, &rollbackInstalled}),
-                "derived-tamper rollbackPrecommit");
+      installDerivedTimingTamper(installed.database());
+      bool mismatch = false;
+      try {
+        static_cast<void>(requireCsrFullExact(*host_snapshot, installed.database(), index + 1));
+      } catch (const CsrFullExactMismatch&) {
+        mismatch = true;
+      }
+      if (!mismatch)
+        fail("derived timing tamper escaped the independent native/CSR comparison");
+      if (!installed.rollback())
+        fail("derived-tamper rollback failed");
+      resolver_patch.rollback();
       requireExactGenerationZeroAfterTamper(
-          view, coordinator, initial_identity, initial_resolver,
-          initial_host_address, prepared, installed, raw_baseline, token);
+          view, resolver, identity, initial_identity, initial_resolver, installed, raw_baseline);
       writeOracleFile(options.output, derivedTamperReceiptText());
       return;
     }
+    csr_receipts.push_back(requireCsrFullExact(*host_snapshot, installed.database(), index + 1));
+    auto post_identity = NativeTimingEditPreparer::captureCurrentIdentity(
+        installed.database(), prepared.targetGeneration(),
+        view.reference_input.analysis_context, token);
     if (options.subject == OracleSubject::kCorrect
-        && post_identity != trace.batches[index].expected_post_identity) {
-      rollbackAndFail(coordinator, installed,
-                      "production post identity differs from the durable trace");
-    }
-    requireOk(coordinator.sealVerified(prepared, post_identity), "sealVerified");
-
-    CumulativeEditTrace cumulative = coordinator.cumulativeTrace();
-    cumulative.batches.push_back(
-        DesignEditPlan{.baseline = trace.baseline,
-                       .expected_generation = prepared.expectedGeneration(),
-                       .edits = prepared.normalizedEdits()});
-    VerifiedPublishBundle bundle(std::move(installed), std::move(host_snapshot),
-                                 std::move(csr_receipts.back().proof),
-                                 std::move(prepared), std::move(cumulative),
-                                 std::move(staged));
-    requireOk(coordinator.publish(view.authority, std::move(bundle)), "publish");
-    if (coordinator.state() != TimingEditCoordinatorState::kIdle) {
-      fail("successful production publish did not return to Idle");
-    }
+        && post_identity != trace.batches[index].expected_post_identity)
+      fail("production post identity differs from the durable trace");
+    installed.commit();
+    resolver_patch.commit();
+    std::swap(identity, post_identity);
   }
 
   Database& committed_database = STADM.getDatabase();
@@ -457,7 +336,7 @@ void applyPrefix(const ProductionFreshSessionView& view, const TimingEditTrace& 
   }
 
   const IndependentReplayReceipt receipt = observationReceipt(
-      trace, options.prefix, coordinator.resolverState(), committed_database);
+      trace, options.prefix, resolver, committed_database);
   const std::vector<std::string> derived_errors
       = validateDerivedDatabase(committed_database, receipt);
   if (!derived_errors.empty()) {

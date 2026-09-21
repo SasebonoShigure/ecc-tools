@@ -18,6 +18,7 @@
 #include "CsrReferenceFingerprintPayload.hpp"
 #include "CsrReferenceValidator.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
+#include "DualCsrUpdaterInternal.hpp"
 #include "DualCsrTestSupport.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
 #include "DualCsrTimingResultValidator.hpp"
@@ -239,7 +240,7 @@ void requireSemanticFlatOracle(const DualCsrState& state,
   const auto flat_output = runFlat(input);
   const auto& values = requireFlatTiming(flat_output, name);
   DualCsrTimingResult compact_timing{
-      values, activeMask(*compact.state)};
+      values};
   require(validateDualCsrTimingResult(
               *compact.state, compact_timing).empty(),
           name + " compact oracle timing is invalid");
@@ -267,7 +268,7 @@ DualCsrTimingResult requireValidTiming(
   const auto* timing
       = std::get_if<csr::CsrTimingResult>(&output.computation.outcome);
   require(timing != nullptr, name + " did not produce a timing result");
-  const DualCsrTimingResult dual{*timing, activeMask(state)};
+  const DualCsrTimingResult dual{*timing};
   const auto violations = validateDualCsrTimingResult(state, dual);
   require(violations.empty(),
           name + " failed Dual timing validation at "
@@ -357,7 +358,7 @@ void paperAuxOverflowTrace()
   const DualCsrState baseline = baselineState();
   const auto baseline_out_offsets = baseline.base_out.row_offsets;
   const auto baseline_out_slots = baseline.base_out.physical_slots;
-  const DualCsrState first = apply(baseline,
+  DualCsrState first = apply(baseline,
                                    auxOverflowBatch(baseline));
 
   requireOffsetPrefix(baseline_out_offsets, first.base_out.row_offsets,
@@ -366,7 +367,7 @@ void paperAuxOverflowTrace()
           "old-source add-only batch expanded an old BaseOut row");
   require(first.aux_out.row_sources
               == std::vector<csr::NodeId>{csr::NodeId{0}}
-              && first.aux_out.arc_ids
+              && first.aux_out.row_arcs.front()
                      == std::vector<csr::ArcId>{csr::ArcId{1}}
               && first.aux_out.source_to_aux_row[0] == 0,
           "paper_aux_overflow batch1 did not build packed AuxOut");
@@ -447,6 +448,21 @@ void paperAuxOverflowTrace()
 
   const auto first_out_offsets = first.base_out.row_offsets;
   const auto first_in_offsets = first.base_in.row_offsets;
+  first.aux_out.row_arcs.front().reserve(32);
+  const auto* retained_row = first.aux_out.row_arcs.front().data();
+  const auto retained_capacity = first.aux_out.row_arcs.front().capacity();
+  {
+    detail::PreparedDualCsrGraphPatch patch(first, auxClearBatch(first));
+    patch.apply();
+    require(first.aux_out.row_arcs.front().empty()
+                && first.aux_out.row_arcs.front().data() == retained_row,
+            "clearing an Aux row replaced its storage");
+    patch.rollback();
+    require(first.aux_out.row_arcs.front() == std::vector<csr::ArcId>{csr::ArcId{1}}
+                && first.aux_out.row_arcs.front().data() == retained_row
+                && first.aux_out.row_arcs.front().capacity() == retained_capacity,
+            "restoring an Aux row lost its allocation or logical values");
+  }
   const DualCsrState second = apply(first, auxClearBatch(first));
   require(second.nodes[2].net_name == "n2"
               && second.arc_slots[1].payload.key.base.owner_name == "n1"
@@ -457,9 +473,9 @@ void paperAuxOverflowTrace()
                       "paper_aux_overflow batch2 BaseOut");
   requireOffsetPrefix(first_in_offsets, second.base_in.row_offsets,
                       "paper_aux_overflow batch2 BaseIn");
-  require(second.aux_out.row_sources.empty()
-              && second.aux_out.arc_ids.empty()
-              && second.aux_out.source_to_aux_row[0] == -1,
+  require(second.aux_out.row_sources == first.aux_out.row_sources
+              && second.aux_out.row_arcs.front().empty()
+              && second.aux_out.source_to_aux_row[0] == 0,
           "batch2 did not clear the affected AuxOut row/mapping");
   require(!second.arc_slots[1].active && second.arc_slots[2].active
               && second.base_in.physical_slots[
@@ -476,10 +492,6 @@ void paperAuxOverflowTrace()
       = csr::ArcId{1};
   requireRejected(second, inactive_predecessor_canary,
                   "validator accepted an inactive stable predecessor ArcId");
-  auto active_mask_canary = second_timing;
-  active_mask_canary.active_arc_mask[1] = 1;
-  require(!validateDualCsrTimingResult(second, active_mask_canary).empty(),
-          "validator accepted an active mask for an inactive ArcId");
   auto presence_canary = second_timing;
   presence_canary.values.arcs.delays.presence[1] = 1;
   require(!validateDualCsrTimingResult(second, presence_canary).empty(),

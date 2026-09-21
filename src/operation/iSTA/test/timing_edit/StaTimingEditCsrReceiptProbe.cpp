@@ -10,11 +10,8 @@
 #include <variant>
 
 #include "../CsrNativeTimingOracleTestSupport.hpp"
-#include "CsrExecutionAuthorization.hpp"
-#include "CsrReferenceCanonicalEncoder.hpp"
 #include "CsrSessionSnapshotAdapter.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
-#include "NativeCandidateExecutor.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
 
 namespace ista::csr::test {
@@ -26,41 +23,29 @@ namespace ista::csr::test {
 
 namespace ista {
 
-timing_edit::CsrExecutionAuthorization StaTimingEditSessionProbeAccess::proveCsrFullExact(const timing_edit::NativeExecutionAuthority& authority,
-                                                                                          csr::CsrCommittedSessionSnapshot& snapshot, const Database& database,
-                                                                                          timing_edit::TransactionGeneration target_generation)
+void StaTimingEditSessionProbeAccess::requireNativeTimingEqual(
+    const csr::CsrReferenceInput& input, const csr::CsrTimingResult& reference,
+    const Database& database)
 {
-  if (!authority.active() || authority.sessionToken().value() == 0
-      || target_generation.value() == 0
-      || snapshot.input.source_identity.session_token
-             != authority.sessionToken().value()) {
-    throw std::invalid_argument(
-        "CSR full exact proof requires an active matching authority and generation");
-  }
-
   if constexpr (!incregpusta_debug_checks_enabled)
-    return timing_edit::CsrExecutionAuthorization(authority.sessionToken(), target_generation);
-
-  csr::CsrComputationResult computation
-      = csr::computeCsrSessionReference(snapshot);
-  auto* reference = std::get_if<csr::CsrTimingResult>(&computation.outcome);
-  if (reference == nullptr
-      || reference->source_identity != snapshot.input.source_identity) {
-    throw std::runtime_error(
-        "CSR CPU/full did not produce a result for the exact host input");
-  }
-
-  const csr::CsrNativeTimingOracle native_oracle
-      = csr::test::readNativeTimingOracle(database);
-  const csr::CsrTimingResult native
-      = csr::test::materializeTimingResultFromNativeOracle(
-          snapshot.input, native_oracle);
-  if (native != *reference) {
+    throw std::logic_error("CSR exact comparison requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
+  if (reference.source_identity != input.source_identity)
+    throw std::invalid_argument("CSR timing result belongs to a different input");
+  const auto native_oracle = csr::test::readNativeTimingOracle(database);
+  const auto native = csr::test::materializeTimingResultFromNativeOracle(input, native_oracle);
+  if (native != reference)
     throw CsrFullExactMismatch{};
-  }
-
-  return timing_edit::CsrExecutionAuthorization(authority.sessionToken(), target_generation, csr::canonicalReferenceInputBytes(snapshot.input),
-                                                std::move(*reference));
 }
 
+void StaTimingEditSessionProbeAccess::requireCsrFullExact(
+    csr::CsrCommittedSessionSnapshot& snapshot, const Database& database)
+{
+  if constexpr (!incregpusta_debug_checks_enabled)
+    throw std::logic_error("CSR exact comparison requires ECC_INCREGPUSTA_DEBUG_CHECKS=ON");
+  auto computation = csr::computeCsrSessionReference(snapshot);
+  const auto* reference = std::get_if<csr::CsrTimingResult>(&computation.outcome);
+  if (!reference)
+    throw std::runtime_error("CSR CPU/full did not produce a timing result");
+  requireNativeTimingEqual(snapshot.input, *reference, database);
+}
 }  // namespace ista

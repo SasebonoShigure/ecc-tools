@@ -48,13 +48,13 @@ std::optional<csr::NodeId> boundNodeId(
     const AffectedNodeModelCapture& request)
 {
   const auto& staged = pending.stagedResolver();
-  const auto found = staged.nodeBindings().find(request.ref);
-  if (found == staged.nodeBindings().end() || found->second.tombstone
-      || found->second.native_name != request.expected_key.full_name
-      || found->second.slot.value()
+  const auto* found = staged.findNodeBinding(request.ref);
+  if (found == nullptr || found->tombstone
+      || found->native_name != request.expected_key.full_name
+      || found->slot.value()
              >= pending.preparedBatch().slotPlan().after.node_slots)
     return std::nullopt;
-  return csr::NodeId{found->second.slot.value()};
+  return csr::NodeId{found->slot.value()};
 }
 
 const csr::NodeRecord* nodeRecord(

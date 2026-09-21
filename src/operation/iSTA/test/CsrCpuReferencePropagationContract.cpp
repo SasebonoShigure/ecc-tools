@@ -6,6 +6,7 @@
 // iEDA is licensed under Mulan PSL v2.
 // You may use this software according to the terms and conditions of the Mulan PSL v2.
 // ***************************************************************************************
+#include "CsrModelTestMutation.hpp"
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -331,13 +332,15 @@ CsrReferenceInput parallelBoundaryInput(double second_delay, double second_slew)
     for (auto& value : analysis)
       value = 0.0;
   for (std::size_t arc = 1; arc < input.arcs.size(); ++arc) {
-    auto& child = input.arcs[arc].transfer.children.front();
+    auto children = input.arcs[arc].transfer.children();
+  auto& child = children.front();
     const double delay = arc == 1 ? 0.0 : second_delay;
     const double slew = arc == 1 ? 1.0 : second_slew;
     for (std::size_t output = 0; output < kTransitionCount; ++output) {
       std::ranges::fill(child.delay_tables[output].values, delay);
       std::ranges::fill(child.slew_tables[output].values, slew);
     }
+    input.arcs[arc].transfer.setChildren(children);
     input.referenced_library_cells.front().cell_arcs[arc - 1].transfer = input.arcs[arc].transfer;
   }
   refreshCpuReferenceIdentity(input);
@@ -353,7 +356,6 @@ void testChainLiteral()
   requireCpuReference(result.level_offsets == std::vector<std::uint64_t>({0, 1, 2}), "chain level offsets differ");
   requireCpuReference(result.level_nodes == std::vector<NodeId>({NodeId{0}, NodeId{1}}), "chain level nodes differ");
   requireCpuReference(result.node_to_level == std::vector<std::uint64_t>({1, 2}), "chain node-to-level differs");
-  requireCpuReference(result.timing_order == result.level_nodes, "chain timing order differs");
   requireBits(result.nodes.arrivals.values[0], 1.0, "chain source arrival");
   requireBits(result.nodes.arrivals.values[1], 1.0, "chain sink arrival");
   requireBits(result.nodes.requireds.values[0], 1.0, "chain source required");
@@ -549,6 +551,45 @@ void testWinnerEpsilonBoundaries()
   }
 }
 
+void testCandidateOrderIndependentOfPhysicalSlots()
+{
+  for (auto input : {parallelBoundaryInput(0.5e-9, 1.0), parallelBoundaryInput(0.5e-6, 1.0),
+                     parallelBoundaryInput(0.0, 1.0 + 0.5e-6), dagInput(4, {{0, 1}, {0, 2}, {1, 3}, {2, 3}})}) {
+    CsrComputationResult computation;
+    auto expected = computeTiming(input, computation, "ordered adjacency baseline");
+    std::vector<std::uint64_t> reversed;
+    for (const auto& arc : input.arcs)
+      reversed.push_back(input.arcs.size() - 1 - arc.native_traversal_rank);
+    for (auto& arc : input.arcs) {
+      std::vector<std::uint64_t> parallel_slots;
+      for (std::size_t i = 0; i < input.arcs.size(); ++i)
+        if (input.arcs[i].key.base == arc.key.base)
+          parallel_slots.push_back(reversed[i]);
+      std::ranges::sort(parallel_slots);
+      arc.native_traversal_rank = parallel_slots.at(arc.key.parallel_ordinal);
+    }
+    refreshCpuReferenceIdentity(input);
+    requireStrict(input, "nonmonotonic physical slots");
+    const auto actual = computeTiming(input, computation, "nonmonotonic physical slots");
+    expected.source_identity = actual.source_identity;
+    requireExactTimingResult(actual, expected, "physical slot permutation changed FIFO, winner or path");
+  }
+}
+
+void testExplicitParallelCandidateOrder()
+{
+  auto input = parallelBoundaryInput(0.5e-9, 1.0);
+  std::swap(input.out_arc_ids[1], input.out_arc_ids[2]);
+  std::swap(input.in_arc_ids[1], input.in_arc_ids[2]);
+  refreshCpuReferenceIdentity(input);
+  requireStrict(input, "explicit parallel candidate order");
+  CsrComputationResult computation;
+  const auto result = computeTiming(input, computation, "explicit parallel candidate order");
+  requireCpuReference(result.nodes.predecessor_arcs.values[2] == ArcId{2}
+                          && result.paths.predecessor_arcs.values[result.paths.row_offsets[16]] == ArcId{2},
+                      "epsilon winner followed physical rank instead of explicit candidate order");
+}
+
 void testFrozenPathDetails()
 {
   CsrComputationResult computation;
@@ -564,7 +605,8 @@ void testFrozenPathDetails()
   }
   CsrReferenceInput scalar = makeCpuReferenceCellFixture();
   auto& scalar_arc = scalar.arcs[1];
-  auto& missing = scalar_arc.transfer.children.front();
+  auto children = scalar_arc.transfer.children();
+  auto& missing = children.front();
   for (std::size_t output = 0; output < kTransitionCount; ++output) {
     missing.signature.delay_tables[output] = {};
     missing.signature.slew_tables[output] = {};
@@ -573,6 +615,7 @@ void testFrozenPathDetails()
   }
   scalar_arc.key.base.library_arcs = {missing.signature};
   scalar.arc_ids_by_key[1].key = scalar_arc.key;
+  scalar_arc.transfer.setChildren(children);
   scalar.referenced_library_cells.front().cell_arcs.front().transfer = scalar_arc.transfer;
   refreshCpuReferenceIdentity(scalar);
   requireStrict(scalar, "scalar-without-IO fixture");
@@ -605,8 +648,8 @@ void testFrozenPathDetails()
   arc.key.base.sink = output.key;
   arc.key.base.library_source_port = "Y";
   arc.key.base.library_sink_port = "Z";
-  for (auto& table : arc.transfer.children.front().delay_tables)
-    table.values = {0.0, 1.0, 2.0};
+  ista::csr::test::mutateChildren(arc.transfer, [&](auto& children) { for (auto& table : children.front().delay_tables)
+    table.values = {0.0, 1.0, 2.0}; });
   downstream.arcs.push_back(arc);
   downstream.arc_ids_by_key.push_back({arc.key, ArcId{3}});
   downstream.out_row_offsets = {0, 1, 3, 4, 4};
@@ -630,6 +673,8 @@ void runCpuReferencePropagationContracts()
   testClockNameOverwriteBranches();
   testTopologyMatrix();
   testWinnerEpsilonBoundaries();
+  testCandidateOrderIndependentOfPhysicalSlots();
+  testExplicitParallelCandidateOrder();
   testFrozenPathDetails();
 }
 

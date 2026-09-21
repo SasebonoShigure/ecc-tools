@@ -14,11 +14,12 @@ from typing import Any
 import reference_input_contract as contract
 import reference_input_controller as controller
 import reference_input_controller_negative_cases as negative_cases
+import reference_input_recompute_graph as graph_oracle
 import reference_input_recompute_transfer as transfer_oracle
 import reference_input_wire_fixture as fixture
 
 _DEEP_CANDIDATE_BYTE_COUNT = 3409
-_DEEP_RAW_BYTE_COUNT = 1114
+_DEEP_RAW_BYTE_COUNT = 1226
 
 
 def _known_answer_bytes(
@@ -634,10 +635,45 @@ def _test_end_to_end(manifest: Path, root: Path) -> None:
     assert contract.validate_controller_result(result.summary, descriptors) == result.summary
 
 
+def _test_adjacency_slot_order(descriptors: Sequence[contract.CaseDescriptor]) -> None:
+    for descriptor in descriptors:
+        candidate, raw = fixture.fixture_case(descriptor.name)
+        row = next((node for node in raw.nodes if len(node.outgoing_arc_ranks) > 1), None)
+        if row is not None:
+            break
+    else:
+        raise AssertionError("fanout fixture missing")
+    names = {node.key.full_name: node.node_id for node in candidate.nodes}
+    changed_raw = replace(
+        raw,
+        nodes=tuple(
+            replace(node, outgoing_arc_ranks=tuple(reversed(node.outgoing_arc_ranks)))
+            if node == row else node
+            for node in raw.nodes
+        ),
+    )
+    node_id = names[row.full_name]
+    begin, end = candidate.out_row_offsets[node_id : node_id + 2]
+    changed_candidate = replace(
+        candidate,
+        out_arc_ids=(
+            candidate.out_arc_ids[:begin]
+            + tuple(reversed(candidate.out_arc_ids[begin:end]))
+            + candidate.out_arc_ids[end:]
+        ),
+    )
+    graph_oracle._validate_arcs(changed_candidate, changed_raw, names)
+    _expect_error(
+        "adjacency-order-corruption",
+        lambda: graph_oracle._validate_arcs(candidate, changed_raw, names),
+    )
+
+
 def run_self_test(controller_path: Path, manifest: Path) -> None:
     if controller_path.resolve() != Path(controller.__file__).resolve():
         raise AssertionError("--controller does not name the imported controller")
     descriptors = contract.load_case_descriptors(manifest)
+    _test_adjacency_slot_order(descriptors)
     _test_probe_contract(descriptors[0])
     _test_parallel_closure_reuse()
     _test_model_negatives(descriptors[0])

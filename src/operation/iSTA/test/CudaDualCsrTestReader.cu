@@ -3,6 +3,24 @@
 #include "CudaDualCsrTestReader.hpp"
 #include "timing_edit/BufferTraceCsrJson.hpp"
 namespace ista::csr {
+const CsrTimingValues& CudaDualCsrTestReader::materializeWithLevelOwnershipCheck(CudaDualCsrSession& session)
+{
+  using namespace cuda_detail;
+  demand(session._impl && !session._impl->values, "level ownership check needs an unqueried generation");
+  const auto& levels = session._impl->levels;
+  const auto* offsets = levels.level_offsets.data();
+  const auto* nodes = levels.level_nodes.data();
+  if constexpr (!incregpusta_debug_checks_enabled)
+    demand(levels.level_nodes.empty(), "unqueried OFF generation retained a host permutation");
+  const auto* inverse = levels.node_to_level.data();
+  const auto& result = session.timingValues();
+  demand(offsets == result.level_offsets.data() && inverse == result.node_to_level.data(),
+         "materialization copied functional level storage");
+  if constexpr (incregpusta_debug_checks_enabled)
+    demand(nodes == result.level_nodes.data(), "materialization copied diagnostic level order");
+  demand(result.level_nodes.size() == result.node_to_level.size(), "query did not materialize the full level order");
+  return result;
+}
 void CudaDualCsrTestReader::omitAuxAndRecompute(CudaDualCsrSession& candidate)
 {
   using namespace cuda_detail;
@@ -10,35 +28,52 @@ void CudaDualCsrTestReader::omitAuxAndRecompute(CudaDualCsrSession& candidate)
     throw std::logic_error("GPU omission canary requires development checks ON");
   demand(candidate._impl && candidate._impl->origin && !candidate._impl->poisoned, "GPU omission canary requires a detached healthy candidate");
   auto& state = *candidate._impl;
+  const std::vector<AuxRow> omitted(state.view.node_count);
   try {
-    const std::vector<Index> omitted(state.aux_mapping.size(), absent);
-    state.memory.upload(omitted, state.view.source_to_aux_row);
+    state.memory.upload(omitted, state.view.aux_rows);
     state.memory.zero(state.view.status, 1);
     state.memory.zero(state.view.storage_visits, 8);
     state.values.reset();
     state.code.reset();
     state.execute();
-  } catch (const CudaError&) {
+    if (state.code)
+      state.cancel();
+  } catch (...) {
+    try {
+      state.memory.synchronize();
+    } catch (...) {
+      state.storage->poisoned = true;
+    }
     state.poisoned = true;
-    state.origin->poisoned = true;
+    state.storage->poisoned = true;
+    if (state.origin)
+      state.origin->poisoned = true;
     throw;
   }
 }
 nlohmann::json CudaDualCsrTestReader::capture(const CudaDualCsrSession& session)
 {
   using namespace cuda_detail;
-  demand(session._impl && !session._impl->poisoned && session._impl->values, "acceptance reader needs successful device state");
+  demand(session._impl && !session._impl->poisoned && session._impl->levels.complete, "acceptance reader needs successful device state");
   auto& state = *session._impl;
   auto read = [&]<class T>(const T* source, Index count) {
     std::vector<T> result(count);
-    state.memory.download(source, result);
-    state.memory.synchronize();
-    return result;
+    try {
+      state.memory.download(source, result);
+      state.memory.synchronize();
+      return result;
+    } catch (...) {
+      try {
+        state.memory.synchronize();
+      } catch (...) {
+        state.storage->poisoned = true;
+      }
+      throw;
+    }
   };
   try {
-    auto out_offsets = read(state.view.out_offsets, state.out_offsets.size());
-    auto in_offsets = read(state.view.in_offsets, state.in_offsets.size());
-    auto aux_offsets = read(state.view.aux_offsets, state.aux_offsets.size());
+    auto out_offsets = read(state.view.out_offsets, state.host->out_offsets.size());
+    auto in_offsets = read(state.view.in_offsets, state.host->in_offsets.size());
     nlohmann::json arcs = nlohmann::json::array();
     for (const auto& arc : read(state.view.arcs, state.view.arc_count))
       arcs.push_back({{"source", arc.source},
@@ -62,15 +97,14 @@ nlohmann::json CudaDualCsrTestReader::capture(const CudaDualCsrSession& session)
             {"out_arcs", read(state.view.out_arcs, out_offsets.back())},
             {"in_offsets", in_offsets},
             {"in_arcs", read(state.view.in_arcs, in_offsets.back())},
-            {"aux_offsets", aux_offsets},
-            {"aux_arcs", read(state.view.aux_arcs, aux_offsets.back())},
-            {"source_to_aux_row", read(state.view.source_to_aux_row, state.aux_mapping.size())},
+            {"aux_rows", state.readAuxRows()},
             {"roots", read(state.view.roots, state.view.root_count)},
             {"ends", read(state.view.ends, state.view.end_count)},
             {"arcs", arcs},
             {"timing", buffer_trace::test::csrTimingValuesToJson(session.timingValues())}};
   } catch (const CudaError&) {
     state.poisoned = true;
+    state.storage->poisoned = true;
     if (state.origin)
       state.origin->poisoned = true;
     throw;

@@ -72,7 +72,7 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
 
 [[nodiscard]] CsrCpuReferenceStageStatus dynamicPass(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  for (NodeId source : work.result.timing_order) {
+  for (NodeId source : work.result.level_nodes) {
     if (source.value() >= work.node_count)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     const std::size_t source_index = static_cast<std::size_t>(source.value());
@@ -264,7 +264,7 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
 
 [[nodiscard]] CsrCpuReferenceStageStatus arrivalAndPathPass(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  for (NodeId source : work.result.timing_order) {
+  for (NodeId source : work.result.level_nodes) {
     std::optional<CsrCpuReferenceStageStatus> callback_status;
     const EdgeVisitResult visit = edges.forEachOutgoing(source, [&](const EdgeEntry& entry) {
       recordStorageVisit(work.telemetry.forward_propagation, entry.storage_kind);

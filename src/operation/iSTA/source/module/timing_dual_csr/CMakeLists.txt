@@ -6,7 +6,6 @@ add_library(ista_timing_dual_csr
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrReferenceValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrBaselineFactory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrDescriptorValidation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrUpdater.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrUpdatePhases.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrEdgeViewImpl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrResourceObservation.cpp
@@ -69,6 +68,8 @@ if(BUILD_TESTING)
     ista_add_timing_dual_csr_test(
         ista_timing_dual_csr_updater_contract_test
         DualCsrUpdaterContractTest.cpp)
+    target_sources(ista_timing_dual_csr_updater_contract_test PRIVATE
+        ${ISTA_TEST}/AllocationFailureSupport.cpp)
     ista_add_timing_dual_csr_test(
         ista_timing_dual_csr_aux_microcase_test
         DualCsrAuxMicrocaseTest.cpp)

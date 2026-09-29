@@ -4,6 +4,7 @@
 // Licensed under Mulan PSL v2.
 #pragma once
 #include <memory>
+#include <span>
 #include "TimingEditTypes.hpp"
 
 namespace ista {
@@ -44,6 +45,9 @@ class NativeEditTransaction final
   void commit() noexcept;
 
  private:
+  friend class NativeFullEditPreparer;
+  static NativeEditTransaction prepareFull(const NativeExecutionAuthority& authority,
+      std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver, std::uint64_t first_instance_id);
   struct Undo;
   [[nodiscard]] static NativeEditTransaction beginTargeted(const NativeExecutionAuthority& authority);
   void applyMetadata(std::unique_ptr<detail::PreparedNativeTargetedMetadata> metadata) noexcept;

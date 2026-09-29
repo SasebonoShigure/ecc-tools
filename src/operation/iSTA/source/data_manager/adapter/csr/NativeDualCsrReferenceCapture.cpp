@@ -1,6 +1,7 @@
 #include "NativeDualCsrReferenceCapture.hpp"
 
 #include <algorithm>
+#include <map>
 #include <string>
 #include <utility>
 
@@ -47,13 +48,23 @@ std::optional<NarrowCaptureError> buildReferenceDelta(
     records.reference_payload.referenced_library_cells = std::move(cells);
 
   RecordAppend<csr::CellPinCapacitanceModel> caps{before.cell_pin_capacitances.size(), {}};
+  // Keep only requested old values; do not rescan the complete table per pin.
+  std::map<csr::NodeId, const csr::CellPinCapacitanceModel*> old_caps;
+  for (const auto& captured : records.cell_pin_capacitances)
+    old_caps.emplace(captured.model.node, nullptr);
+  for (const auto& model : before.cell_pin_capacitances)
+    if (auto found = old_caps.find(model.node); found != old_caps.end()) {
+      if (found->second != nullptr)
+        return NarrowCaptureError::kMalformedNativeRecord;
+      found->second = &model;
+    }
   for (const auto& captured : records.cell_pin_capacitances) {
     const auto id = captured.model.node.value();
     if (id >= plan.after.node_slots || (id >= plan.before.node_slots && (id >= captured_node_keys.size() || !captured_node_keys[id])))
       return NarrowCaptureError::kMalformedNativeRecord;
-    const auto found = std::ranges::find(before.cell_pin_capacitances, captured.model.node, &csr::CellPinCapacitanceModel::node);
-    if (found != before.cell_pin_capacitances.end()) {
-      if (*found != captured.model)
+    const auto* old = old_caps.at(captured.model.node);
+    if (old != nullptr) {
+      if (*old != captured.model)
         return NarrowCaptureError::kUnplannedDependency;
     } else {
       caps.values.push_back(captured.model);

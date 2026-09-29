@@ -31,6 +31,15 @@ std::string exceptionMessage()
 
 }  // namespace
 
+StaStatus StaTimingEditSessionProbeAccess::runTimingOnlyBaseline(
+    std::uint64_t token, StaCsrSessionContext* context, StaBackend backend)
+{
+  auto& interface = STAInterface::getInst();
+  return backend == StaBackend::kCuda
+      ? interface.runOwnedCudaBaseline(token, context, false)
+      : interface.runOwned(StaOwner::session(token), context, false);
+}
+
 StaStatus StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(IncrementalStaSession& session, const GuardedMutation& mutation)
 {
   const StaSessionState state = session._state.load(std::memory_order_acquire);

@@ -95,10 +95,10 @@ FreshArtifactEvidence evidence(const FreshArtifactFile& file)
   }
 }
 
-std::map<std::string, std::any> makeConfig(const fs::path& run_directory)
+std::map<std::string, std::any> makeConfig(const fs::path& run_directory, std::int32_t threads)
 {
   return {{"-temp_directory_path", (run_directory / "sta").string()},
-          {"-thread_number", std::int32_t{1}},
+          {"-thread_number", threads},
           {"-output_timing_reports", std::int32_t{0}},
           {"-output_timing_features", std::int32_t{0}},
           {"-timing_path_limit", std::int32_t{20}},
@@ -142,6 +142,8 @@ void IndependentFreshBaselineLoader::run(const FreshBaselineArtifacts& supplied,
     fail("top name is empty");
   }
 
+  if (supplied.threads <= 0)
+    fail("thread count must be positive");
   FreshBaselineArtifacts artifacts = supplied;
   artifacts.tech_lef = requireRegularFile(supplied.tech_lef, "tech_lef");
   if (artifacts.cell_lefs.empty() || artifacts.liberties.empty())
@@ -175,7 +177,7 @@ void IndependentFreshBaselineLoader::run(const FreshBaselineArtifacts& supplied,
 
   loadArtifacts(artifacts);
   IncrementalStaSession session({StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
-  throwOnStaFailure(session.initialize(artifacts.analysis_context, makeConfig(artifacts.run_directory)), session.request());
+  throwOnStaFailure(session.initialize(artifacts.analysis_context, makeConfig(artifacts.run_directory, artifacts.threads)), session.request());
   const auto token = session.sessionToken();
   if (!token || *token == 0 || session.state() != StaSessionState::kInitialized) {
     fail("initialized session token/state differs");

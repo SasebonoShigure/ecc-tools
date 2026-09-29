@@ -212,7 +212,7 @@ OracleCliMode parseOracleCli(int argc, char* argv[], bool allow_trace_creation)
   allowed.insert("--mode");
   allowed.insert("--subject");
   const std::set<std::string> creation_flags{
-      "--net", "--sink", "--buffer", "--input", "--output-port", "--profile", "--seed"};
+      "--net", "--sink", "--buffer", "--input", "--output-port", "--profile", "--seed", "--data-side"};
   if (allow_trace_creation) {
     allowed.insert(creation_flags.begin(), creation_flags.end());
     allowed.insert("--create-trace");
@@ -246,6 +246,13 @@ OracleCliMode parseOracleCli(int argc, char* argv[], bool allow_trace_creation)
     }
     OracleTraceCreationOptions result{artifacts(values),
                                      requireAbsolute(require(values, "--create-trace"), "--create-trace"), executable};
+    if (values.contains("--data-side")) {
+      result.data_side = require(values, "--data-side");
+      if (result.data_side != "q" && result.data_side != "d" && result.data_side != "data")
+        fail("--data-side must be q, d, or data");
+      if (values.contains("--net") || values.contains("--sink"))
+        fail("--data-side cannot be combined with an explicit net/sink");
+    }
     if (values.contains("--net")) result.net = require(values, "--net");
     if (values.contains("--sink")) result.sink = require(values, "--sink");
     if (values.contains("--buffer")) result.buffer = require(values, "--buffer");
@@ -258,6 +265,8 @@ OracleCliMode parseOracleCli(int argc, char* argv[], bool allow_trace_creation)
       if (parsed.ec != std::errc{} || parsed.ptr != seed.data() + seed.size())
         fail("--seed must be an unsigned integer");
     }
+    if (!result.data_side.empty() && result.seed != 0)
+      fail("--data-side real replay requires --seed 0");
     return result;
   }
   if (values.contains("--create-trace")) {

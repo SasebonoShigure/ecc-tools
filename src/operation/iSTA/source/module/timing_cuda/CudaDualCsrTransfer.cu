@@ -24,15 +24,24 @@ void CudaDualCsrSession::Impl::bindGraph() noexcept
   view.indegrees = storage->indegrees.data;
 }
 
-void CudaDualCsrSession::Impl::bindAuxRows()
+std::uint64_t CudaDualCsrSession::Impl::bindAuxRows()
 {
+  if (storage->aux_bindings.empty())
+    return 0;
+  // This descriptor capacity is reserved first, before any graph buffer grows.
+  // A failed reservation leaves every committed device Aux pointer unchanged.
+  if (storage->aux_binding_upload.capacity < storage->aux_bindings.size())
+    return 0;
   for (auto& binding : storage->aux_bindings) {
-    if (binding.source >= storage->graph.aux_storage.size() || binding.source >= storage->graph.aux_rows.capacity)
-      continue;  // Capacity preparation may have failed before reaching this new row.
+    if (binding.source >= storage->graph.aux_storage.size())
+      continue;
     const auto& row = storage->graph.aux_storage[binding.source];
     binding.before = {row.buffer.data, row.count};
-    memory.upload(&binding.before, const_cast<AuxRow*>(view.aux_rows) + binding.source, 1);
   }
+  memory.upload(storage->aux_bindings, storage->aux_binding_upload.data);
+  launchAuxBindings(view, storage->aux_binding_upload.data, storage->aux_bindings.size(),
+                    storage->graph.aux_rows.capacity, memory.stream(), storage->kernel_threads);
+  return 1;
 }
 
 void CudaDualCsrSession::Impl::allocate()
@@ -42,6 +51,7 @@ void CudaDualCsrSession::Impl::allocate()
       ++telemetry.grown_buffers;
     return buffer.data;
   };
+  grow(storage->aux_binding_upload, storage->aux_bindings.size());
   const auto* old = storage->full_graph_pending ? nullptr : origin.get();
   grow(storage->graph.out_arcs, host->out_offsets.back(), old ? host->out_offsets[old->view.node_count] : 0);
   grow(storage->graph.in_arcs, host->in_offsets.back(), old ? host->in_offsets[old->view.node_count] : 0);
@@ -81,34 +91,28 @@ void CudaDualCsrSession::Impl::allocate()
   view.level_offset_count = grow(result.level_offset_count, 1);
   view.status = grow(result.status, 1);
   if constexpr (incregpusta_debug_checks_enabled) {
-    view.storage_visits = grow(result.storage_visits, 8);
-    memory.zero(view.storage_visits, 8);
+    view.storage_visits = grow(result.storage_visits, 12);
+    memory.zero(view.storage_visits, 12);
   }
   memory.zero(view.status, 1);
   memory.zero(view.level_offset_count, 1);
 }
 
-void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCsrPatch& patch, const PackedPatch& packed)
+void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCsrPatch& patch, PackedPatch& packed)
 {
   // Allocate and prepare every upload/undo source before submitting async work.
-  std::vector<std::pair<Index*, std::vector<Index>>> rows;
-  rows.reserve(patch.appended_base_out_rows.size() + patch.appended_base_in_rows.size() + patch.aux_rows.size());
-  const auto prepareIds = [&](const auto& ids, const Index* destination) {
-    auto& upload = rows.emplace_back(const_cast<Index*>(destination), std::vector<Index>{});
-    upload.second.reserve(ids.size());
-    for (auto id : ids)
-      upload.second.push_back(id.value());
-  };
   for (const auto& row : patch.appended_base_out_rows)
-    prepareIds(row.arc_ids, view.out_arcs + host->out_offsets[row.source.value()]);
+    for (auto id : row.arc_ids)
+      packed.appended_out.push_back(id.value());
   for (const auto& row : patch.appended_base_in_rows)
-    prepareIds(row.arc_ids, view.in_arcs + host->in_offsets[row.sink.value()]);
-  std::vector<Endpoint> endpoints;
+    for (auto id : row.arc_ids)
+      packed.appended_in.push_back(id.value());
+  auto& endpoints = packed.endpoints;
   endpoints.reserve(patch.appended_endpoints.size());
   for (const auto& source : patch.appended_endpoints)
     endpoints.push_back({source.node.value(), source.clock_period,
                          {source.output_delay[0].value_or(0.0), source.output_delay[0].has_value()}});
-  std::vector<SlotUndo> slots;
+  auto& slots = packed.slots;
   slots.reserve(packed.removes.size() + packed.changes.size() + packed.reverse_changes.size());
   for (const auto& item : packed.removes)
     slots.push_back({const_cast<Index*>(view.out_arcs) + item.slot, 0});
@@ -121,7 +125,7 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
     for (Index i = 0; i < std::min(row.count, item.replacement_count); ++i)
       slots.push_back({row.buffer.data + i, 0});
   }
-  std::vector<ArcUndo> arcs;
+  auto& arcs = packed.arcs;
   arcs.reserve(packed.payloads.size() + packed.deactivations.size());
   for (const auto& item : packed.payloads)
     arcs.push_back({item.id, {}});
@@ -155,13 +159,15 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
     const auto offset_begin = prior.view.node_count + 1;
     memory.upload(host->out_offsets.data() + offset_begin, const_cast<Index*>(view.out_offsets) + offset_begin, host->out_offsets.size() - offset_begin);
     memory.upload(host->in_offsets.data() + offset_begin, const_cast<Index*>(view.in_offsets) + offset_begin, host->in_offsets.size() - offset_begin);
-    bindAuxRows();
+    telemetry.cuda.kernel_launches += bindAuxRows();
     if (patch.roots)
       memory.upload(host->roots, view.roots);
     if (patch.ends)
       memory.upload(host->ends, view.ends);
-    for (const auto& [target, values] : rows)
-      memory.upload(values, target);
+    memory.upload(packed.appended_out.data(), const_cast<Index*>(view.out_arcs) + host->out_offsets[prior.view.node_count],
+                  packed.appended_out.size());
+    memory.upload(packed.appended_in.data(), const_cast<Index*>(view.in_arcs) + host->in_offsets[prior.view.node_count],
+                  packed.appended_in.size());
     memory.upload(packed.appends.data(), const_cast<Arc*>(view.arcs) + prior.view.arc_count, packed.appends.size());
     const auto child_begin = storage->uploaded_children, table_begin = storage->uploaded_tables;
     if (view.child_count > child_begin)
@@ -188,17 +194,17 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
     memory.upload(packed.aux_values, device.aux_values);
     memory.upload(slots, storage->slot_undo.data);
     memory.upload(arcs, storage->arc_undo.data);
-    launchCaptureUndo(view, storage->slot_undo.data, slots.size(), storage->arc_undo.data, arcs.size(), memory.stream());
+    launchCaptureUndo(view, storage->slot_undo.data, slots.size(), storage->arc_undo.data, arcs.size(), memory.stream(), storage->kernel_threads);
     storage->undo_captured = true;
     telemetry.cuda.kernel_launches += !slots.empty() || !arcs.empty();
     memory.record(1);
-    launchTargetedPatch(view, device, memory.stream());
-    telemetry.cuda.kernel_launches += 3;
-    memory.synchronize();
+    telemetry.cuda.kernel_launches += launchTargetedPatch(view, device, memory.stream(), storage->kernel_threads);
+    // Upload vectors are session-owned. execute waits before publication or
+    // rollback, so no local-lifetime wait is needed here.
     storage->uploaded_children = view.child_count;
     storage->uploaded_tables = table_count;
   } catch (...) {
-    // Keep all local host sources alive until the stream has consumed them.
+    // Drain failed uploads before rollback can reuse the persistent staging.
     try {
       memory.synchronize();
     } catch (...) {

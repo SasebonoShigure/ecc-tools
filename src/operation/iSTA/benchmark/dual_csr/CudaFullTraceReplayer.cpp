@@ -7,7 +7,7 @@
 #include "BufferTraceTypes.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "NativeEditTransaction.hpp"
-#include "NativeTimingEditPreparer.hpp"
+#include "NativeFullEditPreparer.hpp"
 #include "TimingEditResolver.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 #include "TimingResultScatterInternal.hpp"
@@ -30,10 +30,12 @@ void require(bool valid, const char* message)
 }
 
 }  // namespace
-CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Database& baseline, const StaAnalysisContext& analysis, const timing_edit::NativeExecutionAuthority& authority,
-                                              const buffer_trace::ReplayProgram& program, std::size_t prefix)
+CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Database& baseline, const CsrReferenceInput& baseline_input, const timing_edit::NativeExecutionAuthority& authority,
+                                              const buffer_trace::ReplayProgram& program, std::size_t prefix,
+                                              const std::function<void()>& consume_results)
 {
   using namespace timing_edit;
+  const auto setup_started = Clock::now();
   const auto violations = buffer_trace::validateReplayProgram(program);
   require(violations.empty(), "invalid replay program");
   require(authority.active() && authority.sessionToken().value() != 0, "inactive authority");
@@ -42,27 +44,21 @@ CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Dat
   auto& owned = session.cudaState(authority);
   owned.device.requireCommitted();
   require(owned.device.generation().value() == 0, "trace must start with the loaded baseline");
-  auto resolver = TimingEditResolverState::bindBaseline(baseline);
-  auto identity = NativeTimingEditPreparer::captureCurrentIdentity(baseline, TransactionGeneration{0}, analysis, authority.sessionToken());
-  require(NativeTimingEditPreparer::matchesDesignName(baseline, program.baseline().design_name)
-              && identity.current_fingerprints == program.baseline().fingerprints
-              && identity.canonical_pre_state == program.baseline().canonical_pre_state,
-          "frozen trace baseline differs from loaded canonical state");
-  TimingEditPrepareContext context{authority.sessionToken(), program.baseline(), identity, analysis};
-  context.library_models = &session.libraryModels(baseline);
+  auto state = NativeFullEditPreparer::bindBaseline(baseline, baseline_input, program.baseline());
+  const auto& analysis = baseline_input.analysis_context;
   CudaFullTraceResult result;
   result.batches.reserve(prefix);
+  result.backend_setup_ms = elapsed(setup_started);
   for (std::size_t index = 0; index < prefix; ++index) {
       const auto started = Clock::now();
-      require(plans[index].expected_generation == identity.generation, "noncontiguous generation");
+      require(plans[index].expected_generation == state.generation(), "noncontiguous generation");
       Database& current = baseline;
-      auto prepared = NativeTimingEditPreparer::prepare(current, plans[index], context, resolver);
-      PreparedTimingEditResolverPatch resolver_patch(resolver, resolver.prepare(prepared));
+      auto prepared = NativeFullEditPreparer::prepare(current, authority, plans[index], state);
       CudaFullTraceBatch batch;
-      batch.generation_before = identity.generation.value();
+      batch.generation_before = state.generation().value();
       batch.prepare_ms = elapsed(started);
       auto phase = Clock::now();
-      auto transaction = NativeEditTransaction::prepareFull(authority, prepared, resolver_patch.view());
+      auto& transaction = prepared.transaction();
       NativeCandidateExecutor::prepareFullGraph(transaction);
       batch.native_graph_ms = elapsed(phase);
       phase = Clock::now();
@@ -81,9 +77,7 @@ CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Dat
         arc_ranks.at(arc.id.value()) = arc.native_traversal_rank;
       auto candidate = owned.device.stageFullNativeExport(input, {input.nodes.size(), current.get_net_map().size(), input.arcs.size()});
       require(!candidate.computationCode(), "full GPU computation failed");
-      auto post_identity
-          = NativeTimingEditPreparer::identityFromInput(transaction.database(), input, prepared.targetGeneration());
-      batch.generation_after = post_identity.generation.value();
+      batch.generation_after = prepared.targetGeneration().value();
       if constexpr (incregpusta_debug_checks_enabled) {
         CsrTimingResult timing;
         timing.schema_version = input.schema_version;
@@ -95,10 +89,7 @@ CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Dat
       // All allocating preparation precedes the no-throw native commit.
       result.batches.push_back(std::move(batch));
       require(owned.device.publish(std::move(candidate)), "full GPU commit rejected");
-      resolver_patch.apply();
-      resolver_patch.commit();
-      identity = std::move(post_identity);
-      transaction.commit();
+      require(prepared.commit(), "native full commit rejected");
       owned.committedFull(std::move(node_names), std::move(arc_ranks));
       result.batches.back().commit_ms = elapsed(started);
       phase = Clock::now();
@@ -106,6 +97,8 @@ CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Dat
       result.batches.back().query_materialize_ms = elapsed(phase);
       phase = Clock::now();
       session.prepareCudaReport(current, authority);
+      if (consume_results)
+        consume_results();
       result.batches.back().report_ms = elapsed(phase);
       result.batches.back().consumer_end_to_end_ms = elapsed(started);
       result.batches.back().cuda = owned.device.telemetry().cuda;

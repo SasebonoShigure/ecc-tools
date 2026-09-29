@@ -337,23 +337,40 @@ def validate_targeted(value: dict[str, Any], prefix: int,
 def run_child(probe: pathlib.Path, role: str, trace: pathlib.Path, prefix: int,
               output: pathlib.Path,
               timeout: int, *, input_flag: Literal["--trace", "--replay"] = "--trace",
+              extra_args: tuple[str, ...] = (), cpu_affinity: list[int] | None = None,
               ) -> tuple[dict[str, Any], float]:
     output.parent.mkdir(parents=True, exist_ok=True)
     command = [str(probe), role, input_flag, str(trace), "--prefix", str(prefix),
-               "--output", str(output)]
+               "--output", str(output), *extra_args]
+    if cpu_affinity is not None:
+        command = [
+            sys.executable, "-c",
+            "import json,os,sys; os.sched_setaffinity(0,json.loads(sys.argv[1])); "
+            "os.execv(sys.argv[2],sys.argv[2:])",
+            json.dumps(cpu_affinity), *command,
+        ]
+    write_json(output.with_suffix(".command.json"), command)
     started = time.perf_counter()
-    completed = subprocess.run(
-        command, cwd=trace.parent.parent, check=False, capture_output=True,
-        text=True, timeout=timeout,
-    )
-    output.with_suffix(".stdout.txt").write_text(
-        completed.stdout, encoding="utf-8")
-    output.with_suffix(".stderr.txt").write_text(
-        completed.stderr, encoding="utf-8")
+    stdout_path, stderr_path = output.with_suffix(".stdout.txt"), output.with_suffix(".stderr.txt")
+    with (
+        stdout_path.open("w", encoding="utf-8") as stdout,
+        stderr_path.open("w", encoding="utf-8") as stderr,
+    ):
+        try:
+            completed = subprocess.run(
+                command, cwd=trace.parent.parent, check=False,
+                stdout=stdout, stderr=stderr, text=True, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            write_json(output.with_suffix(".status.json"), {"exit_code": None, "timeout": True})
+            raise
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    write_json(output.with_suffix(".status.json"), {
+        "exit_code": completed.returncode, "timeout": False, "wall_ms": elapsed_ms,
+    })
     require(completed.returncode == 0,
             f"{' '.join(command)} failed ({completed.returncode}): "
-            f"{completed.stderr.strip()}")
-    elapsed_ms = (time.perf_counter() - started) * 1000.0
+            f"{stderr_path.read_text(encoding='utf-8')[-4000:].strip()}")
     return read_json(output), elapsed_ms
 
 

@@ -64,9 +64,10 @@ CudaDualCsrSession detail::stageCudaTargetedBatch(CudaDualCsrSession& owner, con
 
 CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& session, Database& baseline, const CsrReferenceInput& input,
                                                        const timing_edit::NativeExecutionAuthority& authority, const buffer_trace::ReplayProgram& program,
-                                                       std::size_t prefix, StaUpdateStrategy strategy, StaFallbackPolicy fallback)
+                                                       std::size_t prefix, StaUpdateStrategy strategy, StaFallbackPolicy fallback, const std::function<void()>& consume_results)
 {
   using namespace timing_edit;
+  const auto setup_started = Clock::now();
   require(strategy == StaUpdateStrategy::kFull || strategy == StaUpdateStrategy::kIncremental, "unknown update strategy");
   require(fallback == StaFallbackPolicy::kError || fallback == StaFallbackPolicy::kFullWithRecord, "unknown fallback policy");
   require(authority.active() && authority.sessionToken().value() == input.source_identity.session_token,
@@ -83,6 +84,7 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
   result.batches.reserve(prefix);
   static_assert(std::is_nothrow_move_assignable_v<NativeTargetedEditState>);
   static_assert(std::is_nothrow_move_constructible_v<CudaTargetedTraceBatch>);
+  result.backend_setup_ms = elapsed(setup_started);
   for (std::size_t index = 0; index < prefix; ++index) {
       const auto started = Clock::now();
       require(authority.active() && state.generation == device.generation(), "native/device generation binding changed");
@@ -122,6 +124,8 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
       batch.query_materialize_ms = elapsed(phase);
       phase = Clock::now();
       session.prepareCudaReport(baseline, authority);
+      if (consume_results)
+        consume_results();
       batch.report_ms = elapsed(phase);
       batch.consumer_end_to_end_ms = elapsed(started);
       batch.device = device.telemetry();

@@ -13,16 +13,7 @@ double elapsed(Clock::time_point start)
 {
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
-void describe(CsrCudaTelemetry& value)
-{
-  int device = 0;
-  check(cudaGetDevice(&device), "cudaGetDevice");
-  cudaDeviceProp properties{};
-  check(cudaGetDeviceProperties(&properties, device), "cudaGetDeviceProperties");
-  value.device_name = properties.name;
-  check(cudaDriverGetVersion(&value.driver_version), "cudaDriverGetVersion");
-  check(cudaRuntimeGetVersion(&value.runtime_version), "cudaRuntimeGetVersion");
-}
+
 }  // namespace
 CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before)
     : storage(before ? before->storage : std::make_shared<DeviceStorage>(telemetry.cuda)), memory(storage->memory),
@@ -30,7 +21,7 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
       generation(before ? before->generation.value() + 1 : 0), high_water(water), runtime_owner(!before), origin(std::move(before))
 {
   const auto start = Clock::now();
-  describe(telemetry.cuda);
+  describeDevice(telemetry.cuda);
   auto packed = pack(input, storage->models);
   host = std::make_shared<HostGraphState>();
   telemetry.cuda.encode_ms = elapsed(start);
@@ -106,9 +97,10 @@ CudaDualCsrSession::Impl::Impl(std::shared_ptr<Impl> before, const CudaDualCsrPa
   host = prior.host;
   const auto start = Clock::now();
   telemetry.cuda.device_name = prior.telemetry.cuda.device_name;
+  telemetry.cuda.device_uuid = prior.telemetry.cuda.device_uuid;
   telemetry.cuda.driver_version = prior.telemetry.cuda.driver_version;
   telemetry.cuda.runtime_version = prior.telemetry.cuda.runtime_version;
-  auto packed = prepare(prior, patch);
+  auto& packed = prepare(prior, patch);
   memory.bindTelemetry(telemetry.cuda);
   telemetry.cuda.encode_ms = elapsed(start);
   allocate();
@@ -146,10 +138,10 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
       memory.upload(host->roots, view.roots);
     if (storage->host_undo.ends)
       memory.upload(host->ends, view.ends);
-    bindAuxRows();
+    cleanup.kernel_launches += bindAuxRows();
     if (storage->undo_captured) {
       launchRestoreUndo(view, storage->slot_undo.data, storage->slot_undo_count,
-                        storage->arc_undo.data, storage->arc_undo_count, memory.stream());
+                        storage->arc_undo.data, storage->arc_undo_count, memory.stream(), storage->kernel_threads);
       cleanup.kernel_launches += storage->slot_undo_count != 0 || storage->arc_undo_count != 0;
     }
     memory.synchronize();
@@ -175,17 +167,18 @@ void CudaDualCsrSession::Impl::cancel() noexcept
   if (origin) {
     const auto cleanup = origin->restorePending();
     telemetry.cuda.kernel_launches += cleanup.kernel_launches;
+    telemetry.cuda.device_algorithm_calls += cleanup.device_algorithm_calls;
     telemetry.cuda.h2d_bytes += cleanup.h2d_bytes;
     telemetry.cuda.d2d_bytes += cleanup.d2d_bytes;
     origin.reset();
   }
 }
-void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode)
+void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode) try
 {
   values.reset();
   levels.complete = false;
   telemetry.cuda.kernel_launches += launchSeedInitialization(
-      view, seed_nodes, host->node_seeds.size(), seed_paths, host->path_seeds.size(), memory.stream());
+      view, seed_nodes, host->node_seeds.size(), seed_paths, host->path_seeds.size(), memory.stream(), storage->kernel_threads);
   check(cudaGetLastError(), "CUDA path initialization launch");
   memory.zero(view.arc_state, view.arc_count);
   memory.zero(view.child_state, view.child_state_count);
@@ -200,14 +193,10 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode)
       return;
     }
   } else {
-    launchLevelization(view, memory.stream());
-    ++telemetry.cuda.kernel_launches;
-    check(cudaGetLastError(), "CUDA targeted full levelization launch");
+    const auto prior_readback = telemetry.cuda.d2h_bytes;
+    levelizeFull();
+    telemetry.cuda.levelization_decision_bytes = telemetry.cuda.d2h_bytes - prior_readback;
   }
-  memory.record(3);
-  telemetry.cuda.kernel_launches += launchPropagation(view, memory.stream());
-  check(cudaGetLastError(), "CUDA targeted full propagation launch");
-  memory.record(4);
   Status status;
   Index level_count;
   try {
@@ -237,7 +226,6 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode)
         memory.download(view.order, order);
       memory.download(view.node_levels, levels.node_to_level);
       memory.download(view.level_offsets, levels.level_offsets);
-      memory.record(5);
       memory.synchronize();
     } catch (...) {
       try {
@@ -258,10 +246,25 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode)
           if (arc.active && arc.levelization && levels.node_to_level[arc.source] >= levels.node_to_level[arc.sink])
             throw std::runtime_error("GPU mixed levels violate actual edge precedence");
     }
-    levels.complete = true;
+    memory.record(3);
+    propagate();
+    memory.record(4);
+    try {
+      memory.download(view.status, &status, 1);
+      memory.record(5);
+      memory.synchronize();
+    } catch (...) {
+      try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
+      throw;
+    }
+    levels.complete = status == Status::success;
   } else {
+    memory.record(3);
+    memory.record(4);
     memory.record(5);
     memory.synchronize();
+  }
+  if (status != Status::success) {
     switch (status) {
       case Status::cycle:
         code = CsrComputationCode::kCycle;
@@ -283,6 +286,10 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode)
     telemetry.mixed.reconstruct_ms = telemetry.cuda.levelization_ms;
   telemetry.cuda.propagation_ms = memory.milliseconds(3, 4);
   telemetry.cuda.d2h_ms = memory.milliseconds(4, 5);
+} catch (...) {
+  // Member-backed uploads must finish before a failed constructor destroys them.
+  try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
+  throw;
 }
 const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
 {
@@ -553,7 +560,7 @@ CudaDualCsrDebugState CudaDualCsrSession::debugState() const
     read(state.view.arcs, state.view.arc_count, result.arcs);
     read(state.view.children, state.view.child_count, result.children);
     read(state.view.table_data, state.table_count, result.table_data);
-    state.memory.download(state.view.storage_visits, result.storage_visits.data(), 8);
+    state.memory.download(state.view.storage_visits, result.storage_visits.data(), result.storage_visits.size());
     state.memory.synchronize();
     return result;
   } catch (...) {

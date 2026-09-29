@@ -185,6 +185,33 @@ void requireSupportedMovedSink(const Database& database, const Pin& pin)
     invalid("moved sink is not an ordinary sequential data input");
 }
 
+namespace {
+void requireDataNetCondition(bool value, const char* message)
+{
+  if (!value)
+    invalid(message);
+}
+}  // namespace
+void requireDataOnlyNet(const Database& database, const std::string& name)
+{
+  const auto& net = database.get_net_map().at(name);
+  requireDataNetCondition(!database.get_parasitic_library().get_net_map().contains(name), "targeted buffer requires NoParasitic source net");
+  requireDataNetCondition(net.get_driver_pin_list().size() == 1 && !net.get_driver_pin().empty(), "targeted source requires one driver");
+  for (const auto& [clock_name, clock] : database.get_timing_constraint().get_clock_map()) {
+    static_cast<void>(clock_name);
+    for (const auto& source : clock.get_source_list())
+      requireDataNetCondition(std::ranges::find(net.get_pin_name_list(), source) == net.get_pin_name_list().end(), "targeted edit touches clock source");
+  }
+  for (const auto& name : net.get_pin_name_list()) {
+    const auto& pin = database.get_pin_map().at(name);
+    requireDataNetCondition(pin.get_net_name() == net.get_net_name(), "targeted net membership mismatch");
+    if (pin.get_is_port())
+      continue;
+    const auto& instance = database.get_instance_map().at(pin.get_instance_name());
+    const auto& cell = database.get_timing_library().get_cell_map().at(instance.get_cell_name());
+    requireDataNetCondition(!cell.get_port_map().at(pin.get_pin_name()).get_is_clock(), "targeted edit touches library clock pin");
+  }
+}
 std::uint64_t nextNativeInstanceId(const Database& database)
 {
   return nextInstanceIdImpl(database);

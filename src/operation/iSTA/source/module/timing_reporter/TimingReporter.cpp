@@ -69,7 +69,7 @@ std::string escapeJsonString(const std::string& value)
   return escaped;
 }
 
-void outputJsonNumber(std::ofstream* json_file, double value)
+void outputJsonNumber(std::ostream* json_file, double value)
 {
   if (!std::isfinite(value)) {
     (*json_file) << "null";
@@ -392,7 +392,7 @@ bool TimingReporter::isMatchReportSlack(TimingPath& timing_path)
   return true;
 }
 
-void TimingReporter::outputQorSummaryReport()
+void TimingReporter::outputQorSummaryReport(std::ostream* json_output)
 {
   Database& database = STADM.getDatabase();
   std::map<std::string, double> setup_wns_map;
@@ -485,7 +485,8 @@ void TimingReporter::outputQorSummaryReport()
   const int32_t cell_area = getQorCellArea();
   const int32_t leaf_cell_k = getQorLeafCellK();
   auto output_qor_summary_json = [&]() {
-    std::ofstream* json_file = STAUTIL.getOutputFileStream(getQorSummaryJsonFilePath());
+    std::ofstream* owned_file = json_output ? nullptr : STAUTIL.getOutputFileStream(getQorSummaryJsonFilePath());
+    std::ostream* json_file = json_output ? json_output : owned_file;
     auto output_double = [json_file](double value, int32_t precision) {
       if (!std::isfinite(value)) {
         (*json_file) << "null";
@@ -581,11 +582,12 @@ void TimingReporter::outputQorSummaryReport()
     (*json_file) << "},\n  \"design_statistics\": {\"cap\":0,\"fanout\":0,\"tran\":0,\"tdrc\":0,\"cella\":" << cell_area
                  << ",\"bufs\":null,\"leafs_k\":" << leaf_cell_k
                  << ",\"tnets_k\":null,\"ctbuf\":null,\"regs\":null}\n}\n";
-    STAUTIL.closeFileStream(json_file);
+    if (owned_file)
+      STAUTIL.closeFileStream(owned_file);
   };
 
-  if (STADM.getConfig().output_timing_reports == 0) {
-    if (STADM.getConfig().output_timing_features != 0) {
+  if (json_output || STADM.getConfig().output_timing_reports == 0) {
+    if (json_output || STADM.getConfig().output_timing_features != 0) {
       output_qor_summary_json();
     }
     return;
@@ -595,7 +597,7 @@ void TimingReporter::outputQorSummaryReport()
   std::ofstream* report_file = STAUTIL.getOutputFileStream(report_file_path);
   if (group_set.empty()) {
     STAUTIL.closeFileStream(report_file);
-    if (STADM.getConfig().output_timing_features != 0) {
+    if (json_output || STADM.getConfig().output_timing_features != 0) {
       output_qor_summary_json();
     }
     return;
@@ -651,7 +653,7 @@ void TimingReporter::outputQorSummaryReport()
   (*report_file) << "TNS(H) - Hold TNS\n";
   (*report_file) << "NVP(H) - Hold NVP\n";
   STAUTIL.closeFileStream(report_file);
-  if (STADM.getConfig().output_timing_features != 0) {
+  if (json_output || STADM.getConfig().output_timing_features != 0) {
     output_qor_summary_json();
   }
 }
@@ -666,10 +668,11 @@ std::string TimingReporter::getQorSummaryJsonFilePath()
   return STAUTIL.getString(STADM.getConfig().tr_temp_directory_path, "qor_summary.json");
 }
 
-void TimingReporter::outputTimingPathsJson()
+void TimingReporter::outputTimingPathsJson(std::ostream* json_output)
 {
   Database& database = STADM.getDatabase();
-  std::ofstream* json_file = STAUTIL.getOutputFileStream(getTimingPathsJsonFilePath());
+  std::ofstream* owned_file = json_output ? nullptr : STAUTIL.getOutputFileStream(getTimingPathsJsonFilePath());
+  std::ostream* json_file = json_output ? json_output : owned_file;
   const int32_t path_limit = std::max(STADM.getConfig().timing_path_limit, 0);
   const std::string corner = STADM.getConfig().timing_corner.empty() ? "unknown" : STADM.getConfig().timing_corner;
 
@@ -715,7 +718,8 @@ void TimingReporter::outputTimingPathsJson()
     }
   }
   (*json_file) << "]\n}\n";
-  STAUTIL.closeFileStream(json_file);
+  if (owned_file)
+      STAUTIL.closeFileStream(owned_file);
 }
 
 std::string TimingReporter::getTimingPathsJsonFilePath()
@@ -723,7 +727,7 @@ std::string TimingReporter::getTimingPathsJsonFilePath()
   return STAUTIL.getString(STADM.getConfig().tr_temp_directory_path, "timing_paths.json");
 }
 
-void TimingReporter::outputTimingPathJson(std::ofstream* json_file, TimingPath& timing_path, std::string& path_group_name,
+void TimingReporter::outputTimingPathJson(std::ostream* json_file, TimingPath& timing_path, std::string& path_group_name,
                                           DelayType delay_type)
 {
   const std::string analysis_type = delay_type == DelayType::kMax ? "setup" : "hold";

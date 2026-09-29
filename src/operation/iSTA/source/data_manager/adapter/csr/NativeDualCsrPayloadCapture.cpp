@@ -68,6 +68,23 @@ class CaptureBuilder final
     if (const auto error = detail::validateNativeDataOnlyNets(
             _database, _plan))
       abortCapture(*error);
+    auto indexed = detail::indexPlannedNodeCapture(_plan);
+    if (const auto* error = std::get_if<NarrowCaptureError>(&indexed))
+      abortCapture(*error);
+    _planned_nodes = std::get<detail::PlannedNodeCaptureIndex>(std::move(indexed));
+    for (const auto& name : _database.get_start_point_list())
+      ++_starts[name];
+    for (const auto& name : _database.get_end_point_list())
+      ++_ends[name];
+    for (const auto& constraint : _committed.referencePayload().port_constraints) {
+      if (!constraint.resolved_node)
+        continue;
+      auto& entry = _port_loads[*constraint.resolved_node];
+      ++entry.first;
+      entry.second = constraint.output_load;
+    }
+    for (const auto& ref : _plan.invalidation_closure.arc_delays)
+      ++_delay_invalidations[ref];
     captureLibraries();
     captureRequestedNodes();
     captureInstances();
@@ -97,17 +114,6 @@ class CaptureBuilder final
       abortCapture(NarrowCaptureError::kParasiticModeMismatch);
   }
 
-  const timing_edit::TokenMaterialization& materialization(
-      const timing_edit::CreationToken& token) const
-  {
-    const auto* result = findUnique(
-        _plan.token_materializations,
-        [&](const auto& item) { return item.creation_token == token; });
-    if (result == nullptr)
-      abortCapture(NarrowCaptureError::kUnplannedDependency);
-    return *result;
-  }
-
   const timing_edit::BufferInsertionMutation& editForToken(
       const timing_edit::CreationToken& token) const
   {
@@ -120,19 +126,6 @@ class CaptureBuilder final
   }
 
   csr::NodeId nodeIdForRequest(const AffectedNodeCapture& request) const
-  {
-    const auto* binding = _staged.findNodeBinding(request.ref);
-    if (binding == nullptr
-        || binding->tombstone
-        || binding->native_name
-               != request.expected_key.full_name
-        || binding->slot.value() >= _plan.after.node_slots)
-      abortCapture(NarrowCaptureError::kInvalidHighWater);
-    return csr::NodeId{binding->slot.value()};
-  }
-
-  csr::NodeId nodeIdForModelRequest(
-      const AffectedNodeModelCapture& request) const
   {
     const auto* binding = _staged.findNodeBinding(request.ref);
     if (binding == nullptr
@@ -179,7 +172,7 @@ class CaptureBuilder final
   csr::NodeId resolveNodeId(const csr::NodeKey& key) const
   {
     auto resolved = detail::resolvePlannedNodeId(
-        _committed, _staged, _plan, key);
+        _committed, _staged, _plan, _planned_nodes, key);
     if (const auto* error = std::get_if<NarrowCaptureError>(&resolved))
       abortCapture(*error);
     return std::get<csr::NodeId>(resolved);
@@ -225,10 +218,11 @@ class CaptureBuilder final
     }
   }
 
-  bool listedOnce(const std::vector<std::string>& names,
+  bool listedOnce(const std::unordered_map<std::string_view, std::size_t>& names,
                   const std::string& name) const
   {
-    const auto count = std::ranges::count(names, name);
+    const auto found = names.find(name);
+    const auto count = found == names.end() ? 0 : found->second;
     if (count > 1)
       abortCapture(NarrowCaptureError::kMalformedNativeRecord);
     return count == 1;
@@ -244,9 +238,9 @@ class CaptureBuilder final
       abortCapture(NarrowCaptureError::kNativeNodeNotFound);
     std::set<std::string> starts;
     std::set<std::string> ends;
-    if (listedOnce(_database.get_start_point_list(), full_name))
+    if (listedOnce(_starts, full_name))
       starts.insert(full_name);
-    if (listedOnce(_database.get_end_point_list(), full_name))
+    if (listedOnce(_ends, full_name))
       ends.insert(full_name);
     std::unordered_map<std::string, std::string> owners;
     if (!pin->second.get_is_port()) {
@@ -264,7 +258,7 @@ class CaptureBuilder final
     record.id = resolveNodeId(record.key);
     if (!record.is_port) {
       auto projected = detail::projectPlannedNodeRole(
-          _plan.node_roles, _staged, _plan.after,
+          plannedModel(record.key, true), _staged, _plan.after,
           _library_by_name, record);
       if (const auto* error
           = std::get_if<NarrowCaptureError>(&projected))
@@ -297,18 +291,24 @@ class CaptureBuilder final
         .first->second;
   }
 
+  const AffectedNodeModelCapture* plannedModel(const csr::NodeKey& key, bool role) const
+  {
+    const auto found = _planned_nodes.find(key.full_name);
+    if (found == _planned_nodes.end())
+      return nullptr;
+    return role ? found->second.role : found->second.capacitance;
+  }
+
   const csr::CellPinCapacitanceModel* captureCapacitance(
       const csr::NodeRecord& node)
   {
     if (node.is_port)
       return nullptr;
-    const auto existing = std::ranges::find_if(
-        _run.records().cell_pin_capacitances,
-        [&](const auto& item) { return item.model.node == node.id; });
-    if (existing != _run.records().cell_pin_capacitances.end())
-      return &existing->model;
+    const auto existing = _captured_capacitances.find(node.id);
+    if (existing != _captured_capacitances.end())
+      return &_run.records().cell_pin_capacitances[existing->second].model;
     auto projected = detail::projectPlannedCapacitance(
-        _database, _plan.cell_pin_capacitances, _staged,
+        _database, plannedModel(node.key, false), _staged,
         _plan.after, node);
     if (const auto* error
         = std::get_if<NarrowCaptureError>(&projected))
@@ -317,6 +317,7 @@ class CaptureBuilder final
         std::move(projected));
     if constexpr (incregpusta_debug_checks_enabled)
       ++_run.records().audit.cell_pin_capacitance_reads;
+    _captured_capacitances.emplace(node.id, _run.records().cell_pin_capacitances.size());
     _run.records().cell_pin_capacitances.push_back(
         std::move(captured));
     if constexpr (incregpusta_debug_checks_enabled)
@@ -378,16 +379,12 @@ class CaptureBuilder final
 
   std::optional<double> portOutputLoad(csr::NodeId id) const
   {
-    std::optional<double> result;
-    for (const auto& constraint :
-         _committed.referencePayload().port_constraints) {
-      if (!constraint.resolved_node || *constraint.resolved_node != id)
-        continue;
-      if (result)
-        abortCapture(NarrowCaptureError::kMalformedNativeRecord);
-      result = constraint.output_load;
-    }
-    return result;
+    const auto found = _port_loads.find(id);
+    if (found == _port_loads.end())
+      return std::nullopt;
+    if (found->second.first != 1)
+      abortCapture(NarrowCaptureError::kMalformedNativeRecord);
+    return found->second.second;
   }
 
   void captureNetLoads()
@@ -548,8 +545,8 @@ class CaptureBuilder final
     const auto* old = committedArcForRequest(request);
     if (old == nullptr)
       return true;
-    const auto delay_count = std::ranges::count(
-        _plan.invalidation_closure.arc_delays, request.ref);
+    const auto delay = _delay_invalidations.find(request.ref);
+    const auto delay_count = delay == _delay_invalidations.end() ? 0 : delay->second;
     if (delay_count > 1)
       abortCapture(NarrowCaptureError::kBatchBindingMismatch);
     const bool load_mutable = _load_by_net.contains(
@@ -577,14 +574,14 @@ class CaptureBuilder final
   void captureArcs()
   {
     auto projected = projectAffectedArcs();
+    std::set<csr::ArcKeyBase, decltype(&csr::arcKeyBaseLess)> planned_bases(csr::arcKeyBaseLess);
+    for (const auto& request : _plan.arcs)
+      if (request.expected_post_multiplicity > 0)
+        planned_bases.insert(request.expected_post_base);
     for (const auto& actual : projected) {
       const bool affected_load = _load_by_net.contains(
           _nodes.at(actual.sink.value()).net_name);
-      const bool planned_base = std::ranges::any_of(
-          _plan.arcs, [&](const auto& request) {
-            return request.expected_post_multiplicity > 0
-                   && request.expected_post_base == actual.key.base;
-          });
+      const bool planned_base = planned_bases.contains(actual.key.base);
       if (affected_load && !planned_base)
         abortCapture(NarrowCaptureError::kArcMultiplicityMismatch);
     }
@@ -670,6 +667,11 @@ class CaptureBuilder final
   timing_edit::TimingEditResolverView _staged;
   const AffectedCapturePlan& _plan;
   CaptureRun& _run;
+  std::map<timing_edit::StableArcRef, std::size_t> _delay_invalidations;
+  detail::PlannedNodeCaptureIndex _planned_nodes;
+  std::unordered_map<std::string_view, std::size_t> _starts, _ends;
+  std::map<csr::NodeId, std::size_t> _captured_capacitances;
+  std::map<csr::NodeId, std::pair<std::size_t, std::optional<double>>> _port_loads;
   std::vector<csr::NodeRecord> _nodes;
   std::map<std::string, csr::NodeRecord> _node_by_name;
   std::map<std::string, csr::NodeId> _node_ids;

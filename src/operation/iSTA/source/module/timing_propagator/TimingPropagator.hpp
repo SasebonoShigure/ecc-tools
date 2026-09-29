@@ -15,6 +15,8 @@
 // ***************************************************************************************
 #pragma once
 
+#include <optional>
+
 #include "Database.hpp"
 #include "TPModel.hpp"
 
@@ -58,16 +60,12 @@ class TimingPropagator
   void seedDataSlewList(TPModel& tp_model);
   void seedDataSlew(std::string& start_point, AnalysisType analysis_type);
   void seedDataSlew(std::string& start_point, AnalysisType analysis_type, TransType trans_type);
-  void propagateDataSlewDelayArc(std::size_t arc_idx);
-  void propagateDataSlewDelayArc(std::size_t arc_idx, AnalysisType analysis_type, TransType input_trans_type);
-  void updateDataSlewDelay(Arc& arc, TimingPoint& source_point, TimingPoint& sink_point, AnalysisType analysis_type,
+  std::optional<double> calculateDataSlewDelay(Arc& arc, TimingPoint& source_point, AnalysisType analysis_type,
                            TransType input_trans_type, TransType output_trans_type);
   void updateGraphArcDelay(Arc& arc, AnalysisType analysis_type, TransType input_trans_type, TransType output_trans_type, double arc_delay);
-  void updateDataSlew(TimingPoint& timing_point, AnalysisType analysis_type, TransType trans_type, double data_slew);
   bool hasDataSlew(TimingPoint& timing_point, AnalysisType analysis_type, TransType trans_type);
   double getDataSlew(TimingPoint& timing_point, AnalysisType analysis_type, TransType trans_type);
   bool isBetterDelay(double candidate_delay, double current_delay, AnalysisType analysis_type);
-  bool isBetterSlew(double candidate_slew, double current_slew, AnalysisType analysis_type);
   double roundTime(double time);
   double getStartPointArrival(std::string& start_point, AnalysisType analysis_type);
   double getStartPointArrival(std::string& start_point, AnalysisType analysis_type, TransType trans_type);
@@ -88,11 +86,7 @@ class TimingPropagator
   bool isInputStartPoint(std::string& start_point);
   bool isRegisterStartPoint(std::string& start_point);
   bool hasClockPoint(std::string& pin_name);
-  void propagateArrivalArc(std::size_t arc_idx);
-  void propagatePathStateArc(std::size_t arc_idx, AnalysisType analysis_type, PathSourceType source_type);
-  void propagatePathStateArc(std::size_t arc_idx, AnalysisType analysis_type, PathSourceType source_type, TransType input_trans_type);
-  void propagatePathStateArc(std::size_t arc_idx, AnalysisType analysis_type, PathSourceType source_type, TransType input_trans_type,
-                             TransType output_trans_type);
+  void propagateDataArrival();
   std::vector<TransType> getOutputTransTypeList(Arc& arc, AnalysisType analysis_type, TransType input_trans_type);
   double getArcDelay(Arc& arc, AnalysisType analysis_type, TransType input_trans_type);
   double getArcDelay(Arc& arc, AnalysisType analysis_type, TransType input_trans_type, TransType output_trans_type);

@@ -2,6 +2,7 @@
 #include <chrono>
 
 #include "CudaDualCsrInternal.cuh"
+#include "CsrCudaKernels.cuh"
 #include "MixedLevelReconstructor.hpp"
 #include "MixedTopologyInternal.hpp"
 
@@ -20,11 +21,11 @@ struct OldLevelCopy
 };
 __device__ void fail(DeviceView view)
 {
-  atomicCAS(reinterpret_cast<int*>(view.status), static_cast<int>(Status::success), static_cast<int>(Status::invariant));
+  recordFailure(view.status, Status::invariant);
 }
 __global__ void insertNewLevelNodes(DeviceView view, const NewNodePlacement* nodes, Index count)
 {
-  if (*view.status != Status::success)
+  if (readStatus(view.status) != Status::success)
     return;
   for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += static_cast<Index>(gridDim.x) * blockDim.x) {
     const auto value = nodes[i];
@@ -37,7 +38,7 @@ __global__ void insertNewLevelNodes(DeviceView view, const NewNodePlacement* nod
 }
 __global__ void reconstructNodeToLevel(DeviceView view, Index offset_count)
 {
-  if (*view.status != Status::success)
+  if (readStatus(view.status) != Status::success)
     return;
   if (blockIdx.x == 0 && threadIdx.x == 0)
     *view.level_offset_count = offset_count;

@@ -15,6 +15,7 @@ inline CudaDualCsrPatch patchFor(const CsrReferenceInput& input, std::uint64_t g
   return patch;
 }
 
+void runCudaParallelPatchContracts(CudaLevelizationMode mode);
 void runCudaLazySequence(CudaLevelizationMode mode);
 void runCudaDualCsrStorageContracts(CudaLevelizationMode mode);
 }  // namespace ista::csr::test

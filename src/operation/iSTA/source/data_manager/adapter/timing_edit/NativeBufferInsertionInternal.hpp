@@ -10,6 +10,7 @@ namespace ista {
 class Pin;
 }
 namespace ista::timing_edit::detail {
+void requireDataOnlyNet(const Database& database, const std::string& name);
 void requireSupportedMovedSink(const Database& database, const Pin& pin);
 [[nodiscard]] std::uint64_t nextNativeInstanceId(const Database& database);
 // Prepared map nodes and replacement strings/vectors. Apply and undo only

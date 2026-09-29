@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Field-addressable validation for Stage 5 Dual-CSR transaction receipts."""
 
-import copy
 import json
 from collections.abc import Callable
 from typing import Any
@@ -424,8 +423,8 @@ def validate_traversal_counts(value: object, structural: dict[str, Any],
                          else full_levelization),
         "arc_initialization": {"base_out": base_active, "aux_out": aux_active,
                                "base_in": 0},
-        "forward_propagation": {"base_out": 2 * base_active,
-                                "aux_out": 2 * aux_active, "base_in": 0},
+        "forward_propagation": {"base_out": 0, "aux_out": 0,
+                                "base_in": 2 * active},
         "required_propagation": {"base_out": base_active,
                                  "aux_out": aux_active, "base_in": 0},
     }
@@ -433,8 +432,12 @@ def validate_traversal_counts(value: object, structural: dict[str, Any],
 
 
 def normalize_plan(value: dict[str, Any]) -> dict[str, Any]:
-    plan = copy.deepcopy(value)
-    state = plan["baseline"]["canonical_pre_state"]
+    # Comparison consumers only read nested model records; copy changed containers.
+    plan = dict(value)
+    plan["baseline"] = dict(value["baseline"])
+    state = dict(value["baseline"]["canonical_pre_state"])
+    plan["baseline"]["canonical_pre_state"] = state
+    plan["edits"] = [dict(edit) for edit in value["edits"]]
     state["active_arcs"] = state.pop("arcs")
     for edit in plan["edits"]:
         rc_inputs = edit["rc_inputs"]

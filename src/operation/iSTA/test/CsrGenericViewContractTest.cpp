@@ -149,7 +149,7 @@ void runContracts()
     requireCpuReference(flat.telemetry.levelization.base_in > 0 && flat.telemetry.levelization.base_out > 0,
                         "levelization did not traverse incoming and outgoing storage");
     requireCpuReference(flat.telemetry.arc_initialization.base_out > 0, "arc initialization did not traverse active arcs");
-    requireCpuReference(flat.telemetry.forward_propagation.base_out > 0, "forward propagation did not traverse outgoing arcs");
+    requireCpuReference(flat.telemetry.forward_propagation.base_in > 0, "forward propagation did not traverse incoming arcs");
     requireCpuReference(flat.telemetry.required_propagation.base_out > 0, "required propagation did not traverse outgoing arcs");
   }
 

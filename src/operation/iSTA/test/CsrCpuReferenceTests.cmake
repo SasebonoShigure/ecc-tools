@@ -30,6 +30,8 @@ set(ISTA_STEP5_CONTRACT_SOURCES
     CsrCpuReferenceOutcomeContract.cpp
     CsrCpuReferenceArcContract.cpp
     CsrCpuReferencePropagationContract.cpp
+    CsrCpuReferenceTopologyContract.cpp
+    CsrCpuReferenceDagFixture.cpp
     CsrCpuReferenceClockContract.cpp
     CsrCpuReferenceSequentialContract.cpp
     CsrCpuReferenceTestFixture.cpp

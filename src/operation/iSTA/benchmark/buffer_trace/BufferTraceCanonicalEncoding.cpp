@@ -617,6 +617,11 @@ BufferTraceContractViolations validateBufferTraceArtifact(const BufferTraceArtif
       }
       if (evaluation.accepted_creation_token) {
         const auto& accepted_token = *evaluation.accepted_creation_token;
+        if (const auto* driver = std::get_if<timing_edit::CreatedNodeRef>(&evaluation.driver);
+            driver && (driver->creation_token.batch_ordinal >= round.batch_ordinal
+                       || !generation_tokens.contains(driver->creation_token)))
+          reject(errors, BufferTraceContractCode::kForwardReference, evaluation_field + ".driver",
+                 "accepted driver must resolve to a token from an earlier round");
         if (!unique_evaluation_tokens.insert(accepted_token).second)
           reject(errors, BufferTraceContractCode::kDuplicate, evaluation_field + ".accepted_creation_token",
                  "accepted evaluation token must be unique within its round");

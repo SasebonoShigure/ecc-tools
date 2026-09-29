@@ -65,7 +65,9 @@ Json deviceTelemetry(const csr::CudaDualCsrTelemetry& device)
           {"d2h_bytes", c.d2h_bytes},
           {"d2d_bytes", c.d2d_bytes},
           {"allocations", c.allocations},
-          {"kernel_launches", c.kernel_launches},
+          {"explicit_kernel_launches", c.kernel_launches},
+          {"device_algorithm_calls", c.device_algorithm_calls},
+          {"levelization_decision_bytes", c.levelization_decision_bytes},
           {"device_name", c.device_name},
           {"driver_version", c.driver_version},
           {"runtime_version", c.runtime_version}};
@@ -128,7 +130,7 @@ int main(int argc, char** argv)
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
     const bool replay_only = options.contains("--replay");
     const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
-    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/3.0.0" : "ista-cuda-targeted-trace/3.0.0"},
+    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/5.0.0" : "ista-cuda-targeted-trace/5.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
                 {"requested_backend", "cuda"},
@@ -199,7 +201,9 @@ int main(int argc, char** argv)
                                   {"d2h_bytes", initialization.d2h_bytes},
                                   {"d2d_bytes", initialization.d2d_bytes},
                                   {"allocations", initialization.allocations},
-                                  {"kernel_launches", initialization.kernel_launches},
+                                  {"explicit_kernel_launches", initialization.kernel_launches},
+          {"device_algorithm_calls", initialization.device_algorithm_calls},
+          {"levelization_decision_bytes", initialization.levelization_decision_bytes},
                                   {"end_to_end_ms", initialization.end_to_end_ms}};
       output["batch_timings"] = Json::array();
       for (const auto& batch : result->batches) {

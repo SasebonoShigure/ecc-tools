@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "TimingSemanticKey.hpp"
+#include "StrictJson.hpp"
 namespace ista::csr::real_diff {
 namespace {
 [[noreturn]] void fail(std::string_view label, std::string_view message)
@@ -526,30 +527,10 @@ void validateWire(const NeutralWire& wire)
 
 Json parseStrictJson(std::string_view bytes, std::string_view label)
 {
-  bool duplicate = false;
-  std::vector<std::set<std::string>> object_keys;
-  Json::parser_callback_t callback = [&](int, Json::parse_event_t event, Json& parsed) {
-    if (event == Json::parse_event_t::object_start) {
-      object_keys.emplace_back();
-    } else if (event == Json::parse_event_t::key) {
-      if (object_keys.empty() || !object_keys.back().insert(parsed.get<std::string>()).second) {
-        duplicate = true;
-      }
-    } else if (event == Json::parse_event_t::object_end) {
-      if (object_keys.empty()) {
-        duplicate = true;
-      } else {
-        object_keys.pop_back();
-      }
-    }
-    return true;
-  };
   try {
-    Json result = Json::parse(bytes.begin(), bytes.end(), callback, true, false);
-    if (duplicate || !object_keys.empty()) {
-      fail(label, "duplicate object key");
-    }
-    return result;
+    return ista::json_detail::parseUniqueKeyJson(bytes);
+  } catch (const ista::json_detail::DuplicateJsonKey& error) {
+    fail(label, error.what());
   } catch (const nlohmann::json::exception& error) {
     fail(label, std::string("invalid JSON: ") + error.what());
   }

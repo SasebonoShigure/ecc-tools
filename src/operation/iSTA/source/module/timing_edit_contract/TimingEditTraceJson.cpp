@@ -15,45 +15,28 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include "TimingEditTrace.hpp"
+#include "TimingEditJsonInternal.hpp"
+#include "StrictJson.hpp"
 
 #include <algorithm>
 #include <array>
 #include <limits>
-#include <map>
-#include <set>
 #include <stdexcept>
 
 #include "json.hpp"
 
 namespace ista::timing_edit {
-namespace {
+namespace json_detail {
 
 using Json = nlohmann::json;
 
-class WireError : public std::runtime_error
-{
- public:
-  WireError(std::string field, std::string message) : std::runtime_error(message), field(std::move(field)) {}
-  std::string field;
-};
-
 Json parseClosedWorldJson(std::string_view json_text)
 {
-  std::map<int, std::set<std::string>> object_keys;
-  const Json::parser_callback_t reject_duplicate_keys
-      = [&](int depth, Json::parse_event_t event, Json& parsed) {
-          if (event == Json::parse_event_t::object_start) {
-            object_keys[depth + 1].clear();
-          } else if (event == Json::parse_event_t::key) {
-            const std::string key = parsed.get<std::string>();
-            if (!object_keys[depth].insert(key).second) {
-              throw WireError("trace", "duplicate object key: " + key);
-            }
-          }
-          return true;
-        };
-  return Json::parse(json_text.begin(), json_text.end(), reject_duplicate_keys,
-                     true, true);
+  try {
+    return ista::json_detail::parseUniqueKeyJson(json_text, true);
+  } catch (const ista::json_detail::DuplicateJsonKey& error) {
+    throw WireError("trace", error.what());
+  }
 }
 
 void exactObject(const Json& value, std::string_view field, std::initializer_list<std::string_view> expected)
@@ -555,16 +538,16 @@ Json toJson(const TimingEditTrace& value)
           {"replay_command", {{"executable", value.replay_command.executable}, {"arguments", value.replay_command.arguments}}}};
 }
 
-}  // namespace
+}  // namespace json_detail
 
 TimingEditTraceParseResult parseTimingEditTraceJson(std::string_view json_text)
 {
   try {
-    TimingEditTrace result = fromJson(parseClosedWorldJson(json_text));
+    TimingEditTrace result = json_detail::fromJson(json_detail::parseClosedWorldJson(json_text));
     if (auto errors = validateTimingEditTrace(result); !errors.empty())
       return errors;
     return result;
-  } catch (const WireError& error) {
+  } catch (const json_detail::WireError& error) {
     return TimingEditContractViolations{{TimingEditContractCode::kInvalidValue, error.field, error.what()}};
   } catch (const nlohmann::json::exception& error) {
     return TimingEditContractViolations{{TimingEditContractCode::kInvalidValue, "trace", error.what()}};
@@ -577,7 +560,7 @@ std::string timingEditTraceToJson(const TimingEditTrace& value)
 {
   if (auto errors = validateTimingEditTrace(value); !errors.empty())
     throw std::invalid_argument(errors.front().field + ": " + errors.front().message);
-  return toJson(value).dump();
+  return json_detail::toJson(value).dump();
 }
 
 }  // namespace ista::timing_edit

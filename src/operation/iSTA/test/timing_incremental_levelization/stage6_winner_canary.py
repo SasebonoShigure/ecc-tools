@@ -218,6 +218,16 @@ def run_equal_cost_canary(compare: Callable, first_difference: Callable,
     require(evidence["equal_cost_node_sites"] >= 1
             and evidence["equal_cost_path_sites"] >= 1,
             "equal-cost canary did not derive both candidate sets")
+    seed_graph = copy.deepcopy(graph)
+    seeds = seed_graph["reference_payload"]["start_seeds"]
+    other_tag = copy.deepcopy(seeds[0])
+    other_tag["clock_tag"] = "other-clock"
+    seeds.append(other_tag)
+    compare(seed_graph, left, right, "same-node-distinct-seeds",
+            first_difference, require)
+    seeds.append(copy.deepcopy(seeds[0]))
+    _expect_rejected(seed_graph, left, right, compare, first_difference,
+                     require, error_type, "duplicate-matching-root-seed")
     bad_node = copy.deepcopy(right)
     bad_node["nodes"]["predecessor_nodes"]["values"][2] = _key("s0")
     _expect_rejected(graph, left, bad_node, compare, first_difference,

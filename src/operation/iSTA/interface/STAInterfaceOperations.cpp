@@ -522,7 +522,7 @@ StaStatus STAInterface::initializeOwned(StaOwner owner, std::map<std::string, st
                             result.message);
 }
 
-StaStatus STAInterface::runOwned(StaOwner owner, StaCsrSessionContext* capture_or_null)
+StaStatus STAInterface::runOwned(StaOwner owner, StaCsrSessionContext* capture_or_null, bool include_artifacts)
 {
   StaStatus failure;
   auto authority = acquireUse(owner, capture_or_null, false, StaSessionState::kInitialized, &failure);
@@ -531,7 +531,9 @@ StaStatus STAInterface::runOwned(StaOwner owner, StaCsrSessionContext* capture_o
   if (!_is_initialized)
     return StaStatus::failure(StaSessionStatusCode::kInvalidState, StaSessionState::kCreated, "init_sta must be called before STA commands");
 
-  StaOperationResult result = invokeLifecycleOperation("STA full baseline", [this] { return _lifecycle_operations->runFullBaseline(); });
+  StaOperationResult result = invokeLifecycleOperation("STA full baseline", [this, include_artifacts] {
+    return include_artifacts ? _lifecycle_operations->runFullBaseline() : runFullStaPipeline(false);
+  });
   if (!result.succeeded) {
     if (result.cleanup_failed) {
       std::scoped_lock lifecycle_lock(_lifecycle_mutex);

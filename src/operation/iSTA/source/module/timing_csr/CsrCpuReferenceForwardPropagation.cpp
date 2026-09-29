@@ -46,122 +46,79 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
   return std::isinf(value) && value < 0.0;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus updateSinkSlew(CsrCpuReferenceWorkState& work, NodeId sink, AnalysisMode analysis, Transition output_transition,
-                                                        double candidate)
-{
-  if (!std::isfinite(candidate) || candidate < 0.0)
-    return CsrCpuReferenceStageStatus::kNumericFailure;
-  if (sink.value() >= work.node_count)
-    return CsrCpuReferenceStageStatus::kInvariantViolation;
-  const std::size_t lane = csrNodeLane(static_cast<std::size_t>(sink.value()), analysis, output_transition);
-  auto& slews = work.result.data_slews;
-  if (slews.presence[lane] == 0) {
-    slews.presence[lane] = 1;
-    slews.values[lane] = candidate;
-    return CsrCpuReferenceStageStatus::kSuccess;
-  }
-
-  bool better = false;
-  CsrCpuReferenceStageStatus status = epsilonBetter(analysis, candidate, slews.values[lane], kPathWinnerEpsilon, better);
-  if (status != CsrCpuReferenceStageStatus::kSuccess)
-    return status;
-  if (better)
-    slews.values[lane] = candidate;
-  return CsrCpuReferenceStageStatus::kSuccess;
-}
-
 [[nodiscard]] CsrCpuReferenceStageStatus dynamicPass(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  for (NodeId source : work.result.level_nodes) {
-    if (source.value() >= work.node_count)
+  struct Candidate
+  {
+    std::size_t lane;
+    double value;
+  };
+  // Reuse only one node's candidates. Their IDs are seed first, then incoming
+  // row ordinal and input transition; physical ArcIds are not tie identities.
+  std::vector<Candidate> candidates;
+  for (NodeId sink : work.result.level_nodes) {
+    if (sink.value() >= work.node_count)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
-    const std::size_t source_index = static_cast<std::size_t>(source.value());
-    std::optional<CsrCpuReferenceStageStatus> callback_status;
-    const EdgeVisitResult visit = edges.forEachOutgoing(source, [&](const EdgeEntry& entry) {
+    candidates.clear();
+    std::array<std::optional<double>, 4> extremes;
+    const auto add = [&](AnalysisMode analysis, Transition output, double value) {
+      const std::size_t lane = csrAnalysisIndex(analysis) * 2 + csrTransitionIndex(output);
+      candidates.push_back({lane, value});
+      if (!extremes[lane] || (analysis == AnalysisMode::kMax ? value > *extremes[lane] : value < *extremes[lane]))
+        extremes[lane] = value;
+    };
+    for (AnalysisMode analysis : kAnalyses)
+      for (Transition output : kTransitions) {
+        const auto lane = csrNodeLane(sink.value(), analysis, output);
+        if (work.result.data_slews.presence[lane])
+          add(analysis, output, work.result.data_slews.values[lane]);
+      }
+
+    CsrCpuReferenceStageStatus status = CsrCpuReferenceStageStatus::kSuccess;
+    const auto visit = edges.forEachIncoming(sink, [&](const EdgeEntry& entry) {
       recordStorageVisit(work.telemetry.forward_propagation, entry.storage_kind);
       const auto payload = edges.arc(entry.arc_id);
-      if (!payload) {
-        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
-        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-      }
-      const ArcSemanticPayload& arc = payload.value();
-      if (arc.source != source || arc.sink.value() >= work.node_count)
-        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+      if (!payload || payload.value().sink != sink || payload.value().source.value() >= work.node_count)
+        return EdgeVisitResult::fail(CsrViewError::kMalformedAdjacency);
+      const auto& arc = payload.value();
       if (!arc.eligibility.data_slew)
-        return callback_status ? EdgeVisitResult::fail(CsrViewError::kCallbackError) : EdgeVisitResult::continueVisit();
-
-      for (AnalysisMode analysis : kAnalyses) {
-        for (Transition input_transition : kTransitions) {
-          const std::size_t source_lane = csrNodeLane(source_index, analysis, input_transition);
-          if (work.result.data_slews.presence[source_lane] == 0)
+        return EdgeVisitResult::continueVisit();
+      for (AnalysisMode analysis : kAnalyses)
+        for (Transition input : kTransitions) {
+          const auto source_lane = csrNodeLane(arc.source.value(), analysis, input);
+          if (!work.result.data_slews.presence[source_lane])
             continue;
-          const double source_slew = work.result.data_slews.values[source_lane];
-          for (Transition output_transition : kTransitions) {
+          for (Transition output : kTransitions) {
             CsrDynamicArcValue value;
-            CsrCpuReferenceStageStatus status
-                = evaluateCsrDynamicArc(edges, entry.arc_id, analysis, input_transition, output_transition, source_slew, work, value);
-            if (status != CsrCpuReferenceStageStatus::kSuccess) {
-              callback_status = status;
+            status = evaluateCsrDynamicArc(edges, entry.arc_id, analysis, input, output,
+                                           work.result.data_slews.values[source_lane], work, value);
+            if (status != CsrCpuReferenceStageStatus::kSuccess)
               return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-            }
-            if (!value.present)
-              continue;
-            status = updateSinkSlew(work, arc.sink, analysis, output_transition, value.slew);
-            if (status != CsrCpuReferenceStageStatus::kSuccess) {
-              callback_status = status;
-              return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-            }
+            if (value.present)
+              add(analysis, output, value.slew);
           }
         }
-      }
       return EdgeVisitResult::continueVisit();
     });
     if (visit.control == EdgeVisitControl::kError)
-      return callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation);
-  }
-  return CsrCpuReferenceStageStatus::kSuccess;
-}
+      return status == CsrCpuReferenceStageStatus::kSuccess ? CsrCpuReferenceStageStatus::kInvariantViolation : status;
 
-[[nodiscard]] CsrCpuReferenceStageStatus propagateScalar(NodeId source, ArcId arc_id, const ArcSemanticPayload& arc, CsrCpuReferenceWorkState& work)
-{
-  const std::size_t source_index = static_cast<std::size_t>(source.value());
-  const std::size_t sink_index = static_cast<std::size_t>(arc.sink.value());
-  const double source_arrival = work.result.nodes.arrivals.values[source_index];
-  if (!std::isfinite(source_arrival))
-    return isNegativeInfinity(source_arrival) ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kInvariantViolation;
-
-  if (arc_id.value() >= work.arc_count || work.result.arcs.delays.presence[arc_id.value()] == 0)
-    return CsrCpuReferenceStageStatus::kInvariantViolation;
-  const double delay = work.result.arcs.delays.values[arc_id.value()];
-  const double candidate = source_arrival + delay;
-  if (!std::isfinite(delay) || !std::isfinite(candidate))
-    return CsrCpuReferenceStageStatus::kNumericFailure;
-
-  const double sink_arrival = work.result.nodes.arrivals.values[sink_index];
-  bool replace = isNegativeInfinity(sink_arrival);
-  if (!replace) {
-    if (!std::isfinite(sink_arrival))
-      return CsrCpuReferenceStageStatus::kInvariantViolation;
-    const double threshold = sink_arrival + kScalarWinnerEpsilon;
-    if (!std::isfinite(threshold))
-      return CsrCpuReferenceStageStatus::kNumericFailure;
-    replace = candidate > threshold;
-  }
-  if (!replace)
-    return CsrCpuReferenceStageStatus::kSuccess;
-
-  work.result.nodes.arrivals.values[sink_index] = candidate;
-  work.result.nodes.launches.values[sink_index] = work.result.nodes.launches.values[source_index];
-  work.result.nodes.predecessor_nodes.presence[sink_index] = 1;
-  work.result.nodes.predecessor_nodes.values[sink_index] = source;
-  work.result.nodes.predecessor_arcs.presence[sink_index] = 1;
-  work.result.nodes.predecessor_arcs.values[sink_index] = arc_id;
-  if (work.result.nodes.clock_names.presence[source_index] != 0) {
-    work.result.nodes.clock_names.presence[sink_index] = 1;
-    work.result.nodes.clock_names.values[sink_index] = work.result.nodes.clock_names.values[source_index];
-  } else {
-    work.result.nodes.clock_names.presence[sink_index] = 0;
-    work.result.nodes.clock_names.values[sink_index].clear();
+    std::array<bool, 4> selected{};
+    for (const auto& candidate : candidates) {
+      if (selected[candidate.lane])
+        continue;
+      bool outside = false;
+      status = epsilonBetter(candidate.lane < 2 ? AnalysisMode::kMax : AnalysisMode::kMin,
+                             *extremes[candidate.lane], candidate.value, kPathWinnerEpsilon, outside);
+      if (status != CsrCpuReferenceStageStatus::kSuccess)
+        return status;
+      if (!outside) {
+        const auto lane = sink.value() * 4 + candidate.lane;
+        work.result.data_slews.presence[lane] = 1;
+        work.result.data_slews.values[lane] = candidate.value;
+        selected[candidate.lane] = true;
+      }
+    }
   }
   return CsrCpuReferenceStageStatus::kSuccess;
 }
@@ -206,103 +163,163 @@ constexpr std::array<Transition, kTransitionCount> kTransitions{Transition::kRis
   return std::isfinite(candidate) ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kNumericFailure;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus propagatePathLane(NodeId source, ArcId arc_id, const ArcSemanticPayload& arc, AnalysisMode analysis, PathSource path_source,
-                                                           Transition input_transition, Transition output_transition, CsrCpuReferenceWorkState& work)
-{
-  const std::size_t arc_index = static_cast<std::size_t>(arc_id.value());
-  const std::size_t io_lane = csrArcIoLane(arc_index, analysis, input_transition, output_transition);
-  if (work.result.arcs.input_output_delays.presence[io_lane] == 0)
-    return CsrCpuReferenceStageStatus::kSuccess;
-
-  double selected_delay = 0.0;
-  CsrCpuReferenceStageStatus status = selectPathDelay(work, arc_index, analysis, input_transition, output_transition, selected_delay);
-  if (status != CsrCpuReferenceStageStatus::kSuccess)
-    return status;
-
-  const std::size_t source_row = csrPathRow(static_cast<std::size_t>(source.value()), analysis, path_source, input_transition);
-  const std::size_t sink_row = csrPathRow(static_cast<std::size_t>(arc.sink.value()), analysis, path_source, output_transition);
-  const auto& source_paths = work.path_rows[source_row];
-  auto& sink_paths = work.path_rows[sink_row];
-  for (const auto& source_path : source_paths) {
-    if (!std::isfinite(source_path.arrival)) {
-      if (isNegativeInfinity(source_path.arrival))
-        continue;
-      return CsrCpuReferenceStageStatus::kInvariantViolation;
-    }
-
-    double candidate_arrival = 0.0;
-    status = roundedPathArrival(source_path.arrival, selected_delay, candidate_arrival);
-    if (status != CsrCpuReferenceStageStatus::kSuccess)
-      return status;
-
-    const auto found = std::lower_bound(sink_paths.begin(), sink_paths.end(), source_path.clock_tag,
-                                        [](const CsrCpuReferencePathState& path, ClockTagId tag) { return path.clock_tag.value() < tag.value(); });
-    bool replace = found == sink_paths.end() || found->clock_tag != source_path.clock_tag;
-    if (!replace) {
-      status = epsilonBetter(analysis, candidate_arrival, found->arrival, kPathWinnerEpsilon, replace);
-      if (status != CsrCpuReferenceStageStatus::kSuccess)
-        return status;
-    }
-    if (!replace)
-      continue;
-
-    CsrCpuReferencePathState candidate = source_path;
-    candidate.arrival = candidate_arrival;
-    const std::size_t slew_lane = csrNodeLane(static_cast<std::size_t>(arc.sink.value()), analysis, output_transition);
-    candidate.slew = work.result.data_slews.presence[slew_lane] == 0 ? 0.0 : work.result.data_slews.values[slew_lane];
-    candidate.predecessor_node = source;
-    candidate.predecessor_arc = arc_id;
-    candidate.predecessor_arc_delay = selected_delay;
-    candidate.predecessor_transition = input_transition;
-    if (found == sink_paths.end() || found->clock_tag != source_path.clock_tag)
-      sink_paths.insert(found, std::move(candidate));
-    else
-      *found = std::move(candidate);
-  }
-  return CsrCpuReferenceStageStatus::kSuccess;
-}
-
 [[nodiscard]] CsrCpuReferenceStageStatus arrivalAndPathPass(const ActiveCsrEdgeView& edges, CsrCpuReferenceWorkState& work)
 {
-  for (NodeId source : work.result.level_nodes) {
-    std::optional<CsrCpuReferenceStageStatus> callback_status;
-    const EdgeVisitResult visit = edges.forEachOutgoing(source, [&](const EdgeEntry& entry) {
-      recordStorageVisit(work.telemetry.forward_propagation, entry.storage_kind);
-      const auto payload = edges.arc(entry.arc_id);
-      if (!payload) {
-        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
-        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-      }
-      const ArcSemanticPayload& arc = payload.value();
-      if (arc.source != source || arc.sink.value() >= work.node_count) {
-        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
-        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-      }
-      if (!arc.eligibility.data_arrival)
-        return EdgeVisitResult::continueVisit();
+  struct ScalarCandidate { NodeId source; ArcId arc; double arrival; };
+  struct PathCandidate {
+    const CsrCpuReferencePathState* source;
+    NodeId predecessor;
+    ArcId arc;
+    Transition input;
+    double arrival;
+    double delay;
+  };
+  struct Extreme { ClockTagId tag; double arrival; bool selected; };
+  std::vector<ScalarCandidate> scalars;
+  std::vector<PathCandidate> candidates;
+  std::vector<Extreme> extremes;
+  std::vector<CsrCpuReferencePathState> selected;
+  std::vector<EdgeEntry> incoming;
 
-      CsrCpuReferenceStageStatus status = propagateScalar(source, entry.arc_id, arc, work);
-      if (status != CsrCpuReferenceStageStatus::kSuccess) {
-        callback_status = status;
-        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-      }
-      for (AnalysisMode analysis : kAnalyses) {
-        for (PathSource path_source : kPathSources) {
-          for (Transition input_transition : kTransitions) {
-            for (Transition output_transition : kTransitions) {
-              status = propagatePathLane(source, entry.arc_id, arc, analysis, path_source, input_transition, output_transition, work);
-              if (status != CsrCpuReferenceStageStatus::kSuccess) {
-                callback_status = status;
-                return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-              }
-            }
-          }
-        }
-      }
+  for (NodeId sink : work.result.level_nodes) {
+    if (sink.value() >= work.node_count)
+      return CsrCpuReferenceStageStatus::kInvariantViolation;
+    incoming.clear();
+    const auto visit = edges.forEachIncoming(sink, [&](const EdgeEntry& entry) {
+      recordStorageVisit(work.telemetry.forward_propagation, entry.storage_kind);
+      const auto arc = edges.arc(entry.arc_id);
+      if (!arc || entry.arc_id.value() >= work.arc_count || arc.value().sink != sink
+          || arc.value().source.value() >= work.node_count)
+        return EdgeVisitResult::fail(CsrViewError::kMalformedAdjacency);
+      if (arc.value().eligibility.data_arrival)
+        incoming.push_back(entry);
       return EdgeVisitResult::continueVisit();
     });
     if (visit.control == EdgeVisitControl::kError)
-      return callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation);
+      return CsrCpuReferenceStageStatus::kInvariantViolation;
+
+    double extreme = work.result.nodes.arrivals.values[sink.value()];
+    if (!std::isfinite(extreme) && !isNegativeInfinity(extreme))
+      return CsrCpuReferenceStageStatus::kInvariantViolation;
+    const double seed = extreme;
+    scalars.clear();
+    for (const auto& entry : incoming) {
+      const auto& arc = edges.arc(entry.arc_id).value();
+      const auto arrival = work.result.nodes.arrivals.values[arc.source.value()];
+      if (!std::isfinite(arrival)) {
+        if (isNegativeInfinity(arrival))
+          continue;
+        return CsrCpuReferenceStageStatus::kInvariantViolation;
+      }
+      if (!work.result.arcs.delays.presence[entry.arc_id.value()])
+        return CsrCpuReferenceStageStatus::kInvariantViolation;
+      const auto candidate = arrival + work.result.arcs.delays.values[entry.arc_id.value()];
+      if (!std::isfinite(candidate))
+        return CsrCpuReferenceStageStatus::kNumericFailure;
+      scalars.push_back({arc.source, entry.arc_id, candidate});
+      extreme = std::max(extreme, candidate);
+    }
+    bool outside = isNegativeInfinity(seed);
+    if (!outside) {
+      const auto status = epsilonBetter(AnalysisMode::kMax, extreme, seed, kScalarWinnerEpsilon, outside);
+      if (status != CsrCpuReferenceStageStatus::kSuccess)
+        return status;
+    }
+    if (outside) {
+      for (const auto& candidate : scalars) {
+        const auto status = epsilonBetter(AnalysisMode::kMax, extreme, candidate.arrival, kScalarWinnerEpsilon, outside);
+        if (status != CsrCpuReferenceStageStatus::kSuccess)
+          return status;
+        if (outside)
+          continue;
+        const auto node = sink.value(), source = candidate.source.value();
+        work.result.nodes.arrivals.values[node] = candidate.arrival;
+        work.result.nodes.launches.values[node] = work.result.nodes.launches.values[source];
+        work.result.nodes.predecessor_nodes.presence[node] = 1;
+        work.result.nodes.predecessor_nodes.values[node] = candidate.source;
+        work.result.nodes.predecessor_arcs.presence[node] = 1;
+        work.result.nodes.predecessor_arcs.values[node] = candidate.arc;
+        work.result.nodes.clock_names.presence[node] = work.result.nodes.clock_names.presence[source];
+        work.result.nodes.clock_names.values[node] = work.result.nodes.clock_names.presence[source]
+                                                       ? work.result.nodes.clock_names.values[source] : std::string{};
+        break;
+      }
+    }
+
+    for (AnalysisMode analysis : kAnalyses)
+      for (PathSource source_kind : kPathSources)
+        for (Transition output : kTransitions) {
+          auto& row = work.path_rows[csrPathRow(sink.value(), analysis, source_kind, output)];
+          candidates.clear();
+          extremes.clear();
+          selected.clear();
+          const auto add = [&](PathCandidate candidate) {
+            candidates.push_back(candidate);
+            const auto tag = candidate.source->clock_tag;
+            const auto found = std::lower_bound(extremes.begin(), extremes.end(), tag,
+                                                [](const Extreme& value, ClockTagId key) { return value.tag.value() < key.value(); });
+            if (found == extremes.end() || found->tag != tag)
+              extremes.insert(found, {tag, candidate.arrival, false});
+            else if (analysis == AnalysisMode::kMax ? candidate.arrival > found->arrival : candidate.arrival < found->arrival)
+              found->arrival = candidate.arrival;
+          };
+          for (const auto& path : row) {
+            if (!std::isfinite(path.arrival)) {
+              if (isNegativeInfinity(path.arrival))
+                continue;
+              return CsrCpuReferenceStageStatus::kInvariantViolation;
+            }
+            add({&path, sink, {}, output, path.arrival, 0.0});
+          }
+          for (const auto& entry : incoming) {
+            const auto& arc = edges.arc(entry.arc_id).value();
+            for (Transition input : kTransitions) {
+              if (!work.result.arcs.input_output_delays.presence[csrArcIoLane(entry.arc_id.value(), analysis, input, output)])
+                continue;
+              double delay = 0.0;
+              auto status = selectPathDelay(work, entry.arc_id.value(), analysis, input, output, delay);
+              if (status != CsrCpuReferenceStageStatus::kSuccess)
+                return status;
+              for (const auto& path : work.path_rows[csrPathRow(arc.source.value(), analysis, source_kind, input)]) {
+                if (!std::isfinite(path.arrival)) {
+                  if (isNegativeInfinity(path.arrival))
+                    continue;
+                  return CsrCpuReferenceStageStatus::kInvariantViolation;
+                }
+                double arrival = 0.0;
+                status = roundedPathArrival(path.arrival, delay, arrival);
+                if (status != CsrCpuReferenceStageStatus::kSuccess)
+                  return status;
+                add({&path, arc.source, entry.arc_id, input, arrival, delay});
+              }
+            }
+          }
+          selected.resize(extremes.size());
+          for (const auto& candidate : candidates) {
+            const auto found = std::lower_bound(extremes.begin(), extremes.end(), candidate.source->clock_tag,
+                                                [](const Extreme& value, ClockTagId key) { return value.tag.value() < key.value(); });
+            if (found->selected)
+              continue;
+            const auto status = epsilonBetter(analysis, found->arrival, candidate.arrival, kPathWinnerEpsilon, outside);
+            if (status != CsrCpuReferenceStageStatus::kSuccess)
+              return status;
+            if (outside)
+              continue;
+            auto& value = selected[static_cast<std::size_t>(found - extremes.begin())];
+            value = *candidate.source;
+            if (candidate.predecessor != sink) {
+              value.arrival = candidate.arrival;
+              const auto lane = csrNodeLane(sink.value(), analysis, output);
+              value.slew = work.result.data_slews.presence[lane] ? work.result.data_slews.values[lane] : 0.0;
+              value.predecessor_node = candidate.predecessor;
+              value.predecessor_arc = candidate.arc;
+              value.predecessor_arc_delay = candidate.delay;
+              value.predecessor_transition = candidate.input;
+            }
+            found->selected = true;
+          }
+          row.swap(selected);
+        }
   }
   return CsrCpuReferenceStageStatus::kSuccess;
 }

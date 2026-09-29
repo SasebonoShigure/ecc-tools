@@ -64,6 +64,7 @@ class TimingEditResolverState final
   [[nodiscard]] static TimingEditResolverState bindReferenceBaseline(const Database& database, const csr::CsrReferenceInput& input);
   [[nodiscard]] TimingEditResolverState stageAssignments(const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const;
   friend class NativeTargetedEditPreparer;
+  friend class NativeFullEditPreparer;
   friend struct detail::PreparedNativeTargetedMetadata;
   friend class TimingEditResolverView;
   friend class PreparedTimingEditResolverPatch;
@@ -103,6 +104,7 @@ class TimingEditResolverView final
   TimingEditResolverView(const TimingEditResolverState& base, const TimingEditResolverDelta& delta) noexcept
       : _base(base), _delta(&delta) {}
   [[nodiscard]] const NativeSlotBinding* findNodeBinding(const StableNodeRef& ref) const;
+  [[nodiscard]] const NativeSlotBinding* findNodeBindingForKey(const csr::NodeKey& key) const;
   [[nodiscard]] const NativeSlotBinding* findNetBinding(const StableNetRef& ref) const;
   [[nodiscard]] const NativeSlotBinding* findArcBinding(const StableArcRef& ref) const;
   [[nodiscard]] const std::string& resolveNode(const StableNodeRef& ref) const;

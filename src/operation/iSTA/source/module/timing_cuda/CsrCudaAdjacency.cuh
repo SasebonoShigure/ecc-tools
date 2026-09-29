@@ -22,7 +22,7 @@ struct Outgoing
       }
       if constexpr (incregpusta_debug_checks_enabled)
         if (view.storage_visits)
-          ++view.storage_visits[stage * 2 + (aux ? 1 : 0)];
+          atomicAdd(reinterpret_cast<unsigned long long*>(view.storage_visits + stage * 3 + (aux ? 1 : 0)), 1ULL);
       return true;
     }
     return false;
@@ -41,5 +41,33 @@ __device__ inline Outgoing outgoing(DeviceView view, Index node, unsigned stage)
     }
   }
   return result;
+}
+
+struct Incoming
+{
+  DeviceView view;
+  Index node, position, end;
+  unsigned stage;
+  __device__ bool next(Index& arc)
+  {
+    while (position < end) {
+      arc = view.in_arcs[position++];
+      if (arc == absent)
+        continue;
+      if (arc >= view.arc_count || !view.arcs[arc].active || view.arcs[arc].sink != node || view.arcs[arc].source >= view.node_count) {
+        *view.status = Status::invariant;
+        return false;
+      }
+      if constexpr (incregpusta_debug_checks_enabled)
+        if (view.storage_visits)
+          atomicAdd(reinterpret_cast<unsigned long long*>(view.storage_visits + stage * 3 + 2), 1ULL);
+      return true;
+    }
+    return false;
+  }
+};
+__device__ inline Incoming incoming(DeviceView view, Index node, unsigned stage)
+{
+  return {view, node, view.in_offsets[node], view.in_offsets[node + 1], stage};
 }
 }  // namespace ista::csr::cuda_detail

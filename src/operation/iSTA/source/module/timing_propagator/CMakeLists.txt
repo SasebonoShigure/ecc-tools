@@ -1,5 +1,7 @@
 add_library(ista_timing_propagator
     ${ISTA_MODULE}/timing_propagator/TimingPropagator.cpp
+    ${ISTA_MODULE}/timing_propagator/TimingPropagatorDataSlew.cpp
+    ${ISTA_MODULE}/timing_propagator/TimingPropagatorArrival.cpp
 )
 
 target_link_libraries(ista_timing_propagator

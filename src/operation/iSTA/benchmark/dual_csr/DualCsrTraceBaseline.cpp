@@ -22,6 +22,7 @@
 #include "DualCsrTraceBaselineInternal.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "TimingEditResolver.hpp"
+#include "TimingSemanticKey.hpp"
 
 namespace ista::timing_dual_csr::detail {
 namespace {
@@ -69,8 +70,15 @@ CommittedDualCsrAnalysisState makeTraceBaseline(
   auto computation = backend.computeWithTelemetry(edges, payloads);
   auto* values = std::get_if<csr::CsrTimingResult>(
       &computation.computation.outcome);
-  if (values == nullptr)
-    baselineFail("direct-view CPU/full timing failed");
+  if (values == nullptr) {
+    std::string message{"direct-view CPU/full timing failed:"};
+    if (const auto* code = std::get_if<csr::CsrComputationCode>(&computation.computation.outcome))
+      message += " " + std::string(csr::token(*code));
+    else
+      for (const auto reason : std::get<csr::CsrReferenceSupportResult>(computation.computation.outcome).unsupported_reasons)
+        message += " " + std::string(csr::token(reason));
+    baselineFail(std::move(message));
+  }
   DualCsrTimingResult timing{
       .values = std::move(*values)};
   graph.telemetry.traversal = computation.telemetry;

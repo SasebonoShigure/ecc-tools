@@ -91,14 +91,10 @@ void PreparedNativeTargetedMetadata::undo() noexcept
   _applied = false;
 }
 
-csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditState& state, const std::string& name)
+csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditState& state, const std::string& name,
+                             const std::set<std::string>& starts, const std::set<std::string>& ends)
 {
   const auto& pin = database.get_pin_map().at(name);
-  std::set<std::string> starts, ends;
-  if (std::ranges::find(database.get_start_point_list(), name) != database.get_start_point_list().end())
-    starts.insert(name);
-  if (std::ranges::find(database.get_end_point_list(), name) != database.get_end_point_list().end())
-    ends.insert(name);
   std::unordered_map<std::string, std::string> owners;
   if (!pin.get_is_port())
     owners.emplace(name, pin.get_instance_name());
@@ -113,14 +109,15 @@ csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditS
 }
 
 namespace {
-csr::ArcOutputLoadMatrix netLoad(const Database& database, const NativeTargetedEditState& state, const std::string& name)
+csr::ArcOutputLoadMatrix netLoad(const Database& database, const NativeTargetedEditState& state, const std::string& name,
+                             const std::set<std::string>& starts, const std::set<std::string>& ends)
 {
   if (name.empty())
     return {};
   const auto& net = database.get_net_map().at(name);
   std::map<std::string, csr::detail::CanonicalLoadPinFacts> facts;
   for (const auto& pin : net.get_load_pin_list()) {
-    const auto node = targetedNode(database, state, pin);
+    const auto node = targetedNode(database, state, pin, starts, ends);
     csr::detail::CanonicalLoadPinFacts fact;
     fact.key = node.key;
     fact.direction = node.direction;
@@ -140,10 +137,11 @@ csr::ArcOutputLoadMatrix netLoad(const Database& database, const NativeTargetedE
 }  // namespace
 
 csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTargetedEditState& state, std::size_t rank,
-                                    std::map<std::string, csr::ArcOutputLoadMatrix>& loads)
+                                    std::map<std::string, csr::ArcOutputLoadMatrix>& loads,
+                                     const std::set<std::string>& starts, const std::set<std::string>& ends)
 {
   const auto& arc = database.get_arc_list().at(rank);
-  std::vector<csr::NodeRecord> nodes{targetedNode(database, state, arc.get_source_pin()), targetedNode(database, state, arc.get_sink_pin())};
+  std::vector<csr::NodeRecord> nodes{targetedNode(database, state, arc.get_source_pin(), starts, ends), targetedNode(database, state, arc.get_sink_pin(), starts, ends)};
   std::map<std::string, csr::NodeId> local_ids{{arc.get_source_pin(), csr::NodeId{0}}, {arc.get_sink_pin(), csr::NodeId{1}}};
   std::unordered_map<std::string, std::string> owners;
   for (const auto& node : nodes)
@@ -152,13 +150,20 @@ csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTarget
   const csr::detail::CanonicalArcKeyContext context{database, nodes, local_ids, owners};
   csr::ArcRecord record;
   record.key = {csr::detail::projectCanonicalArcKeyBase(context, arc), 0};
-  for (const auto other_rank : database.get_outgoing_arc_list_map().at(arc.get_source_pin())) {
-    if (other_rank >= rank)
-      continue;
-    const auto& other = database.get_arc_list().at(other_rank);
-    if (other.get_sink_pin() == arc.get_sink_pin() && csr::detail::projectCanonicalArcKeyBase(context, other) == record.key.base)
-      ++record.key.parallel_ordinal;
-  }
+  // Data-only edits preserve parallel groups. Replaced native slots are rebound
+  // to their new stable reference before projecting the updated graph.
+  const auto* stable_ref = state.arc_refs.at(state.native_arc_ids.at(rank).value());
+  if (stable_ref == nullptr)
+    throw std::invalid_argument("targeted arc reference is absent");
+  record.key.parallel_ordinal = std::visit([](const auto& ref) {
+    using Ref = std::decay_t<decltype(ref)>;
+    if constexpr (std::is_same_v<Ref, ExistingArcRef>)
+      return ref.baseline_key.parallel_ordinal;
+    else if constexpr (std::is_same_v<Ref, CreatedCellArcRef>)
+      return ref.stable_equivalence_ordinal;
+    else
+      return ref.stable_ordinal;
+  }, *stable_ref);
   record.source = nodes[0].id;
   record.sink = nodes[1].id;
   record.kind = record.key.base.kind;
@@ -177,7 +182,7 @@ csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTarget
   record.transfer = csr::detail::projectCanonicalArcTransfer(database, *state.models, record, arc);
   auto load = loads.find(nodes[1].net_name);
   if (load == loads.end())
-    load = loads.emplace(nodes[1].net_name, netLoad(database, state, nodes[1].net_name)).first;
+    load = loads.emplace(nodes[1].net_name, netLoad(database, state, nodes[1].net_name, starts, ends)).first;
   record.output_load = load->second;
   return {record.key,
           record.source,

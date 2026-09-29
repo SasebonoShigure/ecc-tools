@@ -7,6 +7,7 @@
 #include "StaProductionLifecycle.hpp"
 #include "TimingAnalyzer.hpp"
 #include "TimingResultScatterInternal.hpp"
+#include "TimingSemanticKey.hpp"
 
 namespace ista {
 StaCudaSessionState::StaCudaSessionState(Database& database, const csr::CsrReferenceInput& input)
@@ -15,6 +16,8 @@ StaCudaSessionState::StaCudaSessionState(Database& database, const csr::CsrRefer
       _path_source_order(input.path_source_order), _transition_order(input.transition_order),
       _clock_tags(input.clock_tags)
 {
+  if (const auto code = device.computationCode())
+    throw std::runtime_error("CUDA baseline computation failed: " + std::string(csr::token(*code)));
   device.requireCommitted();
   _baseline_names.reserve(input.nodes.size());
   for (const auto& node : input.nodes)

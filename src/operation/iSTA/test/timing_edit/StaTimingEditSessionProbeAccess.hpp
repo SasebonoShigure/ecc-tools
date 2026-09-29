@@ -46,6 +46,9 @@ class StaTimingEditSessionProbeAccess final
  public:
   using GuardedMutation = std::function<StaStatus(std::uint64_t, StaCsrSessionContext&, const timing_edit::NativeExecutionAuthority&)>;
 
+  // Timing-only test workloads reuse production authorization and failure handling.
+  [[nodiscard]] static StaStatus runTimingOnlyBaseline(
+      std::uint64_t token, StaCsrSessionContext* context, StaBackend backend);
   [[nodiscard]] static StaStatus runWithSingleOperationGuard(IncrementalStaSession& session, const GuardedMutation& mutation);
   [[nodiscard]] static bool snapshotReleasedForTesting(const StaCsrSessionContext& context) noexcept;
   static void releaseSnapshotForMutation(StaCsrSessionContext& context,

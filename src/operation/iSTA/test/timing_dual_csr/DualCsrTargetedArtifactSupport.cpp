@@ -230,6 +230,11 @@ DualCsrTargetedArtifactSupport::DualCsrTargetedArtifactSupport(
 DualCsrTargetedArtifactSupport::~DualCsrTargetedArtifactSupport()
     = default;
 
+void DualCsrTargetedArtifactSupport::close()
+{
+  fs::remove_all(_impl->root);
+}
+
 const FreshBaselineArtifacts&
 DualCsrTargetedArtifactSupport::artifacts() const noexcept
 {

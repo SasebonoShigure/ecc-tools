@@ -12,6 +12,6 @@ struct CudaDualCsrDebugState
   std::vector<cuda_detail::Arc> arcs;
   std::vector<cuda_detail::Child> children;
   std::vector<double> table_data;
-  std::array<cuda_detail::Index, 8> storage_visits{};
+  std::array<cuda_detail::Index, 12> storage_visits{};
 };
 }  // namespace ista::csr

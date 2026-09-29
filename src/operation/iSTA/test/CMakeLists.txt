@@ -112,6 +112,11 @@ if(BUILD_TESTING)
   target_link_libraries(ista_incremental_session_test PRIVATE ista_interface ista_timing_graph_csr_adapter Threads::Threads)
   add_test(NAME ista_incremental_session_test COMMAND ista_incremental_session_test)
   set_tests_properties(ista_incremental_session_test PROPERTIES LABELS "ista_unit" TIMEOUT 120)
+  if(ISTA_ENABLE_CUDA)
+    set_property(TEST ista_execution_contract_test ista_incremental_session_test
+      APPEND PROPERTY LABELS "ista_cuda")
+  endif()
+
 
   add_executable(ista_production_lifecycle_test
       StaProductionLifecycleTest.cpp

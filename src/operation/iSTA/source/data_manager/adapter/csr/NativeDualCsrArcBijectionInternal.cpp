@@ -10,18 +10,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <map>
+
+#include "TimingSemanticKey.hpp"
 #include <vector>
 
 namespace ista::timing_dual_csr::detail {
 namespace {
 
 constexpr std::size_t kUnassigned = std::numeric_limits<std::size_t>::max();
-
-bool containsBase(const std::vector<csr::ArcKeyBase>& bases,
-                  const csr::ArcKeyBase& base)
-{
-  return std::ranges::find(bases, base) != bases.end();
-}
 
 }  // namespace
 
@@ -39,28 +36,37 @@ matchNativeAffectedArcs(
   NativeArcBijection result;
   result.candidate_by_request.resize(requests.size());
   std::vector<bool> globally_assigned(candidate_keys.size(), false);
-  std::vector<csr::ArcKeyBase> processed_bases;
-
-  for (std::size_t seed = 0; seed < requests.size(); ++seed) {
-    const auto& seed_request = requests[seed];
-    if (containsBase(processed_bases,
-                     seed_request.expected_post_base))
-      continue;
-    processed_bases.push_back(seed_request.expected_post_base);
-
+  struct Group
+  {
     std::vector<std::size_t> rows;
     std::vector<std::size_t> columns;
-    for (std::size_t request = 0; request < requests.size(); ++request)
-      if (requests[request].expected_post_multiplicity != 0
-          && requests[request].expected_post_base
-                 == seed_request.expected_post_base)
-        rows.push_back(request);
-    for (std::size_t candidate = 0; candidate < candidate_keys.size();
-         ++candidate)
-      if (candidate_keys[candidate].base
-          == seed_request.expected_post_base)
-        columns.push_back(candidate);
+  };
+  std::vector<Group> groups;
+  std::map<csr::ArcKeyBase, std::size_t, decltype(&csr::arcKeyBaseLess)>
+      by_base(csr::arcKeyBaseLess);
+  // Preserve first-request group order and native candidate order within a group.
+  for (std::size_t row = 0; row < requests.size(); ++row) {
+    const auto& request = requests[row];
+    if (csr::validateArcKeyBase(request.expected_post_base))
+      return NarrowCaptureError::kArcOrdinalMismatch;
+    auto [group, inserted] = by_base.try_emplace(request.expected_post_base, groups.size());
+    if (inserted)
+      groups.emplace_back();
+    if (request.expected_post_multiplicity != 0)
+      groups[group->second].rows.push_back(row);
+  }
+  for (std::size_t column = 0; column < candidate_keys.size(); ++column) {
+    const auto& base = candidate_keys[column].base;
+    if (csr::validateArcKeyBase(base))
+      return NarrowCaptureError::kArcOrdinalMismatch;
+    const auto group = by_base.find(base);
+    if (group != by_base.end())
+      groups[group->second].columns.push_back(column);
+  }
 
+  for (const auto& group : groups) {
+    const auto& rows = group.rows;
+    const auto& columns = group.columns;
     if (rows.size() != columns.size())
       return NarrowCaptureError::kArcMultiplicityMismatch;
     if (rows.empty())

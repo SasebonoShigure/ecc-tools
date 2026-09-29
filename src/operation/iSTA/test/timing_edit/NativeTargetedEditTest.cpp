@@ -3,16 +3,21 @@
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
+#include <algorithm>
 #include <iostream>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 
 #include "../AllocationFailureSupport.hpp"
 #include "DataManager.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
+#include "Instance.hpp"
 #include "TimingEditCanonicalEncoding.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "NativeTargetedEditPreparer.hpp"
+#include "NativeTargetedEditInternal.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "TimingClock.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
@@ -111,6 +116,46 @@ void requireArcComparatorOrder(const TimingEditResolverState& resolver)
       const auto allocations = ista_test_allocation::disable();
       require(expected == actual && allocations == 0, "stable Arc ordering allocated or changed");
     }
+}
+void parallelArcProjection()
+{
+  installNativeTransactionBaseline();
+  auto& database = STADM.getDatabase();
+  GuardedTestSession session;
+  const auto status = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
+      session.session(), [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority& authority) {
+        requireReleasedSnapshotForNativeMutation(context, authority.sessionToken());
+        auto prepared = prepareNativeTransaction(authority.sessionToken());
+        auto resolver = prepared.resolver.stage(prepared.prepared);
+        auto inserted = NativeEditTransaction::prepareFull(authority, prepared.prepared, resolver);
+        NativeCandidateExecutor::prepareFullGraph(inserted);
+        inserted.commit();
+        auto cell = database.get_timing_library().get_cell_map().at("BUF_X1");
+        cell.set_cell_name("PAR_BUF_X1");
+        cell.get_cell_arc_list().push_back(cell.get_cell_arc_list().front());
+        database.get_timing_library().get_cell_map().emplace("PAR_BUF_X1", std::move(cell));
+        database.get_instance_map().begin()->second.set_cell_name("PAR_BUF_X1");
+        auto rebuild = NativeEditTransaction::prepareFull(authority);
+        NativeCandidateExecutor::prepareFullGraph(rebuild);
+        rebuild.commit();
+        const auto exported = input(database, authority.sessionToken());
+        const auto baseline = baselineIdentity(database, TransactionGeneration{0}, authority.sessionToken());
+        csr::detail::NativeLibraryModels models(database);
+        const auto state = NativeTargetedEditPreparer::bindBaseline(database, exported, baseline, models);
+        const std::set<std::string> starts(database.get_start_point_list().begin(), database.get_start_point_list().end());
+        const std::set<std::string> ends(database.get_end_point_list().begin(), database.get_end_point_list().end());
+        std::map<std::string, csr::ArcOutputLoadMatrix> loads;
+        require(std::ranges::any_of(exported.arcs, [](const auto& arc) { return arc.key.parallel_ordinal != 0; }),
+                "targeted projection fixture lacks parallel identities");
+        for (const auto& arc : exported.arcs) {
+          const auto actual = ista::timing_edit::detail::targetedArc(database, state, arc.native_traversal_rank, loads, starts, ends);
+          require(actual.key == arc.key, "targeted projection changed a canonical parallel arc identity");
+        }
+        return StaStatus::success(session.session().state());
+      });
+  if (!status.ok())
+    throw std::runtime_error(status.message);
+  require(session.closeAndRelease().ok(), "parallel arc projection cleanup failed");
 }
 void runTargetedContracts()
 {
@@ -273,6 +318,15 @@ void runTargetedContracts()
           equal(actual.ordered_start_ids, expected.ordered_start_ids, "starts");
           equal(actual.ordered_end_ids, expected.ordered_end_ids, "ends");
           equal(actual, expected, "remaining graph fields");
+          std::map<csr::ArcId, csr::ArcKey> canonical_keys;
+          for (const auto& arc : input(database, authority.sessionToken()).arcs)
+            canonical_keys.emplace(state.native_arc_ids.at(arc.native_traversal_rank), arc.key);
+          for (const auto& arc : batch.patch.arc_appends)
+            require(arc.key == canonical_keys.at(arc.id) && arc.payload.key == arc.key,
+                    "targeted appended arc identity differs from independent export");
+          for (const auto& change : batch.patch.payload_changes)
+            require(change.replacement.key == canonical_keys.at(change.id),
+                    "targeted changed payload identity differs from independent export");
           require(batch.patch.arc_appends.size() == 3 && batch.patch.logical_deactivations.size() == 1,
                   "targeted edit did not produce physical patch and logical replacement");
           if (generation == 0)
@@ -330,6 +384,7 @@ int main()
 {
   NativeTransactionRuntime runtime;
   try {
+    parallelArcProjection();
     runTargetedContracts();
     disabledArcRejection();
     std::cout << "native targeted local transaction, fresh graph, consecutive batch and boundary contracts passed\n";

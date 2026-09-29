@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,6 +42,7 @@ struct CudaTargetedTraceBatch
 };
 struct CudaTargetedTraceResult
 {
+  double backend_setup_ms{};
   CudaDualCsrTelemetry initialization;
   std::vector<CudaTargetedTraceBatch> batches;
 };
@@ -52,6 +54,7 @@ class CudaTargetedTraceReplayer final
   [[nodiscard]] static CudaTargetedTraceResult run(StaCsrSessionContext& session, Database& baseline, const CsrReferenceInput& baseline_input,
                                                    const timing_edit::NativeExecutionAuthority& authority, const buffer_trace::ReplayProgram& program,
                                                    std::size_t prefix, StaUpdateStrategy strategy = StaUpdateStrategy::kFull,
-                                                   StaFallbackPolicy fallback = StaFallbackPolicy::kError);
+                                                   StaFallbackPolicy fallback = StaFallbackPolicy::kError,
+                                                   const std::function<void()>& consume_results = {});
 };
 }  // namespace ista::csr

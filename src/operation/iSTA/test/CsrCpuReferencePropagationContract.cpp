@@ -171,154 +171,6 @@ CsrReferenceInput incomingClockSourceInput()
   return input;
 }
 
-struct DagArc
-{
-  std::size_t source;
-  std::size_t sink;
-  bool disabled{false};
-  bool loop_disabled{false};
-};
-
-CsrReferenceInput dagInput(std::size_t node_count, const std::vector<DagArc>& specs)
-{
-  CsrReferenceInput input;
-  input.analysis_context = {"slow", "25", "__no_rc_corner__"};
-  input.out_row_offsets.assign(node_count + 1, 0);
-  input.in_row_offsets.assign(node_count + 1, 0);
-  input.clock_owner_by_node.assign(node_count, std::nullopt);
-  if (node_count == 0) {
-    refreshCpuReferenceIdentity(input);
-    requireStrict(input, "empty DAG fixture");
-    return input;
-  }
-
-  std::vector<std::string> names;
-  for (std::size_t node = 0; node < node_count; ++node) {
-    names.push_back("p" + std::to_string(node));
-    const bool output = node + 1 == node_count;
-    input.nodes.push_back(NodeRecord{.id = NodeId{node},
-                                     .key = pin("u1:" + names.back(), names.back()),
-                                     .direction = output ? PinDirection::kOutput : PinDirection::kInput,
-                                     .instance_cell = "DAG_X1",
-                                     .net_name = {},
-                                     .is_output_pin = output});
-    input.node_ids_by_key.push_back({input.nodes.back().key, NodeId{node}});
-  }
-
-  std::vector<std::uint8_t> incoming(node_count, 0);
-  std::vector<std::uint8_t> outgoing(node_count, 0);
-  std::vector<ArcKeyBase> bases;
-  for (const DagArc& spec : specs) {
-    ArcKeyBase base;
-    base.source = input.nodes[spec.source].key;
-    base.sink = input.nodes[spec.sink].key;
-    base.kind = ArcKind::kCell;
-    base.owner_name = "u1";
-    base.library_source_port = names[spec.source];
-    base.library_sink_port = names[spec.sink];
-    bases.push_back(std::move(base));
-    incoming[spec.sink] = 1;
-    outgoing[spec.source] = 1;
-  }
-  const std::vector<ArcKey> keys = assignParallelOrdinals(bases);
-  for (std::size_t rank = 0; rank < specs.size(); ++rank) {
-    const DagArc& spec = specs[rank];
-    ArcRecord arc;
-    arc.key = keys[rank];
-    arc.source = NodeId{spec.source};
-    arc.sink = NodeId{spec.sink};
-    arc.kind = ArcKind::kCell;
-    arc.native_traversal_rank = rank;
-    arc.is_disabled = spec.disabled;
-    arc.is_loop_disabled = spec.loop_disabled;
-    if (!spec.disabled && !spec.loop_disabled)
-      arc.eligibility = {true, true, true, false};
-    arc.transfer.delay = 1.0;
-    arc.transfer.delay_min = 1.0;
-    arc.transfer.delay_max = 1.0;
-    arc.transfer.is_disabled = spec.disabled;
-    arc.output_load = outputLoad(0.0);
-    input.arcs.push_back(std::move(arc));
-  }
-  std::ranges::sort(input.arcs, [](const ArcRecord& lhs, const ArcRecord& rhs) { return arcKeyLess(lhs.key, rhs.key); });
-  for (std::size_t arc = 0; arc < input.arcs.size(); ++arc) {
-    input.arcs[arc].id = ArcId{arc};
-    input.arc_ids_by_key.push_back({input.arcs[arc].key, ArcId{arc}});
-  }
-  for (std::size_t node = 0; node < node_count; ++node) {
-    input.nodes[node].is_startpoint = incoming[node] == 0;
-    input.nodes[node].is_endpoint = outgoing[node] == 0;
-    if (input.nodes[node].is_startpoint)
-      input.ordered_start_ids.push_back(NodeId{node});
-    if (input.nodes[node].is_endpoint)
-      input.ordered_end_ids.push_back(NodeId{node});
-  }
-  for (std::size_t rank = 0; rank < specs.size(); ++rank) {
-    const auto found = std::ranges::find(input.arcs, rank, &ArcRecord::native_traversal_rank);
-    input.out_arc_ids.push_back(found->id);
-    input.in_arc_ids.push_back(found->id);
-  }
-  std::ranges::stable_sort(input.out_arc_ids, [&](ArcId lhs, ArcId rhs) {
-    const auto& left = input.arcs[lhs.value()];
-    const auto& right = input.arcs[rhs.value()];
-    return left.source == right.source ? left.native_traversal_rank < right.native_traversal_rank : left.source.value() < right.source.value();
-  });
-  std::ranges::stable_sort(input.in_arc_ids, [&](ArcId lhs, ArcId rhs) {
-    const auto& left = input.arcs[lhs.value()];
-    const auto& right = input.arcs[rhs.value()];
-    return left.sink == right.sink ? left.native_traversal_rank < right.native_traversal_rank : left.sink.value() < right.sink.value();
-  });
-  for (ArcId arc : input.out_arc_ids)
-    ++input.out_row_offsets[input.arcs[arc.value()].source.value() + 1];
-  for (ArcId arc : input.in_arc_ids)
-    ++input.in_row_offsets[input.arcs[arc.value()].sink.value() + 1];
-  std::partial_sum(input.out_row_offsets.begin(), input.out_row_offsets.end(), input.out_row_offsets.begin());
-  std::partial_sum(input.in_row_offsets.begin(), input.in_row_offsets.end(), input.in_row_offsets.begin());
-
-  std::vector<std::uint64_t> indegree(node_count, 0);
-  for (const ArcRecord& arc : input.arcs)
-    if (!arc.is_disabled && !arc.is_loop_disabled)
-      ++indegree[arc.sink.value()];
-  for (std::size_t node = 0; node < node_count; ++node) {
-    if (indegree[node] == 0)
-      input.ordered_root_ids.push_back(NodeId{node});
-    if (incoming[node] == 0) {
-      StartSeedModel seed;
-      seed.seed_node = NodeId{node};
-      seed.path_start_node = NodeId{node};
-      seed.clock_tag = "clk";
-      for (auto& analysis : seed.slew)
-        for (auto& value : analysis)
-          value = 0.0;
-      input.start_seeds.push_back(std::move(seed));
-    }
-  }
-  if (!input.start_seeds.empty())
-    input.clock_tags = {"clk"};
-
-  input.instances = {InstanceRecord{"u1", "DAG_X1", {}, false, false, false, false}};
-  ReferencedLibraryCellModel cell;
-  cell.cell_name = "DAG_X1";
-  cell.present = true;
-  cell.library_name = "slow.lib";
-  cell.output_pin_name = names.back();
-  for (std::size_t node = 0; node < node_count; ++node) {
-    input.instances.front().ordered_pins.push_back(NodeId{node});
-    const bool output = node + 1 == node_count;
-    cell.ports.push_back(LibraryPortModel{.name = names[node],
-                                          .direction = output ? PinDirection::kOutput : PinDirection::kInput,
-                                          .is_output = output,
-                                          .default_capacitance = 0.0,
-                                          .transition_capacitance = {}});
-    input.cell_pin_capacitances.push_back({NodeId{node}, 0.0, {}});
-  }
-  for (const ArcRecord& arc : input.arcs)
-    cell.cell_arcs.push_back({arc.key.base.library_source_port, arc.key.base.library_sink_port, arc.transfer});
-  input.referenced_library_cells = {std::move(cell)};
-  refreshCpuReferenceIdentity(input);
-  requireStrict(input, "cell-only DAG fixture");
-  return input;
-}
 
 CsrReferenceInput parallelBoundaryInput(double second_delay, double second_slew)
 {
@@ -469,47 +321,47 @@ void testClockNameOverwriteBranches()
 void testTopologyMatrix()
 {
   CsrComputationResult computation;
-  const CsrTimingResult empty = computeTiming(dagInput(0, {}), computation, "empty DAG");
+  const CsrTimingResult empty = computeTiming(makeCpuReferenceDagFixture(0, {}), computation, "empty DAG");
   requireCpuReference(empty.level_offsets == std::vector<std::uint64_t>{0} && empty.paths.row_offsets == std::vector<std::uint64_t>{0}
                           && empty.arcs.timing_arc_row_offsets == std::vector<std::uint64_t>{0},
                       "empty DAG exact shape differs");
 
-  const CsrTimingResult singleton = computeTiming(dagInput(1, {}), computation, "singleton DAG");
+  const CsrTimingResult singleton = computeTiming(makeCpuReferenceDagFixture(1, {}), computation, "singleton DAG");
   requireCpuReference(singleton.level_offsets == std::vector<std::uint64_t>({0, 1}) && singleton.node_to_level == std::vector<std::uint64_t>({1})
                           && singleton.nodes.arrivals.values.size() == 1,
                       "singleton required shape differs");
   requireBits(singleton.nodes.arrivals.values[0], 0.0, "singleton seed arrival");
 
-  const CsrTimingResult diamond = computeTiming(dagInput(4, {{0, 1}, {0, 2}, {1, 3}, {2, 3}}), computation, "diamond DAG");
+  const CsrTimingResult diamond = computeTiming(makeCpuReferenceDagFixture(4, {{0, 1}, {0, 2}, {1, 3}, {2, 3}}), computation, "diamond DAG");
   requireCpuReference(diamond.level_offsets == std::vector<std::uint64_t>({0, 1, 3, 4})
                           && diamond.level_nodes == std::vector<NodeId>({NodeId{0}, NodeId{1}, NodeId{2}, NodeId{3}}),
                       "diamond FIFO levels differ");
   requireCpuReference(diamond.nodes.predecessor_nodes.values[3] == NodeId{1} && diamond.nodes.predecessor_arcs.values[3] == ArcId{2},
                       "diamond exact-tie first winner differs");
 
-  const CsrTimingResult multi_root = computeTiming(dagInput(4, {{0, 2}, {1, 3}}), computation, "multi-root DAG");
+  const CsrTimingResult multi_root = computeTiming(makeCpuReferenceDagFixture(4, {{0, 2}, {1, 3}}), computation, "multi-root DAG");
   requireCpuReference(multi_root.level_offsets == std::vector<std::uint64_t>({0, 2, 4})
                           && multi_root.level_nodes == std::vector<NodeId>({NodeId{0}, NodeId{1}, NodeId{2}, NodeId{3}}),
                       "multi-root FIFO order differs");
 
-  const CsrTimingResult parallel = computeTiming(dagInput(2, {{0, 1}, {0, 1}}), computation, "parallel DAG");
+  const CsrTimingResult parallel = computeTiming(makeCpuReferenceDagFixture(2, {{0, 1}, {0, 1}}), computation, "parallel DAG");
   requireCpuReference(parallel.nodes.predecessor_arcs.presence[1] == 1 && parallel.nodes.predecessor_arcs.values[1] == ArcId{0},
                       "parallel row did not preserve first winner");
 
   for (const DagArc inactive : {DagArc{0, 1, true, false}, DagArc{0, 1, false, true}}) {
-    const CsrTimingResult result = computeTiming(dagInput(2, {inactive}), computation, "inactive DAG");
+    const CsrTimingResult result = computeTiming(makeCpuReferenceDagFixture(2, {inactive}), computation, "inactive DAG");
     requireCpuReference(result.level_offsets == std::vector<std::uint64_t>({0, 2}) && result.nodes.predecessor_nodes.presence[1] == 0,
                         "disabled/loop-disabled arc affected propagation");
     requireBits(result.nodes.arrivals.values[1], -std::numeric_limits<double>::infinity(), "inactive sink arrival");
   }
 
-  const CsrTimingResult unreachable = computeTiming(dagInput(3, {{0, 1}, {1, 2, true, false}}), computation, "unreachable DAG");
+  const CsrTimingResult unreachable = computeTiming(makeCpuReferenceDagFixture(3, {{0, 1}, {1, 2, true, false}}), computation, "unreachable DAG");
   requireBits(unreachable.nodes.arrivals.values[2], -std::numeric_limits<double>::infinity(), "unreachable arrival");
   requireBits(unreachable.nodes.requireds.values[0], std::numeric_limits<double>::infinity(), "unreachable component required");
   requireBits(unreachable.nodes.requireds.values[1], std::numeric_limits<double>::infinity(), "unreachable sink required");
   requireBits(unreachable.nodes.slacks.values[1], 0.0, "unreachable slack");
 
-  const CsrTimingResult no_seed = computeTiming(dagInput(2, {{0, 1}, {1, 0, false, true}}), computation, "no-seed complete DAG");
+  const CsrTimingResult no_seed = computeTiming(makeCpuReferenceDagFixture(2, {{0, 1}, {1, 0, false, true}}), computation, "no-seed complete DAG");
   requireCpuReference(no_seed.level_nodes == std::vector<NodeId>({NodeId{0}, NodeId{1}}), "no-seed DAG was not complete");
   for (std::size_t node = 0; node < 2; ++node) {
     requireBits(no_seed.nodes.arrivals.values[node], -std::numeric_limits<double>::infinity(), "no-seed arrival");
@@ -517,6 +369,7 @@ void testTopologyMatrix()
     requireBits(no_seed.nodes.slacks.values[node], 0.0, "no-seed slack");
   }
 }
+
 
 void testWinnerEpsilonBoundaries()
 {
@@ -554,7 +407,7 @@ void testWinnerEpsilonBoundaries()
 void testCandidateOrderIndependentOfPhysicalSlots()
 {
   for (auto input : {parallelBoundaryInput(0.5e-9, 1.0), parallelBoundaryInput(0.5e-6, 1.0),
-                     parallelBoundaryInput(0.0, 1.0 + 0.5e-6), dagInput(4, {{0, 1}, {0, 2}, {1, 3}, {2, 3}})}) {
+                     parallelBoundaryInput(0.0, 1.0 + 0.5e-6), makeCpuReferenceDagFixture(4, {{0, 1}, {0, 2}, {1, 3}, {2, 3}})}) {
     CsrComputationResult computation;
     auto expected = computeTiming(input, computation, "ordered adjacency baseline");
     std::vector<std::uint64_t> reversed;
@@ -672,6 +525,7 @@ void runCpuReferencePropagationContracts()
   testRequiredLiterals();
   testClockNameOverwriteBranches();
   testTopologyMatrix();
+  runParallelFrontierContracts();
   testWinnerEpsilonBoundaries();
   testCandidateOrderIndependentOfPhysicalSlots();
   testExplicitParallelCandidateOrder();

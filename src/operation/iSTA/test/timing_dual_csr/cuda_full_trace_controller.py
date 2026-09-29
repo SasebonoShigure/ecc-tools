@@ -9,6 +9,33 @@ import subprocess
 from dual_csr_trace_controller import first_difference, require, run_child, write_json
 
 
+def require_cuda_telemetry(timing: dict) -> None:
+    for field in ("explicit_kernel_launches", "device_algorithm_calls",
+                  "levelization_decision_bytes"):
+        require(type(timing.get(field)) is int and timing[field] >= 0,
+                f"missing nonnegative CUDA {field}")
+    require("kernel_launches" not in timing, "ambiguous CUDA total launch count")
+
+
+def require_performance_result(result: dict, prefix: int, build: dict) -> None:
+    require(not any(key in result for key in ("functional", "batches", "device_checks")),
+            "performance child generated a diagnostic receipt")
+    require(result["schema_version"] == "ista-cuda-full-trace/4.0.0"
+            and result["build"] == build and result["debug_checks_enabled"] is False
+            and result["correctness_comparison"] == "not_run"
+            and result["requested_backend"] == result["executed_backend"] == "cuda"
+            and result["requested_strategy"] == result["executed_strategy"] == "full"
+            and result["fallback_count"] == 0 and result["lifecycle_cleanup_completed"]
+            and result["prefix_batches"] == prefix
+            and len(result["batch_timings"]) == prefix,
+            "performance child omitted the declared full workload or lifecycle")
+    for ordinal, timing in enumerate(result["batch_timings"]):
+        require_cuda_telemetry(timing)
+        require(timing["generation_before"] == ordinal
+                and timing["generation_after"] == ordinal + 1,
+                "performance generation is not contiguous")
+
+
 def run(args: argparse.Namespace) -> int:
     probe = args.probe.resolve(strict=True)
     trace = (args.replay or args.trace).resolve(strict=True)
@@ -60,6 +87,7 @@ def run(args: argparse.Namespace) -> int:
                 args.timeout_seconds,
                 input_flag=input_flag,
             )
+            require_performance_result(result, len(batches), build)
             warmups.append({"process_ms": duration, "result": result})
         samples = []
         for index in range(args.samples):
@@ -72,15 +100,12 @@ def run(args: argparse.Namespace) -> int:
                 args.timeout_seconds,
                 input_flag=input_flag,
             )
-            require(
-                "functional" not in result and "batches" not in result,
-                "performance child generated a diagnostic receipt",
-            )
+            require_performance_result(result, len(batches), build)
             samples.append({"process_ms": duration, "result": result})
         write_json(
             root / "performance.json",
             {
-                "schema_version": "ista-cuda-full-performance/3.0.0",
+                "schema_version": "ista-cuda-full-performance/4.0.0",
                 "debug_checks_enabled": False,
                 "correctness_comparison": "not_run",
                 "build": build,
@@ -116,8 +141,8 @@ def run(args: argparse.Namespace) -> int:
             input_flag=input_flag,
         )
         require(
-            gpu["schema_version"] == "ista-cuda-full-trace/3.0.0"
-            and cpu["schema_version"] == "ista-cuda-full-trace/3.0.0",
+            gpu["schema_version"] == "ista-cuda-full-trace/4.0.0"
+            and cpu["schema_version"] == "ista-cuda-full-trace/4.0.0",
             "unexpected full trace schema",
         )
         difference = first_difference(gpu["batches"][-1], cpu["functional"])
@@ -127,6 +152,7 @@ def run(args: argparse.Namespace) -> int:
             "GPU prefix did not complete every batch and lifecycle cleanup",
         )
         for ordinal, telemetry in enumerate(gpu["batch_timings"]):
+            require_cuda_telemetry(telemetry)
             require(
                 telemetry["generation_before"] == ordinal
                 and telemetry["generation_after"] == ordinal + 1,
@@ -135,7 +161,7 @@ def run(args: argparse.Namespace) -> int:
             require(
                 telemetry["h2d_bytes"] > 0
                 and telemetry["d2h_bytes"] > 0
-                and telemetry["kernel_launches"] >= 2,
+                and telemetry["explicit_kernel_launches"] > 0,
                 "GPU batch omitted full upload/compute/readback",
             )
         verdicts.append(
@@ -170,7 +196,7 @@ def run(args: argparse.Namespace) -> int:
         )
     write_json(
         root / "verdict.json",
-        {"schema_version": "ista-cuda-full-verdict/3.0.0", "build": build, "prefixes": verdicts},
+        {"schema_version": "ista-cuda-full-verdict/4.0.0", "build": build, "prefixes": verdicts},
     )
     return 0
 

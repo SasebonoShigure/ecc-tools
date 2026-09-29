@@ -160,6 +160,34 @@ void testSignedZeroRoundTrip()
   requireTimingScatter(canonicalIndependentNativeTimingOracleBytes(oracle) != plus_bytes, "negative-zero native oracle bytes equal positive-zero control");
 }
 
+void testMaterializerRejectsMissingLookupKeys()
+{
+  auto fixture = makeTimingScatterFixture(ReferenceNativeFixtureCase::kDiamond, 0x6110U);
+  requireTimingScatter(std::ranges::any_of(fixture.expected_oracle.nodes, [](const auto& node) {
+                         return node.predecessor_arc.has_value();
+                       }) && std::ranges::any_of(fixture.expected_oracle.nodes, [](const auto& node) {
+                         return !node.paths.empty();
+                       }), "missing-key fixture has no predecessor/path consumers");
+  const auto check_missing = [&](auto mutate, const std::string& expected) {
+    auto input = fixture.committed_input;
+    mutate(input);
+    try {
+      static_cast<void>(materializeTimingResultFromNativeOracle(input, fixture.expected_oracle));
+    } catch (const std::runtime_error& error) {
+      requireTimingScatter(std::string(error.what()).find(expected) != std::string::npos,
+                           "materializer reported the wrong missing-key error");
+      return;
+    }
+    throw std::runtime_error("materializer accepted a missing lookup key: " + expected);
+  };
+  // Erasing a key keeps the lookup ordered: lower_bound can still find its
+  // successor, which must not be mistaken for the requested predecessor.
+  check_missing([](auto& input) { input.node_ids_by_key.erase(input.node_ids_by_key.begin()); },
+                "NodeKey does not resolve");
+  check_missing([](auto& input) { input.arc_ids_by_key.clear(); }, "ArcKey does not resolve");
+  check_missing([](auto& input) { input.clock_tags.clear(); }, "clock tag does not resolve");
+}
+
 void testStableStorageRelocation()
 {
   CsrTimingScatterTestFixture fixture = makeTimingScatterFixture(ReferenceNativeFixtureCase::kDiamond, 0x6103U);
@@ -192,6 +220,7 @@ int main()
     ista::csr::test::testExplicitSuccessShapes();
     ista::csr::test::testPoisonRecoveryAndIdempotence();
     ista::csr::test::testStableStorageRelocation();
+    ista::csr::test::testMaterializerRejectsMissingLookupKeys();
     ista::csr::test::runTimingScatterStaleContracts();
   } catch (const std::exception& error) {
     std::cerr << "CsrTimingScatterContractTest: " << error.what() << '\n';

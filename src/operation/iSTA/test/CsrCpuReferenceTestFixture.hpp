@@ -39,4 +39,14 @@ void runComputedNumericFailureContracts();
 void runCpuReferenceArcContracts();
 void runCpuReferencePropagationContracts();
 
+struct DagArc
+{
+  std::size_t source;
+  std::size_t sink;
+  bool disabled{false};
+  bool loop_disabled{false};
+};
+CsrReferenceInput makeCpuReferenceDagFixture(std::size_t node_count, const std::vector<DagArc>& arcs);
+void runParallelFrontierContracts();
+
 }  // namespace ista::csr::test

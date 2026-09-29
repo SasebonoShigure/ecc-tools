@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #pragma once
+#include <ostream>
 
 #include "Database.hpp"
 #include "DelayType.hpp"
@@ -58,12 +59,13 @@ class TimingReporter
                                                    StartEndType start_end_type);
   std::vector<TimingPath*> getEndpointWorstTimingPathList(std::vector<TimingPath*>& timing_path_list);
   bool isMatchReportSlack(TimingPath& timing_path);
-  void outputQorSummaryReport();
+  friend class TimingReporterProbeAccess;
+  void outputQorSummaryReport(std::ostream* json_output = nullptr);
   std::string getQorSummaryReportFilePath();
   std::string getQorSummaryJsonFilePath();
-  void outputTimingPathsJson();
+  void outputTimingPathsJson(std::ostream* json_output = nullptr);
   std::string getTimingPathsJsonFilePath();
-  void outputTimingPathJson(std::ofstream* json_file, TimingPath& timing_path, std::string& path_group_name,
+  void outputTimingPathJson(std::ostream* json_file, TimingPath& timing_path, std::string& path_group_name,
                             DelayType delay_type);
   std::string getTimingPathId(TimingPath& timing_path, std::string& path_group_name, DelayType delay_type);
   std::vector<TimingPath*> getQorTimingPathList(TimingPathGroup& timing_path_group, DelayType delay_type);

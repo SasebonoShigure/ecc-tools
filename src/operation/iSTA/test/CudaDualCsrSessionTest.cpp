@@ -230,7 +230,8 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
     require(graph.out_arcs == std::vector<cuda_detail::Index>{0} && graph.aux_rows[0] == std::vector<cuda_detail::Index>{1},
             "Base expanded instead of genuine Aux overflow");
     for (unsigned stage = mode == CudaLevelizationMode::kFull ? 0 : 1; stage < 4; ++stage)
-      require(graph.storage_visits[stage * 2 + 1] > 0, "GPU pass never visited Aux");
+      require(graph.storage_visits[stage * 3 + ((stage == 1 || stage == 2) ? 2 : 1)] > 0,
+              "GPU pass did not visit its actual incoming/Aux storage");
   }
   if (snapshots)
     snapshots->push_back(CudaDualCsrTestReader::capture(candidate));
@@ -437,6 +438,8 @@ void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mo
           auto& state = *owned.native;
           auto& owner = owned.device;
           require(!owner.computationCode(), "cross-build CUDA baseline failed");
+          // Recovery repeats the real clock/CTQ/check workload with a different launch shape.
+          CudaDualCsrTestReader::setKernelThreads(owner, recovering ? 37U : 256U);
           nlohmann::json observations = nlohmann::json::array();
           observations.push_back({{"execution", "baseline-full"}, {"state", CudaDualCsrTestReader::capture(owner)}});
           const auto requested = mode == CudaLevelizationMode::kMixed ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull;

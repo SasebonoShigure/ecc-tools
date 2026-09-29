@@ -12,6 +12,7 @@
 #include "Net.hpp"
 #include "Pin.hpp"
 #include "TimingEditNativeFixture.hpp"
+#include "TimingEditResolver.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 #include "TimingPoint.hpp"
 
@@ -92,6 +93,17 @@ TimingEditResolverState makeSlotShiftedResolver()
   return TimingEditResolverState::bindBaseline(database);
 }
 
+ista::timing_dual_csr::detail::PlannedNodeId resolve(
+    const DualSemanticReadView& committed, TimingEditResolverView staged,
+    const AffectedCapturePlan& plan, const csr::NodeKey& key)
+{
+  auto indexed = ista::timing_dual_csr::detail::indexPlannedNodeCapture(plan);
+  if (const auto* error = std::get_if<NarrowCaptureError>(&indexed))
+    return *error;
+  return ista::timing_dual_csr::detail::resolvePlannedNodeId(
+      committed, staged, plan, std::get<ista::timing_dual_csr::detail::PlannedNodeCaptureIndex>(indexed), key);
+}
+
 void checkCommittedPeerFallbackIsExact()
 {
   NativeEditFixture fixture = makeNativeEditFixture();
@@ -111,12 +123,23 @@ void checkCommittedPeerFallbackIsExact()
 
   const std::string peer_name{"out"};
   const csr::NodeRecord& peer = nodeNamed(committed_state, peer_name);
-  auto resolved = ista::timing_dual_csr::detail::resolvePlannedNodeId(
+  auto resolved = resolve(
       committed, staged, empty_plan, peer.key);
   const auto* id = std::get_if<csr::NodeId>(&resolved);
   require(id != nullptr && *id == peer.id
               && id->value() < empty_plan.before.node_slots,
           "exact committed peer did not preserve its existing NodeId");
+
+  // The same native key cannot name different refs across request collections.
+  auto conflicting = empty_plan;
+  conflicting.nodes.push_back({ExistingNodeRef{peer.key}, peer.key});
+  auto foreign_key = peer.key;
+  foreign_key.full_name = "foreign";
+  conflicting.node_roles.push_back(
+      {ExistingNodeRef{foreign_key}, peer.key, "cell", peer.key.pin_name});
+  resolved = resolve(committed, staged, conflicting, peer.key);
+  require(std::get<NarrowCaptureError>(resolved) == NarrowCaptureError::kDuplicateRequest,
+          "cross-collection key/ref conflict was not rejected");
 
   TimingEditResolverState shifted = makeSlotShiftedResolver();
   const timing_edit::StableNodeRef peer_ref{
@@ -125,7 +148,7 @@ void checkCommittedPeerFallbackIsExact()
   require(shifted_binding != shifted.nodeBindings().end()
               && shifted_binding->second.slot.value() != peer.id.value(),
           "slot-mismatch fixture did not shift the committed peer");
-  resolved = ista::timing_dual_csr::detail::resolvePlannedNodeId(
+  resolved = resolve(
       committed, shifted, empty_plan, peer.key);
   const auto* error = std::get_if<NarrowCaptureError>(&resolved);
   require(error != nullptr
@@ -134,7 +157,7 @@ void checkCommittedPeerFallbackIsExact()
 
   csr::NodeKey unknown = peer.key;
   unknown.full_name = "unknown_post_candidate_peer";
-  resolved = ista::timing_dual_csr::detail::resolvePlannedNodeId(
+  resolved = resolve(
       committed, staged, empty_plan, unknown);
   error = std::get_if<NarrowCaptureError>(&resolved);
   require(error != nullptr
@@ -142,10 +165,79 @@ void checkCommittedPeerFallbackIsExact()
           "unknown post-candidate peer escaped the plan boundary");
 }
 
+void checkCreatedCommittedPeer()
+{
+  NativeEditFixture fixture = makeNativeEditFixture();
+  auto resolver = TimingEditResolverState::bindBaseline(fixture.database());
+  auto state = makeCommittedState(fixture.database(), resolver);
+  const auto identity = NativeTimingEditPreparer::captureCurrentIdentity(
+      fixture.database(), TransactionGeneration{0}, editTestAnalysisContext(), kSession);
+  const BaselineSemanticIdentity baseline{
+      fixture.database().get_design_name(), identity.current_fingerprints, identity.canonical_pre_state};
+  const auto plan = bufferInsertionPlan(
+      fixture.database(), baseline, TransactionGeneration{0}, editTestCreationToken());
+  const auto batch = NativeTimingEditPreparer::prepare(
+      fixture.database(), plan,
+      TimingEditPrepareContext{kSession, baseline, identity, editTestAnalysisContext()}, resolver);
+  auto delta = resolver.prepare(batch);
+  const TimingEditResolverView overlay(resolver, delta);
+  auto staged = resolver.stage(batch);
+  state.high_water = staged.highWater();
+  state.generation = TransactionGeneration{1};
+  state.nodes.resize(state.high_water.node_slots);
+  const auto& names = batch.tokenMaterializations().front();
+  for (const auto& assignment : batch.slotPlan().nodes) {
+    auto& node = state.nodes.at(assignment.slot.value());
+    node.id = csr::NodeId{assignment.slot.value()};
+    const auto& created = std::get<CreatedNodeRef>(assignment.ref);
+    const bool input = created.role == CreatedNodeRole::kInput;
+    node.key = {csr::NodeKind::kInstancePin,
+                input ? names.input_pin_name : names.output_pin_name,
+                names.instance_name, input ? "A" : "Y"};
+  }
+  AffectedCapturePlan untouched{};
+  untouched.before = untouched.after = staged.highWater();
+  const DualSemanticReadView committed{state};
+  for (const auto& assignment : batch.slotPlan().nodes) {
+    const auto& node = state.nodes.at(assignment.slot.value());
+    const auto* overlay_binding = overlay.findNodeBindingForKey(node.key);
+    require(overlay_binding && !overlay_binding->tombstone
+                && overlay_binding->slot == assignment.slot,
+            "created peer in unapplied resolver delta was not found");
+    auto missing = untouched;
+    missing.before = resolver.highWater();
+    missing.node_roles.push_back({assignment.ref, node.key, "buffer", node.key.pin_name});
+    const auto missing_result = resolve(committed, staged, missing, node.key);
+    require(std::get<NarrowCaptureError>(missing_result) == NarrowCaptureError::kUnplannedDependency,
+            "new model request without a node declaration was accepted");
+
+    auto native_node = node;
+    native_node.instance_cell = plan.edits.front().library_cell.cell_name;
+    AffectedNodeModelCapture model{assignment.ref, node.key, "foreign_cell", node.key.pin_name};
+    auto projected = ista::timing_dual_csr::detail::projectPlannedCapacitance(
+        fixture.database(), &model, staged, untouched.after, native_node);
+    require(std::get<NarrowCaptureError>(projected) == NarrowCaptureError::kUnplannedDependency,
+            "native cell mismatch was accepted through indexed request");
+    model.expected_cell = native_node.instance_cell;
+    model.expected_port = "foreign_port";
+    projected = ista::timing_dual_csr::detail::projectPlannedCapacitance(
+        fixture.database(), &model, staged, untouched.after, native_node);
+    require(std::get<NarrowCaptureError>(projected) == NarrowCaptureError::kUnplannedDependency,
+            "native port mismatch was accepted through indexed request");
+
+    const auto result = resolve(
+        committed, staged, untouched, node.key);
+    const auto* id = std::get_if<csr::NodeId>(&result);
+    require(id && *id == node.id,
+            "previously created peer was incorrectly treated as a baseline ExistingNodeRef");
+  }
+}
+
 }  // namespace
 
 int main()
 {
   checkCommittedPeerFallbackIsExact();
+  checkCreatedCommittedPeer();
   return 0;
 }

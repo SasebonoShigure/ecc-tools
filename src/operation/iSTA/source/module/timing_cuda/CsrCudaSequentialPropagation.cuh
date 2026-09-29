@@ -10,7 +10,7 @@ __device__ inline Index pathRow(Index node, unsigned analysis, unsigned source, 
   return ((node * 2 + analysis) * 2 + source) * 2 + transition;
 }
 
-__device__ inline PathState* findPath(DeviceView view, Index row, Index tag)
+__device__ inline PathState* lookupPath(DeviceView view, Index row, Index tag)
 {
   Index first = view.path_offsets[row], last = view.path_offsets[row + 1];
   while (first < last) {
@@ -20,11 +20,15 @@ __device__ inline PathState* findPath(DeviceView view, Index row, Index tag)
     else
       last = middle;
   }
-  if (first == view.path_offsets[row + 1] || view.path_tags[first] != tag) {
+  return first == view.path_offsets[row + 1] || view.path_tags[first] != tag ? nullptr : view.paths + first;
+}
+
+__device__ inline PathState* findPath(DeviceView view, Index row, Index tag)
+{
+  auto* path = lookupPath(view, row, tag);
+  if (path == nullptr)
     *view.status = Status::invariant;
-    return nullptr;
-  }
-  return view.paths + first;
+  return path;
 }
 
 __device__ inline DynamicValue clockToQ(DeviceView view, const SequentialSeed& seed, unsigned analysis, unsigned output, double clock_slew, double load)
@@ -58,77 +62,84 @@ __device__ inline DynamicValue clockToQ(DeviceView view, const SequentialSeed& s
   return value;
 }
 
+__device__ inline void sequentialNode(DeviceView view, Index id)
+{
+  auto& node = view.nodes[id];
+  const auto& seed = node.sequential;
+  if (seed.kind == SeedKind::none)
+    return;
+  if ((seed.clock_node != absent && seed.clock_node >= view.node_count) || seed.trigger >= 2
+      || seed.child_begin > view.child_count || seed.child_count > view.child_count - seed.child_begin
+      || (seed.path_tag != absent && (seed.path_tag >= view.tag_count || seed.path_start >= view.node_count || seed.clock_node == absent))) {
+    *view.status = Status::invariant;
+    return;
+  }
+  double loads[4]{};
+  if (seed.kind == SeedKind::output) {
+    Index index;
+    for (auto edges = outgoing(view, id, 1); edges.next(index);) {
+      const Arc& arc = view.arcs[index];
+      if (!arc.net)
+        continue;
+      if (!arc.has_load) {
+        *view.status = Status::invariant;
+        return;
+      }
+      for (unsigned lane = 0; lane < 4; ++lane)
+        loads[lane] = arc.load[lane];
+      break;
+    }
+    if (*view.status != Status::success)
+      return;
+  }
+  for (unsigned analysis = 0; analysis < 2; ++analysis) {
+    double launch = 0.0, slew = 0.0;
+    if (seed.clock_node != absent && seed.kind != SeedKind::scalar) {
+      const auto& clock = view.nodes[seed.clock_node];
+      const auto lane = analysis * 2 + seed.trigger;
+      launch = clock.effective_arrival[lane].present ? clock.effective_arrival[lane].value : 0.0;
+      slew = clock.effective_slew[lane].present ? clock.effective_slew[lane].value : 0.0;
+    }
+    for (unsigned transition = 0; transition < 2; ++transition) {
+      double arrival = launch, output_slew = slew;
+      if (seed.kind == SeedKind::output) {
+        const auto value = clockToQ(view, seed, analysis, transition, slew, loads[analysis * 2 + transition]);
+        arrival = finiteValue(view, launch + value.delay);
+        output_slew = value.slew;
+      }
+      if (!isfinite(arrival) || !isfinite(launch) || !isfinite(output_slew) || output_slew < 0.0)
+        *view.status = Status::numeric;
+      if (*view.status != Status::success)
+        return;
+      node.slew[analysis * 2 + transition] = {output_slew, true};
+      if (analysis == 0 && transition == 0) {
+        node.arrival = arrival;
+        node.launch = launch;
+      }
+      if (seed.path_tag != absent) {
+        auto* slot = findPath(view, pathRow(id, analysis, 1, transition), seed.path_tag);
+        if (slot == nullptr)
+          return;
+        auto& path = *slot;
+        path = {};
+        path.present = true;
+        path.arrival = arrival;
+        path.slew = output_slew;
+        path.launch = launch;
+        path.start = seed.path_start;
+        path.crpr_node = seed.clock_node;
+        path.crpr_transition = seed.trigger;
+      }
+    }
+  }
+}
+
 __device__ inline void sequentialPass(DeviceView view)
 {
   for (Index id = 0; id < view.node_count; ++id) {
-    auto& node = view.nodes[id];
-    const auto& seed = node.sequential;
-    if (seed.kind == SeedKind::none)
-      continue;
-    if ((seed.clock_node != absent && seed.clock_node >= view.node_count) || seed.trigger >= 2
-        || seed.child_begin > view.child_count || seed.child_count > view.child_count - seed.child_begin
-        || (seed.path_tag != absent && (seed.path_tag >= view.tag_count || seed.path_start >= view.node_count || seed.clock_node == absent))) {
-      *view.status = Status::invariant;
+    sequentialNode(view, id);
+    if (*view.status != Status::success)
       return;
-    }
-    double loads[4]{};
-    if (seed.kind == SeedKind::output) {
-      Index index;
-      for (auto edges = outgoing(view, id, 1); edges.next(index);) {
-        const Arc& arc = view.arcs[index];
-        if (!arc.net)
-          continue;
-        if (!arc.has_load) {
-          *view.status = Status::invariant;
-          return;
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-          loads[lane] = arc.load[lane];
-        break;
-      }
-      if (*view.status != Status::success)
-        return;
-    }
-    for (unsigned analysis = 0; analysis < 2; ++analysis) {
-      double launch = 0.0, slew = 0.0;
-      if (seed.clock_node != absent && seed.kind != SeedKind::scalar) {
-        const auto& clock = view.nodes[seed.clock_node];
-        const auto lane = analysis * 2 + seed.trigger;
-        launch = clock.effective_arrival[lane].present ? clock.effective_arrival[lane].value : 0.0;
-        slew = clock.effective_slew[lane].present ? clock.effective_slew[lane].value : 0.0;
-      }
-      for (unsigned transition = 0; transition < 2; ++transition) {
-        double arrival = launch, output_slew = slew;
-        if (seed.kind == SeedKind::output) {
-          const auto value = clockToQ(view, seed, analysis, transition, slew, loads[analysis * 2 + transition]);
-          arrival = finiteValue(view, launch + value.delay);
-          output_slew = value.slew;
-        }
-        if (!isfinite(arrival) || !isfinite(launch) || !isfinite(output_slew) || output_slew < 0.0)
-          *view.status = Status::numeric;
-        if (*view.status != Status::success)
-          return;
-        node.slew[analysis * 2 + transition] = {output_slew, true};
-        if (analysis == 0 && transition == 0) {
-          node.arrival = arrival;
-          node.launch = launch;
-        }
-        if (seed.path_tag != absent) {
-          auto* slot = findPath(view, pathRow(id, analysis, 1, transition), seed.path_tag);
-          if (slot == nullptr)
-            return;
-          auto& path = *slot;
-          path = {};
-          path.present = true;
-          path.arrival = arrival;
-          path.slew = output_slew;
-          path.launch = launch;
-          path.start = seed.path_start;
-          path.crpr_node = seed.clock_node;
-          path.crpr_transition = seed.trigger;
-        }
-      }
-    }
   }
 }
 

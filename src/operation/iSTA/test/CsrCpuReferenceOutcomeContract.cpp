@@ -177,6 +177,31 @@ CsrReferenceInput negativeComputedSlewInput()
   return input;
 }
 
+CsrReferenceInput positiveTableNegativeExtrapolationInput()
+{
+  auto input = makeCpuReferenceCellFixture();
+  // Frozen AES NAND3's final rectangle, projected at its actual load.
+  // Both resulting samples are positive, but slew extrapolation is negative.
+  constexpr double source_slew = 3.4686877330071684;
+  input.port_constraints.front().input_transition = source_slew;
+  for (auto& analysis : input.start_seeds.front().slew)
+    for (auto& value : analysis)
+      value = source_slew;
+  mutateChildren(input.arcs[1].transfer, [](auto& children) {
+    auto& child = children.front();
+    child.time_unit_scale = child.capacitance_unit_scale = 1.0;
+    for (std::size_t output = 0; output < kTransitionCount; ++output) {
+      constexpr double load_fraction = (0.15068746299999969 - 0.00701482) / (0.0136827 - 0.00701482);
+      child.signature.slew_tables[output] = {true, TableVariable::kInputTransition, TableVariable::kNone};
+      child.slew_tables[output] = {true, TableVariable::kInputTransition, TableVariable::kNone,
+          {{0.396563, 0.795659}}, {0.375401 + load_fraction * (0.683387 - 0.375401),
+                                 0.449684 + load_fraction * (0.708534 - 0.449684)}};
+    }
+  });
+  synchronizeCellOutcome(input);
+  return input;
+}
+
 CsrReferenceInput roundedOverflowInput()
 {
   CsrReferenceInput input = makeCpuReferenceNetFixture();
@@ -339,6 +364,7 @@ std::vector<std::pair<std::string, CsrReferenceInput>> numericFailureFixtures()
 {
   return {
       {"negative computed slew", negativeComputedSlewInput()},
+      {"positive table negative extrapolation", positiveTableNegativeExtrapolationInput()},
       {"path rounding scale overflow", roundedOverflowInput()},
       {"arrival addition overflow", arrivalAdditionOverflowInput()},
       {"required subtraction overflow", singletonOverflowInput(1.0, -std::numeric_limits<double>::max())},

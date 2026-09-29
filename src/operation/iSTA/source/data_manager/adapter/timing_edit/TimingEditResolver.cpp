@@ -296,6 +296,28 @@ const NativeSlotBinding* TimingEditResolverView::findNodeBinding(const StableNod
       return value;
   return findValue(_base._nodes, ref);
 }
+const NativeSlotBinding* TimingEditResolverView::findNodeBindingForKey(const csr::NodeKey& key) const
+{
+  if (const auto* baseline = findNodeBinding(ExistingNodeRef{key}))
+    return baseline;
+  // A committed peer can originate in an earlier edit. Its stable identity is
+  // still the creation token, even when it is outside this batch's capture plan.
+  // ponytail: linear in created history; add a reverse index only if profiling
+  // shows this uncommon peer lookup dominating capture.
+  const auto created = [&](const auto& values) -> const NativeSlotBinding* {
+    for (const auto& [token, names] : values) {
+      if (names.input_pin_name == key.full_name)
+        return findNodeBinding(CreatedNodeRef{token, CreatedNodeRole::kInput});
+      if (names.output_pin_name == key.full_name)
+        return findNodeBinding(CreatedNodeRef{token, CreatedNodeRole::kOutput});
+    }
+    return nullptr;
+  };
+  if (_delta)
+    if (const auto* binding = created(_delta->_changes._materializations))
+      return binding;
+  return created(_base._materializations);
+}
 const NativeSlotBinding* TimingEditResolverView::findNetBinding(const StableNetRef& ref) const
 {
   if (_delta)

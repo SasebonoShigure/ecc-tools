@@ -237,11 +237,11 @@ def _selected_path_delay(io: dict[str, list[Any]],
                    f"{label}.input_output_delays")
 
 
-def _root_seed_matches(graph: dict[str, Any], nodes: list[object],
+def _root_seed_matches(graph: dict[str, Any], seeds: list[dict[str, Any]],
                        coordinates: tuple[int, int, int, int], entry: int,
                        paths: dict[str, Any], require: Callable,
                        label: str) -> bool:
-    node, analysis, source, transition = coordinates
+    _, analysis, source, transition = coordinates
     payload = graph["reference_payload"]
     sources = payload.get("path_source_order")
     if not isinstance(sources, list) or source >= len(sources):
@@ -253,10 +253,8 @@ def _root_seed_matches(graph: dict[str, Any], nodes: list[object],
     slew = _number(paths["slews"], entry, require,
                    f"{label}.paths.slews")
     matches = 0
-    for seed in payload.get("start_seeds", []):
-        if not isinstance(seed, dict) \
-                or canonical(seed.get("seed_node")) != canonical(nodes[node]) \
-                or seed.get("path_source") != sources[source] \
+    for seed in seeds:
+        if seed.get("path_source") != sources[source] \
                 or seed.get("clock_tag") != tag \
                 or canonical(seed.get("path_start_node")) != start:
             continue
@@ -344,6 +342,10 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
                      len(active_arcs) * 8, require, f"{label}.arcs")
     graph_delays = _soa(arc_section, "graph_delays",
                         len(active_arcs) * 8, require, f"{label}.arcs")
+    seeds_by_node: dict[str, list[dict[str, Any]]] = {}
+    for seed in graph["reference_payload"].get("start_seeds", []):
+        if isinstance(seed, dict):
+            seeds_by_node.setdefault(canonical(seed.get("seed_node")), []).append(seed)
     result: dict[str, list[str]] = {}
     for entry, row in enumerate(entry_rows):
         transition = row % 2
@@ -384,7 +386,7 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
         result[site] = admissible
         if predecessor_presence[entry] == 0:
             require(_root_seed_matches(
-                        graph, nodes,
+                        graph, seeds_by_node.get(canonical(nodes[sink]), []),
                         (sink, analysis, source_kind, transition), entry,
                         paths, require, label),
                     f"{label}.paths[{entry}] is not an exact root seed")

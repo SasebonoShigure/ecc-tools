@@ -1,8 +1,16 @@
 #include "CudaDualCsrInternal.cuh"
+#include <algorithm>
+#include <cmath>
 #include "CsrCudaClockPropagation.cuh"
 #include "CudaDualCsrTestReader.hpp"
 #include "timing_edit/BufferTraceCsrJson.hpp"
 namespace ista::csr {
+void CudaDualCsrTestReader::setKernelThreads(CudaDualCsrSession& session, unsigned threads)
+{
+  cuda_detail::demand(session._impl && !session._impl->storage->pending && threads > 0 && threads <= 1024,
+                      "test launch shape needs an idle session and valid block size");
+  session._impl->storage->kernel_threads = threads;
+}
 const CsrTimingValues& CudaDualCsrTestReader::materializeWithLevelOwnershipCheck(CudaDualCsrSession& session)
 {
   using namespace cuda_detail;
@@ -32,7 +40,7 @@ void CudaDualCsrTestReader::omitAuxAndRecompute(CudaDualCsrSession& candidate)
   try {
     state.memory.upload(omitted, state.view.aux_rows);
     state.memory.zero(state.view.status, 1);
-    state.memory.zero(state.view.storage_visits, 8);
+    state.memory.zero(state.view.storage_visits, 12);
     state.values.reset();
     state.code.reset();
     state.execute();
@@ -133,6 +141,8 @@ void runCudaClockContracts()
   view.clock_count = 1;
   view.out_offsets = memory.allocate<Index>(4);
   view.out_arcs = memory.allocate<Index>(2);
+  view.in_offsets = memory.allocate<Index>(4);
+  view.in_arcs = memory.allocate<Index>(2);
   view.order = memory.allocate<Index>(3);
   view.nodes = memory.allocate<NodeState>(3);
   view.arcs = memory.allocate<Arc>(2);
@@ -141,6 +151,9 @@ void runCudaClockContracts()
   const std::vector<Index> offsets{0, 2, 2, 2}, outgoing_arcs{0, 1}, order{0, 1, 2};
   memory.upload(offsets, view.out_offsets);
   memory.upload(outgoing_arcs, view.out_arcs);
+  const std::vector<Index> incoming_offsets{0, 0, 1, 2};
+  memory.upload(incoming_offsets, view.in_offsets);
+  memory.upload(outgoing_arcs, view.in_arcs);
   memory.upload(order, view.order);
   memory.synchronize();
   std::vector<NodeState> seeds(3);
@@ -170,7 +183,7 @@ void runCudaClockContracts()
     Status status = Status::success;
     memory.upload(seeds, view.nodes);
     memory.upload(arcs, view.arcs);
-    memory.zero(view.arc_state, 2);
+    memory.zero(view.arc_state, view.arc_count);
     memory.upload(&status, view.status, 1);
     clockContractKernel<<<1, 1, 0, memory.stream()>>>(view);
     check(cudaGetLastError(), "clock contract launch");
@@ -203,5 +216,53 @@ void runCudaClockContracts()
   demand(run() == Status::numeric, "CUDA physical clock overflow was not rejected");
   arcs[0].delay_max = 2.0;
   demand(run() == Status::success, "CUDA healthy clock pass failed after rejection");
+  view.node_count = 4;
+  view.arc_count = 3;
+  view.out_offsets = memory.allocate<Index>(5);
+  view.out_arcs = memory.allocate<Index>(3);
+  view.in_offsets = memory.allocate<Index>(5);
+  view.in_arcs = memory.allocate<Index>(3);
+  view.order = memory.allocate<Index>(4);
+  view.nodes = memory.allocate<NodeState>(4);
+  view.arcs = memory.allocate<Arc>(3);
+  view.arc_state = memory.allocate<ArcState>(3);
+  const std::vector<Index> chain_out{0, 1, 2, 3, 3}, chain_in{0, 0, 0, 0, 3}, chain_arcs{0, 1, 2};
+  std::vector<Index> chain_order{0, 1, 2, 3};
+  memory.upload(chain_out, view.out_offsets);
+  memory.upload(chain_in, view.in_offsets);
+  memory.upload(chain_arcs, view.out_arcs);
+  memory.upload(chain_arcs, view.in_arcs);
+  seeds.assign(4, {});
+  arcs.assign(3, {});
+  for (Index node = 0; node < 4; ++node) {
+    seeds[node].clock_owner = 0;
+    if (node == 3)
+      continue;
+    for (unsigned lane = 0; lane < 4; ++lane) {
+      seeds[node].physical_clock[lane].arrival = {0.0, true};
+      seeds[node].physical_clock[lane].slew = {0.0, true};
+    }
+    auto& arc = arcs[node];
+    arc.source = node;
+    arc.sink = 3;
+    arc.net = false;
+    arc.has_load = arc.clock_eligible = true;
+    arc.delay = arc.delay_min = arc.delay_max = 0.1 + node * 0.75e-6;
+  }
+  result.resize(4);
+  do {
+    memory.upload(chain_order, view.order);
+    demand(run() == Status::success, "CUDA clock epsilon-chain failed");
+    memory.download(view.nodes, result);
+    memory.synchronize();
+    for (unsigned lane = 0; lane < 4; ++lane) {
+      const auto& value = result[3].physical_clock[lane];
+      const double delay = 0.1 + (lane < 2 ? 0.75e-6 : 0.0);
+      demand(value.predecessor == (lane < 2 ? 1 : 0) && value.predecessor_delay == delay
+                 && value.arrival.value == std::round(delay * 1e15) / 1e15,
+             "CUDA clock epsilon value/identity depends on the source schedule");
+    }
+  } while (std::next_permutation(chain_order.begin(), chain_order.begin() + 3));
+
 }
 }  // namespace ista::csr

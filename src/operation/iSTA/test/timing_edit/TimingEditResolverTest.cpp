@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include <algorithm>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,7 @@
 #include "TimingEditNativeFixture.hpp"
 #include "TimingEditResolver.hpp"
 #include "TimingEditValidation.hpp"
+#include "TimingGraphCsrAdapter.hpp"
 
 namespace {
 
@@ -81,6 +83,46 @@ void testBaselineArcBindingsAreOneShot()
     require(resolver.resolveArcSlot(ref) == slot,
             "native traversal reorder reinterpreted a baseline parallel ordinal");
   }
+}
+
+void testResolverCoverageKeepsFullParallelIdentity()
+{
+  NativeEditFixture fixture = makeNativeEditFixture(true);
+  const auto resolver = TimingEditResolverState::bindBaseline(fixture.database());
+  auto exported = csr::exportCsrGraphSnapshot(fixture.database());
+  auto* graph = std::get_if<csr::CsrGraphSnapshot>(&exported);
+  require(graph != nullptr && graph->arcs.size() == 2, "parallel coverage fixture did not export");
+  // Coverage consumes graph identities, independently of numerical payload.
+  csr::CsrReferenceInput input;
+  input.nodes = std::move(graph->nodes);
+  for (auto& arc : graph->arcs) {
+    input.arcs.emplace_back().key = std::move(arc.key);
+  }
+  NativeTimingEditPreparer::requireExactResolverCoverage(fixture.database(), input, resolver);
+  std::reverse(input.arcs.begin(), input.arcs.end());
+  NativeTimingEditPreparer::requireExactResolverCoverage(fixture.database(), input, resolver);
+  // Both arcs share endpoints. Index membership must not replace exact matching.
+  const auto ordinal = input.arcs.front().key.parallel_ordinal;
+  input.arcs.front().key.parallel_ordinal += 10;
+  const auto error = requireInvalid([&] {
+    NativeTimingEditPreparer::requireExactResolverCoverage(fixture.database(), input, resolver);
+  }, "coverage accepted an unmatched parallel identity in the correct endpoint group");
+  require(error.find("exactly one live stable resolver binding") != std::string::npos,
+          "parallel identity mismatch reported the wrong gate");
+  input.arcs.front().key.parallel_ordinal = ordinal;
+
+  auto malformed = resolver;
+  auto& node = const_cast<NativeSlotBinding&>(malformed.nodeBindings().begin()->second);
+  node.native_name = std::next(malformed.nodeBindings().begin())->second.native_name;
+  requireInvalid([&] {
+    NativeTimingEditPreparer::requireExactResolverCoverage(fixture.database(), input, malformed);
+  }, "coverage accepted duplicated live node names");
+  malformed = resolver;
+  auto& net = const_cast<NativeSlotBinding&>(malformed.netBindings().begin()->second);
+  net.native_name = "missing-net";
+  requireInvalid([&] {
+    NativeTimingEditPreparer::requireExactResolverCoverage(fixture.database(), input, malformed);
+  }, "coverage accepted a missing live net name");
 }
 
 void testPreparedBatchStagesExistingAndCreatedRefsAppendOnly()
@@ -309,6 +351,7 @@ void testClockNetIsRejectedByDataOnlyBoundary()
 int main()
 {
   testBaselineArcBindingsAreOneShot();
+  testResolverCoverageKeepsFullParallelIdentity();
   testPreparedBatchStagesExistingAndCreatedRefsAppendOnly();
   testPreparerRejectsResolverWithoutExactLiveCoverage();
   testPreparerRejectsStaleGenerationAndSameGenerationTamper();

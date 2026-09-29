@@ -180,6 +180,17 @@ void verifyParasiticSentinelFailure()
   require(validateReferenceInputForSession(control, 7).empty(), "nonempty SPEF control is not strict-valid");
 }
 
+void verifyNativeClockOverlap()
+{
+  auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kDiamond);
+  auto& clocks = fixture.database().get_timing_constraint().get_clock_map();
+  auto overlap = clocks.at("diamond_key");
+  overlap.set_clock_name("zz_overlap");
+  clocks.emplace("zz_overlap", std::move(overlap));
+  requireFailure(exportCsrReferenceInputCandidate(fixture.database(), referenceInputTestContext(), 5),
+                 CsrCaptureCode::kMalformedTopology, "native overlapping clock owners");
+}
+
 void verifyArtificialOverlapIsPureOnly()
 {
   auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kDiamond);
@@ -204,6 +215,7 @@ int main()
     verifyTableFailures();
     verifyNumericFailures();
     verifyParasiticSentinelFailure();
+    verifyNativeClockOverlap();
     verifyArtificialOverlapIsPureOnly();
   } catch (const std::exception& error) {
     std::cerr << "CsrReferenceInputFailureTest: " << error.what() << '\n';

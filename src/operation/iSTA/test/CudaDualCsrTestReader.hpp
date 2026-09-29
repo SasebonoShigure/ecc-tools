@@ -7,6 +7,7 @@ void runCudaSequentialContracts();
 class CudaDualCsrTestReader final
 {
  public:
+  static void setKernelThreads(CudaDualCsrSession& session, unsigned threads);
   static nlohmann::json capture(const CudaDualCsrSession& session);
   static const CsrTimingValues& materializeWithLevelOwnershipCheck(CudaDualCsrSession& session);
   static void omitAuxAndRecompute(CudaDualCsrSession& candidate);

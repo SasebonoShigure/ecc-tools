@@ -190,9 +190,22 @@ void CudaDualCsrSession::Impl::validatePatch(const Impl& prior, const CudaDualCs
     demand(std::ranges::equal(patch.ends->expected, prior.host->ends, {}, &NodeId::value), "CUDA targeted host->ends mismatch");
 }
 
-PackedPatch CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDualCsrPatch& patch)
+PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDualCsrPatch& patch)
 {
-  PackedPatch packed;
+  auto& packed = storage->patch_uploads;
+  packed.removes.clear();
+  packed.changes.clear();
+  packed.reverse_changes.clear();
+  packed.payloads.clear();
+  packed.deactivations.clear();
+  packed.appends.clear();
+  packed.aux_patches.clear();
+  packed.aux_values.clear();
+  packed.appended_out.clear();
+  packed.appended_in.clear();
+  packed.endpoints.clear();
+  packed.slots.clear();
+  packed.arcs.clear();
   auto& models = storage->models;
   auto& undo = storage->host_undo;
   demand(!undo.target, "CUDA host patch already pending");
@@ -267,8 +280,9 @@ PackedPatch CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDualC
       return std::nullopt;
     std::vector<Index> values;
     values.reserve(change->replacement.size());
+    std::set<Index> unique;
     for (auto id : change->replacement) {
-      demand(id.value() < patch.after.node_slots, "invalid root or end");
+      demand(id.value() < patch.after.node_slots && unique.insert(id.value()).second, "invalid or duplicate root or end");
       values.push_back(id.value());
     }
     return values;

@@ -183,6 +183,8 @@ void replayClockReachability(ReferenceBuildState& state, const NativeRoleIndex& 
       if (node.value() >= node_count)
         malformedReferenceInput();
       state.clock_reachable_nodes[node.value()] = 1;
+      if (state.clock_owner_by_node[node.value()] && *state.clock_owner_by_node[node.value()] != clock_index)
+        malformedReferenceInput();
       if (!state.clock_owner_by_node[node.value()]) {
         state.clock_owner_by_node[node.value()] = clock_index;
         state.input.clock_owner_by_node[node.value()] = state.input.clocks[clock_index].map_key;

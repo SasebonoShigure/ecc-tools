@@ -9,8 +9,11 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <set>
 #include <stdexcept>
+#include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -473,15 +476,22 @@ bool matchesCurrentGraphArc(const StableArcRef& candidate, const csr::ArcKey& ke
 void requireResolverCoverage(const Database& database, const csr::CsrReferenceInput& input,
                              const TimingEditResolverState& resolver)
 {
+  std::map<std::string_view, std::size_t> node_names, net_names;
   std::size_t live_nodes = 0;
   for (const auto& [ref, binding] : resolver.nodeBindings()) {
     static_cast<void>(ref);
-    live_nodes += !binding.tombstone;
+    if (!binding.tombstone) {
+      ++live_nodes;
+      ++node_names[binding.native_name];
+    }
   }
   std::size_t live_nets = 0;
   for (const auto& [ref, binding] : resolver.netBindings()) {
     static_cast<void>(ref);
-    live_nets += !binding.tombstone;
+    if (!binding.tombstone) {
+      ++live_nets;
+      ++net_names[binding.native_name];
+    }
   }
   std::size_t live_arcs = 0;
   for (const auto& [ref, binding] : resolver.arcBindings()) {
@@ -495,23 +505,47 @@ void requireResolverCoverage(const Database& database, const csr::CsrReferenceIn
 
   for (const auto& [name, pin] : database.get_pin_map()) {
     static_cast<void>(pin);
-    static_cast<void>(resolver.stableNodeForNativeName(name));
+    if (const auto found = node_names.find(name); found == node_names.end() || found->second != 1)
+      static_cast<void>(resolver.stableNodeForNativeName(name));  // Preserve the resolver error on failure.
   }
   for (const auto& [name, net] : database.get_net_map()) {
     static_cast<void>(net);
-    static_cast<void>(resolver.stableNetForNativeName(name));
+    if (const auto found = net_names.find(name); found == net_names.end() || found->second != 1)
+      static_cast<void>(resolver.stableNetForNativeName(name));
   }
-  for (const auto& arc : input.arcs) {
-    std::size_t matches = 0;
-    for (const auto& [ref, binding] : resolver.arcBindings()) {
-      if (!binding.tombstone && matchesCurrentGraphArc(ref, arc.key, resolver)) {
-        ++matches;
+  // Coarse endpoint groups only narrow the search; the existing full matcher
+  // still checks kind, complete ExistingArcKey, signatures and parallel ordinal.
+  using Endpoints = std::tuple<std::string_view, std::string_view, std::string_view>;
+  std::map<Endpoints, std::vector<std::size_t>> by_endpoints;
+  for (std::size_t index = 0; index < input.arcs.size(); ++index) {
+    const auto& base = input.arcs[index].key.base;
+    by_endpoints[{base.owner_name, base.source.full_name, base.sink.full_name}].push_back(index);
+  }
+  std::vector<std::size_t> matches(input.arcs.size(), 0);
+  for (const auto& [ref, binding] : resolver.arcBindings()) {
+    if (binding.tombstone)
+      continue;
+    const Endpoints endpoints = std::visit([&](const auto& value) -> Endpoints {
+      using Ref = std::decay_t<decltype(value)>;
+      if constexpr (std::is_same_v<Ref, ExistingArcRef>) {
+        const auto& base = value.baseline_key.base;
+        return {base.owner_name, base.source.full_name, base.sink.full_name};
+      } else if constexpr (std::is_same_v<Ref, CreatedCellArcRef>) {
+        const auto& names = resolver.materialization(value.creation_token);
+        return {names.instance_name, names.input_pin_name, names.output_pin_name};
+      } else if constexpr (std::is_same_v<Ref, CreatedOldNetArcRef>) {
+        return {resolver.resolveNet(value.net), resolver.resolveNode(value.driver), resolver.resolveNode(value.sink)};
+      } else {
+        return {resolver.materialization(value.creation_token).output_net_name,
+                resolver.resolveNode(value.driver), resolver.resolveNode(value.sink)};
       }
-    }
-    if (matches != 1) {
-      invalid("current CSR arc does not have exactly one live stable resolver binding");
-    }
+    }, ref);
+    if (const auto group = by_endpoints.find(endpoints); group != by_endpoints.end())
+      for (std::size_t index : group->second)
+        matches[index] += matchesCurrentGraphArc(ref, input.arcs[index].key, resolver);
   }
+  if (std::ranges::any_of(matches, [](std::size_t count) { return count != 1; }))
+    invalid("current CSR arc does not have exactly one live stable resolver binding");
 }
 
 }  // namespace

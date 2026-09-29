@@ -40,7 +40,7 @@ class StaProductionLifecycleOperations
 StaProductionLifecycleOperations& defaultStaProductionLifecycleOperations();
 
 StaOperationResult initializeStaResources(std::map<std::string, std::any>& config_map);
-StaOperationResult runFullStaPipeline();
+StaOperationResult runFullStaPipeline(bool include_artifacts = true);
 StaOperationResult runExtractLibPipeline();
 StaOperationResult runUpdateTimingPipeline();
 StaOperationResult runWriteSdfPipeline(const std::string& file_path);

@@ -40,26 +40,6 @@ struct Insertion
   csr::ArcId cell, input;
   std::vector<std::pair<csr::ArcId, csr::ArcId>> replaced;
 };
-void requireDataNet(const Database& database, const std::string& name)
-{
-  const auto& net = database.get_net_map().at(name);
-  demand(!database.get_parasitic_library().get_net_map().contains(name), "targeted buffer requires NoParasitic source net");
-  demand(net.get_driver_pin_list().size() == 1 && !net.get_driver_pin().empty(), "targeted source requires one driver");
-  for (const auto& [clock_name, clock] : database.get_timing_constraint().get_clock_map()) {
-    static_cast<void>(clock_name);
-    for (const auto& source : clock.get_source_list())
-      demand(std::ranges::find(net.get_pin_name_list(), source) == net.get_pin_name_list().end(), "targeted edit touches clock source");
-  }
-  for (const auto& name : net.get_pin_name_list()) {
-    const auto& pin = database.get_pin_map().at(name);
-    demand(pin.get_net_name() == net.get_net_name(), "targeted net membership mismatch");
-    if (pin.get_is_port())
-      continue;
-    const auto& instance = database.get_instance_map().at(pin.get_instance_name());
-    const auto& cell = database.get_timing_library().get_cell_map().at(instance.get_cell_name());
-    demand(!cell.get_port_map().at(pin.get_pin_name()).get_is_clock(), "targeted edit touches library clock pin");
-  }
-}
 std::size_t movedRank(const Database& database, const std::string& driver, const std::string& sink, const std::string& net)
 {
   std::optional<std::size_t> result;
@@ -157,7 +137,7 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
              "targeted materialized name collision");
     }
     const auto net = current.resolver.resolveNet(edit.original_net);
-    requireDataNet(database, net);
+    detail::requireDataOnlyNet(database, net);
     const auto driver_name = database.get_net_map().at(net).get_driver_pin();
     demand(current.clock_arcs != nullptr, "targeted clock identity metadata is absent");
     for (const auto rank : database.get_outgoing_arc_list_map().at(driver_name)) {
@@ -197,12 +177,15 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   auto metadata = std::make_unique<detail::PreparedNativeTargetedMetadata>(current, slots, materializations);
   for (const auto& assignment : slots.nodes)
     changed_rows.insert(csr::NodeId{assignment.slot.value()});
+  // Data-only insertion preserves start/end membership across this transaction.
+  const std::set<std::string> starts(database.get_start_point_list().begin(), database.get_start_point_list().end());
+  const std::set<std::string> ends(database.get_end_point_list().begin(), database.get_end_point_list().end());
   // Capture only expected payloads and affected rows before applying the edit.
   std::map<std::string, csr::ArcOutputLoadMatrix> old_loads, new_loads;
   std::map<csr::ArcId, csr::ArcSemanticPayload> old_payloads;
   auto capture_old = [&](csr::ArcId id) {
     if (!old_payloads.contains(id))
-      old_payloads.emplace(id, detail::targetedArc(database, current, *current.arc_native_ranks.at(id.value()), old_loads));
+      old_payloads.emplace(id, detail::targetedArc(database, current, *current.arc_native_ranks.at(id.value()), old_loads, starts, ends));
   };
   for (const auto id : payloads)
     capture_old(id);
@@ -354,11 +337,11 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   patch.before = slots.before;
   patch.after = slots.after;
   for (std::uint64_t id = slots.before.node_slots; id < slots.after.node_slots; ++id) {
-    auto node = detail::targetedNode(target, staged, staged.node_names.at(id));
+    auto node = detail::targetedNode(target, staged, staged.node_names.at(id), starts, ends);
     patch.node_appends.push_back({csr::NodeId{id}, node.key, std::move(node)});
   }
   for (std::uint64_t id = slots.before.arc_slots; id < slots.after.arc_slots; ++id) {
-    auto arc = detail::targetedArc(target, staged, *staged.arc_native_ranks.at(id), new_loads);
+    auto arc = detail::targetedArc(target, staged, *staged.arc_native_ranks.at(id), new_loads, starts, ends);
     patch.arc_appends.push_back({csr::ArcId{id}, arc.key, arc.source, arc.sink, std::move(arc)});
   }
   for (const auto& insertion : insertions)
@@ -371,7 +354,7 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
     if (!staged.arc_native_ranks.at(id.value()))
       continue;
     auto old = std::move(old_payloads.at(id));
-    auto next = detail::targetedArc(target, staged, *staged.arc_native_ranks.at(id.value()), new_loads);
+    auto next = detail::targetedArc(target, staged, *staged.arc_native_ranks.at(id.value()), new_loads, starts, ends);
     if (old != next)
       patch.payload_changes.push_back({id, std::move(old), std::move(next)});
   }

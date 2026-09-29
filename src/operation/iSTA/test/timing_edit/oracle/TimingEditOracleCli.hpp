@@ -85,6 +85,7 @@ struct OracleTraceCreationOptions
   std::string output_port{"Y"};
   std::string profile{"stage3_real_cpu_full"};
   std::uint64_t seed{20260831};
+  std::string data_side{};  // Empty retains the two-edit fixture; q/d/data selects ten disjoint batches.
 };
 
 using OracleCliMode = std::variant<OracleReplayOptions, OracleTraceCreationOptions>;

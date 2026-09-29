@@ -7,6 +7,7 @@
 #include "TimingEditDualCsrCaptureEvidenceInternal.hpp"
 
 #include <algorithm>
+#include <map>
 #include <set>
 #include <string>
 
@@ -173,23 +174,24 @@ std::optional<std::string> validateCapacitances(
   const auto& requests = pending.capturePlan().cell_pin_capacitances;
   if (records.cell_pin_capacitances.size() != requests.size())
     return "captured pin-capacitance coverage is not exact";
+  const auto ref_less = [](const timing_edit::StableNodeRef* lhs, const timing_edit::StableNodeRef* rhs) {
+    return *lhs < *rhs;
+  };
+  std::map<const timing_edit::StableNodeRef*, const CapturedCellPinCapacitance*, decltype(ref_less)> captured_by_ref(ref_less);
+  for (const auto& value : records.cell_pin_capacitances)
+    if (!captured_by_ref.emplace(&value.requested.ref, &value).second)
+      return "pin-capacitance evidence repeats one typed request";
   std::set<timing_edit::StableNodeRef> seen;
   for (const auto& request : requests) {
     if (!seen.insert(request.ref).second)
       return "pin-capacitance request repeats StableNodeRef";
-    const CapturedCellPinCapacitance* captured = nullptr;
-    for (const auto& value : records.cell_pin_capacitances) {
-      if (value.requested != request)
-        continue;
-      if (captured != nullptr)
-        return "pin-capacitance evidence repeats one typed request";
-      captured = &value;
-    }
+    const auto found = captured_by_ref.find(&request.ref);
+    const auto* captured = found == captured_by_ref.end() ? nullptr : found->second;
     const auto id = boundNodeId(pending, request);
     const auto* node = id ? nodeRecord(pending, records, *id) : nullptr;
     const auto* cell = cellModel(pending, records,
                                  request.expected_cell);
-    if (captured == nullptr || !id || node == nullptr
+    if (captured == nullptr || captured->requested != request || !id || node == nullptr
         || captured->model.node != *id
         || node->key != request.expected_key
         || node->instance_cell != request.expected_cell)

@@ -17,6 +17,7 @@
 #include "DualCsrTestSupport.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
 #include "DualSemanticReadView.hpp"
+#include "NativeDualCsrArcBijectionInternal.hpp"
 
 namespace ista::timing_dual_csr::test {
 namespace {
@@ -159,6 +160,51 @@ void sameMembershipRowsFollowCandidateOrder()
           "same-membership BaseOut/BaseIn rows lost candidate order");
 }
 
+void groupedCapturePreservesParallelIdentity()
+{
+  constexpr std::size_t groups = 1024;
+  const auto input = csr::test::cellInput();
+  std::vector<AffectedArcCapture> requests;
+  std::vector<csr::ArcKey> candidates;
+  std::vector<csr::ArcId> ids;
+  for (std::size_t group = 0; group < groups; ++group) {
+    auto base = input.arcs.front().key.base;
+    base.owner_name = "capture_" + std::to_string(group);
+    for (auto* node : {&base.source, &base.sink}) {
+      node->instance_name = base.owner_name;
+      node->full_name = base.owner_name + ":" + node->pin_name;
+    }
+    for (std::uint64_t ordinal = 0; ordinal < 2; ++ordinal) {
+      const csr::ArcKey key{base, ordinal};
+      requests.push_back({timing_edit::ExistingArcRef{key}, key, base, 2});
+      ids.emplace_back(2 * group + (1 - ordinal));
+    }
+  }
+  for (std::size_t group = groups; group-- > 0;) {
+    candidates.push_back({requests[2 * group].expected_post_base, 0});
+    candidates.push_back({requests[2 * group].expected_post_base, 1});
+  }
+  const auto compatible = [](std::size_t, std::size_t) { return true; };
+  const auto equivalent = [](std::size_t, std::size_t) { return true; };
+  auto matched = detail::matchNativeAffectedArcs(requests, candidates, ids, compatible, equivalent);
+  const auto* result = std::get_if<detail::NativeArcBijection>(&matched);
+  require(result != nullptr, "grouped parallel matching was rejected");
+  for (std::size_t group = 0; group < groups; ++group) {
+    const auto first = 2 * (groups - 1 - group);
+    require(result->candidate_by_request[2 * group] == first + 1
+                && result->candidate_by_request[2 * group + 1] == first,
+            "grouping changed native candidate order or stable identity tie-break");
+  }
+  matched = detail::matchNativeAffectedArcs(
+      requests, candidates, ids, compatible, [](std::size_t, std::size_t) { return false; });
+  require(std::get<NarrowCaptureError>(matched) == NarrowCaptureError::kMalformedNativeRecord,
+          "non-equivalent ambiguous parallel candidates were accepted");
+  candidates.pop_back();
+  matched = detail::matchNativeAffectedArcs(requests, candidates, ids, compatible, equivalent);
+  require(std::get<NarrowCaptureError>(matched) == NarrowCaptureError::kArcMultiplicityMismatch,
+          "missing grouped candidate was accepted");
+}
+
 void partialParallelDeactivationKeepsCanonicalActiveKeys()
 {
   const DualCsrState before = twoCommittedParallelArcs();
@@ -227,6 +273,7 @@ void partialParallelDeactivationKeepsCanonicalActiveKeys()
 int main()
 {
   try {
+    ista::timing_dual_csr::test::groupedCapturePreservesParallelIdentity();
     ista::timing_dual_csr::test::
         sameMembershipRowsFollowCandidateOrder();
     ista::timing_dual_csr::test::

@@ -67,10 +67,10 @@ FreshArtifactEvidence evidence(const FreshArtifactFile& file)
   }
 }
 
-std::map<std::string, std::any> makeConfig(const fs::path& run_directory)
+std::map<std::string, std::any> makeConfig(const fs::path& run_directory, std::int32_t threads)
 {
   return {{"-temp_directory_path", (run_directory / "sta").string()},
-          {"-thread_number", std::int32_t{1}},
+          {"-thread_number", threads},
           {"-output_timing_reports", std::int32_t{0}},
           {"-output_timing_features", std::int32_t{0}},
           {"-timing_path_limit", std::int32_t{20}},
@@ -93,6 +93,31 @@ void requireFullRecord(const StaExecutionRecord& record, StaBackend backend)
     fail("native baseline did not execute the requested full backend contract");
   }
 }
+
+// This loader serves timing workloads. Keep the production session state
+// machine and owner checks, but do not run unrelated power/SDF consumers.
+class TimingOnlySessionOperations final : public StaSessionOperations
+{
+ public:
+  explicit TimingOnlySessionOperations(StaBackend backend) : _backend(backend) {}
+  StaStatus initialize(std::uint64_t token, std::map<std::string, std::any>& config) override
+  { return STAI.initializeSession(token, config); }
+  StaStatus runFullBaseline(std::uint64_t token, StaCsrSessionContext* context) override
+  { return StaTimingEditSessionProbeAccess::runTimingOnlyBaseline(token, context, _backend); }
+  StaStatus close(std::uint64_t token, StaCsrSessionContext* context,
+                  std::unique_ptr<csr::CsrSnapshotObservation>* released) override
+  { return STAI.closeSession(token, context, released); }
+  StaStatus copyObservation(std::uint64_t token, StaCsrSessionContext* context,
+                            std::unique_ptr<csr::CsrSnapshotObservation>* detached) override
+  { return STAI.copySessionCsrSnapshotObservation(token, context, detached); }
+  StaCsrReferenceAttempt computeCsrReferenceForTesting(std::uint64_t token, StaCsrSessionContext* context) override
+  { return STAI.computeSessionCsrReferenceForTesting(token, context); }
+  StaCsrScatterAttempt scatterCsrTimingResultForTesting(
+      std::uint64_t token, StaCsrSessionContext* context, const csr::CsrTimingResult& result) override
+  { return STAI.scatterSessionCsrTimingResultForTesting(token, context, result); }
+ private:
+  StaBackend _backend;
+};
 
 void loadArtifacts(const FreshBaselineArtifacts& artifacts)
 {
@@ -119,6 +144,8 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
     fail("top name is empty");
   }
 
+  if (supplied.threads <= 0)
+    fail("thread count must be positive");
   FreshBaselineArtifacts artifacts = supplied;
   artifacts.tech_lef = requireRegularFile(supplied.tech_lef, "tech_lef");
   if (artifacts.cell_lefs.empty() || artifacts.liberties.empty())
@@ -153,8 +180,9 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
 
   loadArtifacts(artifacts);
   IncrementalStaSession session(
-      {backend, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
-  throwOnStaFailure(session.initialize(artifacts.analysis_context, makeConfig(artifacts.run_directory)),
+      {backend, StaUpdateStrategy::kFull, StaFallbackPolicy::kError},
+      std::make_unique<TimingOnlySessionOperations>(backend));
+  throwOnStaFailure(session.initialize(artifacts.analysis_context, makeConfig(artifacts.run_directory, artifacts.threads)),
                     session.request());
   const auto token = session.sessionToken();
   if (!token || *token == 0 || session.state() != StaSessionState::kInitialized) {

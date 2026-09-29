@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "CsrTimingScatterTestFixture.hpp"
+#include "TimingSemanticKey.hpp"
 
 namespace ista::csr::test {
 template <typename T>
@@ -64,8 +65,8 @@ void appendOptional(OptionalSoa<T>& values, const std::optional<T>& value)
 
 [[nodiscard]] NodeId requireNodeId(const CsrReferenceInput& input, const NodeKey& key)
 {
-  const auto found = std::ranges::find(input.node_ids_by_key, key, &NodeIdLookupEntry::key);
-  if (found == input.node_ids_by_key.end() || found->id.value() >= input.nodes.size()) {
+  const auto found = std::ranges::lower_bound(input.node_ids_by_key, key, nodeKeyLess, &NodeIdLookupEntry::key);
+  if (found == input.node_ids_by_key.end() || found->key != key || found->id.value() >= input.nodes.size()) {
     throw std::runtime_error("timing scatter materializer: NodeKey does not resolve");
   }
   return found->id;
@@ -73,8 +74,8 @@ void appendOptional(OptionalSoa<T>& values, const std::optional<T>& value)
 
 [[nodiscard]] ArcId requireArcId(const CsrReferenceInput& input, const ArcKey& key)
 {
-  const auto found = std::ranges::find(input.arc_ids_by_key, key, &ArcIdLookupEntry::key);
-  if (found == input.arc_ids_by_key.end() || found->id.value() >= input.arcs.size()) {
+  const auto found = std::ranges::lower_bound(input.arc_ids_by_key, key, arcKeyLess, &ArcIdLookupEntry::key);
+  if (found == input.arc_ids_by_key.end() || found->key != key || found->id.value() >= input.arcs.size()) {
     throw std::runtime_error("timing scatter materializer: ArcKey does not resolve");
   }
   return found->id;
@@ -82,8 +83,8 @@ void appendOptional(OptionalSoa<T>& values, const std::optional<T>& value)
 
 [[nodiscard]] ClockTagId requireClockTagId(const CsrReferenceInput& input, const std::string& tag)
 {
-  const auto found = std::ranges::find(input.clock_tags, tag);
-  if (found == input.clock_tags.end()) {
+  const auto found = std::ranges::lower_bound(input.clock_tags, tag);
+  if (found == input.clock_tags.end() || *found != tag) {
     throw std::runtime_error("timing scatter materializer: clock tag does not resolve");
   }
   return ClockTagId{static_cast<std::uint64_t>(std::distance(input.clock_tags.begin(), found))};
@@ -102,8 +103,8 @@ template <typename T, std::size_t Size>
 [[nodiscard]] const CsrNativeTimingNode& requireNativeNode(const CsrReferenceInput& input, const CsrNativeTimingOracle& oracle, std::size_t node)
 {
   const NodeKey& key = input.nodes.at(node).key;
-  const auto found = std::ranges::find(oracle.nodes, key, &CsrNativeTimingNode::key);
-  if (found == oracle.nodes.end()) {
+  const auto found = std::ranges::lower_bound(oracle.nodes, key, nodeKeyLess, &CsrNativeTimingNode::key);
+  if (found == oracle.nodes.end() || found->key != key) {
     throw std::runtime_error("timing scatter materializer: native node is missing");
   }
   return *found;
@@ -112,8 +113,8 @@ template <typename T, std::size_t Size>
 [[nodiscard]] const CsrNativeTimingArc& requireNativeArc(const CsrReferenceInput& input, const CsrNativeTimingOracle& oracle, std::size_t arc)
 {
   const ArcKey& key = input.arcs.at(arc).key;
-  const auto found = std::ranges::find(oracle.arcs, key, &CsrNativeTimingArc::key);
-  if (found == oracle.arcs.end()) {
+  const auto found = std::ranges::lower_bound(oracle.arcs, key, arcKeyLess, &CsrNativeTimingArc::key);
+  if (found == oracle.arcs.end() || found->key != key) {
     throw std::runtime_error("timing scatter materializer: native Arc is missing");
   }
   return *found;

@@ -7,6 +7,8 @@ if(ISTA_ENABLE_CUDA)
       CsrCpuReferenceOutcomeContract.cpp
       CsrCpuReferenceArcContract.cpp
       CsrCpuReferencePropagationContract.cpp
+      CsrCpuReferenceTopologyContract.cpp
+      CsrCpuReferenceDagFixture.cpp
       CsrCpuReferenceTestFixture.cpp)
   target_link_libraries(ista_csr_cuda_contract_test PRIVATE ista_cuda)
   target_compile_options(ista_csr_cuda_contract_test PRIVATE
@@ -41,7 +43,7 @@ if(ISTA_ENABLE_CUDA AND ECC_INCREGPUSTA_DEBUG_CHECKS)
 endif()
 
 if(ISTA_ENABLE_CUDA)
-  add_executable(ista_cuda_dual_csr_session_test CudaDualCsrSessionTest.cpp CudaDualCsrStorageContract.cpp CsrCpuReferenceTestFixture.cpp
+  add_executable(ista_cuda_dual_csr_session_test CudaDualCsrSessionTest.cpp CudaDualCsrStorageContract.cpp CudaParallelPatchContract.cpp CsrCpuReferenceTestFixture.cpp CsrCpuReferenceDagFixture.cpp
       CudaDualCsrTestReader.cu CsrCudaSequentialContract.cu timing_edit/BufferTraceCsrJson.cpp)
   target_sources(ista_cuda_dual_csr_session_test PRIVATE AllocationFailureSupport.cpp)
   target_include_directories(ista_cuda_dual_csr_session_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

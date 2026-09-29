@@ -19,6 +19,7 @@
 
 namespace ista::buffer_trace {
 void testArtifactLists(ReplayProgram program);
+void testDirectValueCodecBoundaries(const BufferTraceArtifact& artifact);
 }
 
 namespace {
@@ -676,6 +677,7 @@ int main()
   testCanonicalTokenAndRoundPoisoning();
   testAcceptedEvaluationPermutationMapsByTokenOrdinal();
   testStrictJsonAndCreatedReferenceRoundTrip();
+  testDirectValueCodecBoundaries(syntheticArtifact());
   testSyntheticLogicalNamesAreLeafFiles();
   testWorkloadFirstComparability();
   testReplayProfileLimitsAndTemplateBoundary();

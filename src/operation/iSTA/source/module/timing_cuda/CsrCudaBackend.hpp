@@ -19,8 +19,12 @@ struct CsrCudaTelemetry
   std::uint64_t d2h_bytes{0};
   std::uint64_t d2d_bytes{0};
   std::uint64_t allocations{0};
+  // Explicit launches only; library internals are measured by the GPU profiler.
   std::uint64_t kernel_launches{0};
+  std::uint64_t device_algorithm_calls{0};
+  std::uint64_t levelization_decision_bytes{0};
   std::string device_name;
+  std::string device_uuid;
   int driver_version{0};
   int runtime_version{0};
 };

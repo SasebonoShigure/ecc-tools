@@ -166,8 +166,15 @@ if(ISTA_ENABLE_CUDA)
   target_include_directories(ista_cuda_full_trace_probe PRIVATE
       ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
       ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
-  target_link_libraries(ista_cuda_full_trace_probe PRIVATE ista_cuda_full_trace_runtime ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS})
+  target_link_libraries(ista_cuda_full_trace_probe PRIVATE ista_cuda_full_trace_runtime ista_cuda_targeted_trace_runtime ista_dual_csr_trace_runtime ista_timing_reporter ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS})
   target_compile_options(ista_cuda_full_trace_probe PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
+  add_test(NAME ista_native_full_transactions
+    COMMAND ista_cuda_full_trace_probe native-transactions
+      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
+      --prefix 2 --output "${CMAKE_CURRENT_BINARY_DIR}/native-full-transactions.json")
+  set_tests_properties(ista_native_full_transactions PROPERTIES
+    LABELS "ista_cpu;ista_integration;ista_timing_edit" TIMEOUT 300 RUN_SERIAL TRUE)
+
 endif()
 
 if(ISTA_ENABLE_CUDA)

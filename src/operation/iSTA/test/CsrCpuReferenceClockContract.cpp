@@ -69,6 +69,35 @@ void runCpuReferenceClockContracts()
   requireCpuReference(initializeCsrCpuReferenceArcs(overflow_edges, overflow_work) == CsrCpuReferenceStageStatus::kSuccess, "numeric case arc initialization failed");
   requireCpuReference(propagateCsrCpuReferenceClocks(overflow_edges, payloads, overflow_work) == CsrCpuReferenceStageStatus::kNumericFailure,
                       "physical clock accumulation overflow must fail");
+  auto chain = makeCpuReferenceDagFixture(4, {{0, 3}, {1, 3}, {2, 3}});
+  chain.clocks = {{"clk", "clk", {{"u1:p0", NodeId{0}}, {"u1:p1", NodeId{1}}, {"u1:p2", NodeId{2}}},
+                   10.0, {0.0, 5.0}, true}};
+  chain.clock_owner_by_node.assign(4, std::string{"clk"});
+  for (auto& arc : chain.arcs) {
+    arc.eligibility.clock = true;
+    arc.transfer.delay = arc.transfer.delay_min = arc.transfer.delay_max = 0.1 + arc.source.value() * 0.75e-6;
+  }
+  FlatCsrEdgeView chain_edges(chain);
+  FlatTimingPayloadView chain_payloads(chain);
+  auto chain_levels = replayFifoLevelization(chain_edges, chain_payloads);
+  std::optional<decltype(work.result.physical_clock)> expected_clock;
+  do {
+    CsrCpuReferenceWorkState state;
+    requireCpuReference(initializeCsrCpuReferenceResult(chain_payloads, chain_levels, state) == CsrCpuReferenceStageStatus::kSuccess
+                            && initializeCsrCpuReferenceArcs(chain_edges, state) == CsrCpuReferenceStageStatus::kSuccess
+                            && propagateCsrCpuReferenceClocks(chain_edges, chain_payloads, state) == CsrCpuReferenceStageStatus::kSuccess,
+                        "clock epsilon-chain calculation failed");
+    const auto& actual = state.result.physical_clock;
+    for (std::size_t lane = 0; lane < 4; ++lane)
+      requireCpuReference(actual.predecessor_nodes.values[12 + lane] == NodeId{lane < 2 ? 1U : 0U},
+                          "clock epsilon winner differs from stable incoming identity");
+    if (expected_clock)
+      requireCpuReference(actual == *expected_clock, "clock result depends on the legal level schedule");
+    else
+      expected_clock = actual;
+  } while (std::next_permutation(chain_levels.level_nodes.begin(), chain_levels.level_nodes.begin() + 3,
+                                [](NodeId lhs, NodeId rhs) { return lhs.value() < rhs.value(); }));
+
 }
 
 }  // namespace ista::csr::test

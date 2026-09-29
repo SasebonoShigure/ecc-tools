@@ -4,7 +4,7 @@
 import bisect
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from dual_csr_descriptor_row_validator import validate_candidate_rows, validate_expected_rows
@@ -48,12 +48,12 @@ def _node_id_keys(resolver: dict[str, Any], functional: dict[str, Any],
 def _semantic_payload(value: dict[str, Any],
                       node_keys: dict[int, dict[str, Any]],
                       label: str, require: Require) -> dict[str, Any]:
-    result = copy.deepcopy(value)
+    result = dict(value)
     for field in ("source", "sink"):
         node = result[field]
         if type(node) is int:
             require(node in node_keys, f"{label}.{field} is out of NodeId range")
-            result[field] = copy.deepcopy(node_keys[node])
+            result[field] = node_keys[node]
     require(result["source"] == result["key"]["source"]
             and result["sink"] == result["key"]["sink"],
             f"{label} endpoint IDs differ from the semantic ArcKey")
@@ -82,7 +82,7 @@ def _published_payloads(structural: dict[str, Any],
         encoded = _canonical(key)
         require(encoded in active_by_key,
                 f"{label}.index ArcId {arc_id} lacks a functional payload")
-        payloads[arc_id] = copy.deepcopy(active_by_key[encoded])
+        payloads[arc_id] = active_by_key[encoded]
         active_ids.add(arc_id)
     for position, inactive in enumerate(structural["inactive_arcs"]):
         arc_id = inactive["id"]
@@ -112,7 +112,7 @@ def _published_nodes(functional: dict[str, Any],
         encoded = _canonical(key)
         require(encoded in by_key,
                 f"{label}.NodeId {node_id} lacks a functional node record")
-        result[node_id] = {"id": node_id, **copy.deepcopy(by_key[encoded])}
+        result[node_id] = {"id": node_id, **by_key[encoded]}
     return result
 
 
@@ -129,43 +129,46 @@ def _aux_shadow(value: dict[str, Any]) -> dict[int, list[int]]:
     result: dict[int, list[int]] = {}
     for source, arcs in zip(value["row_sources"], value["row_arcs"], strict=True):
         if arcs:
-            result[source] = list(arcs)
+            result[source] = arcs
     return result
 
 
-def _base_occurrence_rows(slots: list[object], offsets: list[int],
-                          arc_id: int) -> list[int]:
-    result: list[int] = []
+def _base_occurrence_rows(slots: Sequence[object], offsets: list[int],
+                          arc_ids: set[int]) -> dict[int, list[int]]:
+    result: dict[int, list[int]] = {arc_id: [] for arc_id in arc_ids}
     for row in range(len(offsets) - 1):
-        result.extend(row for value in slots[offsets[row]:offsets[row + 1]]
-                      if value == arc_id)
+        for position in range(offsets[row], offsets[row + 1]):
+            value = slots[position]
+            if isinstance(value, int) and value in result:
+                result[value].append(row)
     return result
-
-
-def _aux_occurrence_rows(aux: dict[int, list[int]], arc_id: int) -> list[int]:
-    return [source for source, row in aux.items()
-            for value in row if value == arc_id]
 
 
 def _verify_appended_adjacency(descriptor: dict[str, Any],
-                               base_out: list[object], out_offsets: list[int],
-                               base_in: list[object], in_offsets: list[int],
+                               base_out: Sequence[object], out_offsets: list[int],
+                               base_in: Sequence[object], in_offsets: list[int],
                                aux: dict[int, list[int]], label: str,
                                require: Require) -> set[int]:
     result: set[int] = set()
     for position, record in enumerate(descriptor["arc_appends"]):
         arc_id = record["id"]
+        require(arc_id not in result,
+                f"{label}.arc_appends[{position}] repeats an appended ArcId")
+        result.add(arc_id)
+    if not result:
+        return result
+    outgoing = _base_occurrence_rows(base_out, out_offsets, result)
+    incoming = _base_occurrence_rows(base_in, in_offsets, result)
+    for source, row in aux.items():
+        for arc_id in row:
+            if arc_id in outgoing:
+                outgoing[arc_id].append(source)
+    for position, record in enumerate(descriptor["arc_appends"]):
+        arc_id = record["id"]
         source = record["payload"]["source"]
         sink = record["payload"]["sink"]
-        item_label = f"{label}.arc_appends[{position}]"
-        require(arc_id not in result,
-                f"{item_label} repeats an appended ArcId")
-        result.add(arc_id)
-        outgoing = (_base_occurrence_rows(base_out, out_offsets, arc_id)
-                    + _aux_occurrence_rows(aux, arc_id))
-        incoming = _base_occurrence_rows(base_in, in_offsets, arc_id)
-        require(outgoing == [source] and incoming == [sink],
-                f"{item_label} does not have one endpoint-correct adjacency")
+        require(outgoing[arc_id] == [source] and incoming[arc_id] == [sink],
+                f"{label}.arc_appends[{position}] does not have one endpoint-correct adjacency")
     return result
 
 
@@ -260,7 +263,7 @@ def _generation_zero_anchor(
     for arc_id, expected in enumerate(anchor_arcs):
         require(index.get(arc_id) == expected["key"],
                 f"{label}.arcs[{arc_id}].key differs from the rewound index")
-        raw_payload = {name: copy.deepcopy(field)
+        raw_payload = {name: field
                        for name, field in expected.items()
                        if name not in {"id", "native_traversal_rank"}}
         semantic = _semantic_payload(
@@ -303,12 +306,12 @@ def validate_descriptor_replay(descriptors: list[dict[str, Any]],
                                baseline_reference_input: dict[str, Any],
                                expected_batches: list[dict[str, Any]],
                                label: str, require: Require) -> None:
-    """Reverse every descriptor from the published state to generation zero."""
+    """Rewind mutable containers; nested model/key records are read-only."""
     node_keys = _node_id_keys(resolver, functional, label, require)
     payloads, final_active = _published_payloads(
         structural, functional, node_keys, label, require)
     nodes = _published_nodes(functional, node_keys, label, require)
-    index = {slot["arc_id"]: copy.deepcopy(slot["current_active_key"])
+    index = {slot["arc_id"]: slot["current_active_key"]
              for slot in structural["arc_group_index"]["slots"]}
     base_out = list(structural["base_out"]["physical_slots"])
     out_offsets = structural["base_out"]["row_offsets"]
@@ -371,7 +374,7 @@ def validate_descriptor_replay(descriptors: list[dict[str, Any]],
             require(index[arc_id] == record["replacement_active_key"],
                     f"{item_label}.arc_group_index_delta[{position}] "
                     "replacement does not match the published shadow")
-            index[arc_id] = copy.deepcopy(record["expected_active_key"])
+            index[arc_id] = record["expected_active_key"]
 
 
         seen_slots: set[int] = set()
@@ -485,6 +488,39 @@ def validate_descriptor_replay(descriptors: list[dict[str, Any]],
 
 
 def run_descriptor_replay_self_test(require: Require) -> None:
+    appended = {"arc_appends": [
+        {"id": 4, "payload": {"source": 0, "sink": 2}},
+        {"id": 5, "payload": {"source": 1, "sink": 3}}]}
+    adjacency_errors: list[str] = []
+
+    def record_adjacency_error(ok: bool, message: str) -> None:  # noqa: FBT001 - Require callback
+        if not ok:
+            adjacency_errors.append(message)
+
+    for name, out, out_offsets, incoming, in_offsets, aux, valid in (
+        ("valid", [4], [0, 1, 1, 1, 1], [4, 5], [0, 0, 0, 1, 2], {1: [5]}, True),
+        ("base-duplicate", [4, 4], [0, 2, 2, 2, 2], [4, 5], [0, 0, 0, 1, 2], {1: [5]}, False),
+        ("wrong-source", [4], [0, 0, 1, 1, 1], [4, 5], [0, 0, 0, 1, 2], {1: [5]}, False),
+        ("aux-duplicate", [4], [0, 1, 1, 1, 1], [4, 5], [0, 0, 0, 1, 2], {1: [5, 5]}, False),
+        ("foreign-aux", [4], [0, 1, 1, 1, 1], [4, 5], [0, 0, 0, 1, 2], {1: [5], 3: [4]}, False),
+        ("foreign-input", [4], [0, 1, 1, 1, 1], [4, 5, 4], [0, 0, 0, 1, 3], {1: [5]}, False),
+        ("input-duplicate", [4], [0, 1, 1, 1, 1], [4, 4, 5], [0, 0, 0, 2, 3], {1: [5]}, False),
+    ):
+        adjacency_errors.clear()
+        _verify_appended_adjacency(
+            appended, out, out_offsets, incoming, in_offsets, aux, name,
+            record_adjacency_error)
+        require(bool(adjacency_errors) != valid,
+                f"appended adjacency canary {name} returned {adjacency_errors}")
+    duplicate_append = {"arc_appends": appended["arc_appends"] * 2}
+    adjacency_errors.clear()
+    _verify_appended_adjacency(
+        duplicate_append, [4], [0, 1, 1, 1, 1], [4, 5], [0, 0, 0, 1, 2],
+        {1: [5]}, "duplicate-append",
+        record_adjacency_error)
+    require(any("repeats an appended ArcId" in error for error in adjacency_errors),
+            "duplicate appended ArcId was accepted")
+
     number0 = {"kind": "finite", "value": 0.0, "negative_zero": False}
     number1 = {"kind": "finite", "value": 1.0, "negative_zero": False}
     node_a = {"kind": "port", "full_name": "a", "instance_name": "",
@@ -518,7 +554,9 @@ def run_descriptor_replay_self_test(require: Require) -> None:
                         node_record(node_b, "n")]
     descriptor = {"before": {"node_slots": 2, "net_slots": 1, "arc_slots": 1},
         "after": {"node_slots": 2, "net_slots": 1, "arc_slots": 1},
-        "node_appends": [], "arc_appends": [], "node_payload_changes": [],
+        "node_appends": [], "arc_appends": [], "node_payload_changes": [{
+            "id": 0, "expected_key": node_a, "expected_net_name": "before_n",
+            "replacement_net_name": "n"}],
         "logical_deactivations": [], "arc_group_index_delta": [],
         "payload_changes": [{"id": 0, "expected": payload(number0, semantic=False),
                              "replacement": payload(number1, semantic=False)}],
@@ -541,7 +579,7 @@ def run_descriptor_replay_self_test(require: Require) -> None:
          "binding": {"slot": 1, "native_name": "b", "tombstone": False}}]}
     batches = [{"baseline": {"canonical_pre_state": {
         "nodes": [node_a, node_b], "arcs": [key]}}}]
-    baseline = {"nodes": [{"id": node_id, **record}
+    baseline: dict[str, Any] = {"nodes": [{"id": node_id, **record}
                           for node_id, record in enumerate(functional_nodes)],
         "node_ids_by_key": [{"key": node_a, "id": 0},
                             {"key": node_b, "id": 1}],
@@ -551,21 +589,30 @@ def run_descriptor_replay_self_test(require: Require) -> None:
         "out_row_offsets": [0, 1, 1], "out_arc_ids": [0],
         "in_row_offsets": [0, 0, 1], "in_arc_ids": [0]}
 
+    baseline["nodes"][0]["net_name"] = "before_n"
+    sources = [descriptor, structural, functional, resolver, baseline, batches]
+    source_before = _canonical(sources)
     errors: list[str] = []
     validate_descriptor_replay([descriptor], structural, functional, resolver,
                                baseline, batches, "descriptor-replay-canary",
                                lambda ok, message: errors.append(message)
                                if not ok else None)
     require(not errors, f"valid descriptor replay was rejected: {errors}")
+    require(_canonical(sources) == source_before,
+            "descriptor replay modified borrowed source records")
     tampered = copy.deepcopy(descriptor)
     tampered["payload_changes"][0]["replacement"]["transfer"]["delay"] = {
         "kind": "finite", "value": 123.0, "negative_zero": False}
+    failed_sources = [tampered, *sources[1:]]
+    failed_before = _canonical(failed_sources)
     errors = []
     validate_descriptor_replay([tampered], structural, functional, resolver,
                                baseline, batches, "descriptor-payload-tamper",
                                lambda ok, message: errors.append(message)
                                if not ok else None)
     require(errors, "descriptor replacement payload tamper was accepted")
+    require(_canonical(failed_sources) == failed_before,
+            "failed descriptor replay modified borrowed source records")
     tampered_anchor = copy.deepcopy(baseline)
     tampered_anchor["nodes"][0]["net_name"] = "WRONG_NET"
     errors = []

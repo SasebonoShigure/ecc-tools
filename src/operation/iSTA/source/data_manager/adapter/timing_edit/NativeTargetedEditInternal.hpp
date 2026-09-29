@@ -42,8 +42,10 @@ struct PreparedNativeTargetedMetadata
   std::vector<std::pair<std::size_t, std::optional<std::size_t>>> _old_ranks;
   bool _applied{false};
 };
-csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditState& state, const std::string& name);
+csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditState& state, const std::string& name,
+                             const std::set<std::string>& starts, const std::set<std::string>& ends);
 csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTargetedEditState& state, std::size_t rank,
-                                    std::map<std::string, csr::ArcOutputLoadMatrix>& loads);
+                                    std::map<std::string, csr::ArcOutputLoadMatrix>& loads,
+                                     const std::set<std::string>& starts, const std::set<std::string>& ends);
 std::vector<csr::ArcId> targetedRow(const Database& database, const NativeTargetedEditState& state, csr::NodeId node, bool incoming);
 }  // namespace ista::timing_edit::detail

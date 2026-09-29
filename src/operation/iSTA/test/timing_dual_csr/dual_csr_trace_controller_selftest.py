@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from dual_csr_timing_evidence import run_timing_evidence_self_test
 from dual_csr_transaction_validator import (
+    normalize_plan,
     validate_identity_sequences,
     validate_transaction,
     validate_traversal_counts,
@@ -18,6 +19,20 @@ Difference = Callable[[object, object, str], str | None]
 
 def run_controller_self_test(require: Require, difference: Difference,
                              error_type: type[Exception]) -> None:
+    plan = {
+        "baseline": {"canonical_pre_state": {"arcs": [{"key": "a"}], "nodes": []}},
+        "edits": [{"rc_inputs": {"kind": "no_parasitic"}, "token": [1, 2]},
+                  {"rc_inputs": {"kind": "extracted", "parasitic_policy": "keep"}}],
+    }
+    before = json.dumps(plan, sort_keys=True)
+    normalized = normalize_plan(plan)
+    require(normalized == {
+        "baseline": {"canonical_pre_state": {"active_arcs": [{"key": "a"}], "nodes": []}},
+        "edits": [{"rc_inputs": {"kind": "none"}, "token": [1, 2]},
+                  {"rc_inputs": {"kind": "parasitic", "policy": "keep"}}],
+    }, "semantic plan normalization changed unrelated fields")
+    require(json.dumps(plan, sort_keys=True) == before,
+            "semantic plan normalization mutated the source")
     equal = {"x": [{"kind": "finite", "value": 1.0,
                      "negative_zero": False}]}
     within = {"x": [{"kind": "finite", "value": 1.0 + 5.0e-10,
@@ -81,7 +96,7 @@ def run_controller_self_test(require: Require, difference: Difference,
     valid_visits = {
         "levelization": {"base_out": 1, "aux_out": 1, "base_in": 2},
         "arc_initialization": {"base_out": 1, "aux_out": 1, "base_in": 0},
-        "forward_propagation": {"base_out": 2, "aux_out": 2, "base_in": 0},
+        "forward_propagation": {"base_out": 0, "aux_out": 0, "base_in": 4},
         "required_propagation": {"base_out": 1, "aux_out": 1, "base_in": 0},
     }
     traversal_errors: list[str] = []
@@ -112,7 +127,7 @@ def run_controller_self_test(require: Require, difference: Difference,
                       for stage, visits in valid_visits.items()}),
     ):
         if name == "plus-one":
-            tampered["forward_propagation"]["base_out"] += 1
+            tampered["forward_propagation"]["base_in"] += 1
         errors.clear()
         validate_traversal_counts(
             tampered, structural_visits, "full_stage5",

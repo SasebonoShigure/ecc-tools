@@ -52,6 +52,16 @@ struct AuxBinding
   AuxRow before;
   Index replacement_count{};
 };
+struct SlotUndo
+{
+  Index* location{};
+  Index value{};
+};
+struct ArcUndo
+{
+  Index id{};
+  Arc value;
+};
 struct PackedPatch
 {
   std::vector<SlotPatch> removes, changes, reverse_changes;
@@ -59,7 +69,10 @@ struct PackedPatch
   std::vector<DeactivatePatch> deactivations;
   std::vector<Arc> appends;
   std::vector<AuxPatch> aux_patches;
-  std::vector<Index> aux_values;
+  std::vector<Index> aux_values, appended_out, appended_in;
+  std::vector<Endpoint> endpoints;
+  std::vector<SlotUndo> slots;
+  std::vector<ArcUndo> arcs;
 };
 struct DevicePatch
 {
@@ -72,16 +85,6 @@ struct DevicePatch
   const AuxPatch* aux_patches{};
   Index aux_patch_count{};
   const Index* aux_values{};
-};
-struct SlotUndo
-{
-  Index* location{};
-  Index value{};
-};
-struct ArcUndo
-{
-  Index id{};
-  Arc value;
 };
 struct NewNodePlacement
 {
@@ -175,17 +178,26 @@ struct FullGraphBuffers
   DeviceBuffer<Arc> arcs;
   DeviceBuffer<Endpoint> endpoints;
 };
+struct ClockWorkItem { Index node, owner, level; };
 struct DeviceStorage
 {
   explicit DeviceStorage(CsrCudaTelemetry& telemetry) : memory(telemetry) {}
   Runtime memory;
+  unsigned kernel_threads{256};  // Test friend may vary launch shape; no runtime mode.
   ModelStorage models;
   Index uploaded_children{}, uploaded_tables{};
   FullGraphBuffers graph, full_work;
   HostGraphUndo host_undo;
+  PackedPatch patch_uploads;
   bool full_graph_pending{false};
-  DeviceBuffer<Index> indegrees;
+  DeviceBuffer<Index> indegrees, frontier_offsets, frontier_candidates, wake_keys;
+  DeviceBuffer<int> frontier_count;
+  DeviceBuffer<std::byte> algorithm_scratch;
+  std::vector<ClockWorkItem> clock_work;
+  DeviceBuffer<ClockWorkItem> clock_work_device;
+  DeviceBuffer<double> end_arrivals, default_required;
   std::vector<AuxBinding> aux_bindings;
+  DeviceBuffer<AuxBinding> aux_binding_upload;
   DeviceBuffer<Child> children;
   DeviceBuffer<double> tables;
   ResultBuffers results[2];
@@ -201,9 +213,10 @@ struct DeviceStorage
   Index slot_undo_count{}, arc_undo_count{};
   bool pending{false}, undo_captured{false}, poisoned{false}, closed{false};
 };
-void launchCaptureUndo(DeviceView view, SlotUndo* slots, Index slot_count, ArcUndo* arcs, Index arc_count, cudaStream_t stream);
-void launchRestoreUndo(DeviceView view, const SlotUndo* slots, Index slot_count, const ArcUndo* arcs, Index arc_count, cudaStream_t stream);
-void launchTargetedPatch(DeviceView view, DevicePatch patch, cudaStream_t stream);
+void launchAuxBindings(DeviceView view, const AuxBinding* bindings, Index count, Index capacity, cudaStream_t stream, unsigned threads);
+void launchCaptureUndo(DeviceView view, SlotUndo* slots, Index slot_count, ArcUndo* arcs, Index arc_count, cudaStream_t stream, unsigned threads);
+void launchRestoreUndo(DeviceView view, const SlotUndo* slots, Index slot_count, const ArcUndo* arcs, Index arc_count, cudaStream_t stream, unsigned threads);
+std::uint64_t launchTargetedPatch(DeviceView view, DevicePatch patch, cudaStream_t stream, unsigned threads);
 }  // namespace ista::csr::cuda_detail
 
 namespace ista::csr {
@@ -231,17 +244,19 @@ struct CudaDualCsrSession::Impl
   Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before = {});
   Impl(std::shared_ptr<Impl> before, const CudaDualCsrPatch& patch, CudaLevelizationMode mode);
   static void validatePatch(const Impl& before, const CudaDualCsrPatch& patch);
-  cuda_detail::PackedPatch prepare(const Impl& before, const CudaDualCsrPatch& patch);
+  cuda_detail::PackedPatch& prepare(const Impl& before, const CudaDualCsrPatch& patch);
   ~Impl();
   void allocate();
   void bindGraph() noexcept;
-  void bindAuxRows();
+  std::uint64_t bindAuxRows();
   std::vector<std::vector<cuda_detail::Index>> readAuxRows();
   void cancel() noexcept;
   CsrCudaTelemetry restorePending() noexcept;
+  void levelizeFull();
+  void propagate();
   void execute(CudaLevelizationMode mode = CudaLevelizationMode::kFull);
   const CsrTimingValues& materialize();
   std::optional<CsrFifoLevelization> reconstructMixed();
-  void transferPatch(const Impl& before, const CudaDualCsrPatch& patch, const cuda_detail::PackedPatch& packed);
+  void transferPatch(const Impl& before, const CudaDualCsrPatch& patch, cuda_detail::PackedPatch& packed);
 };
 }  // namespace ista::csr

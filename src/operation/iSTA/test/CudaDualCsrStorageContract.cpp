@@ -247,29 +247,47 @@ void payloadFailures(CudaLevelizationMode mode)
   auto patch = patchFor(input, 0, water, water);
   const auto committed = owner.timingValues();
   const auto old_launches = owner.telemetry().cuda.kernel_launches;
+  const auto old_algorithms = owner.telemetry().cuda.device_algorithm_calls;
   auto changed = expected;
   require(changed.output_load.has_value(), "cell transaction fixture lacks load");
   (*changed.output_load)[0][0] += 0.125;
   patch.payload_changes = {{arc.id, expected, changed}};
-  {
-    auto abandoned = owner.stage(patch, mode);
-    require(!abandoned.computationCode(), "local undo fixture did not compute");
-    if constexpr (incregpusta_debug_checks_enabled)
-      require(abandoned.debugState().arcs[arc.id.value()].load[0] == (*changed.output_load)[0][0],
-              "abandonment fixture did not modify device payload");
-  }
-  require(!owner.poisoned() && owner.timingValues() == committed && owner.telemetry().cuda.kernel_launches == old_launches,
-          "abandoned device transaction changed committed result or charged previous generation");
   const auto other = std::ranges::find(input.arcs, ArcKind::kNet, &ArcRecord::kind);
   require(other != input.arcs.end(), "partial patch fixture lacks a second arc");
   const auto original_net = payloadFor(*other);
+  const auto position = std::ranges::find(input.out_arc_ids, other->id);
+  require(position != input.out_arc_ids.end(), "partial patch fixture lacks its physical slot");
+  const auto slot = static_cast<std::uint64_t>(position - input.out_arc_ids.begin());
+  patch.removes = {{other->source, slot, other->id}};
+  patch.aux_rows = {{other->source, {}, {other->id}}};
+  {
+    auto abandoned = owner.stage(patch, mode);
+    require(!abandoned.computationCode(), "local undo fixture did not compute");
+    if constexpr (incregpusta_debug_checks_enabled) {
+      const auto graph = abandoned.debugState();
+      require(graph.arcs[arc.id.value()].load[0] == (*changed.output_load)[0][0]
+                  && graph.out_arcs[slot] == cuda_detail::absent
+                  && graph.aux_rows[other->source.value()] == std::vector<cuda_detail::Index>{other->id.value()},
+              "abandonment fixture did not modify the device payload and adjacency");
+    }
+  }
+  require(!owner.poisoned() && owner.timingValues() == committed && owner.telemetry().cuda.kernel_launches == old_launches
+              && owner.telemetry().cuda.device_algorithm_calls == old_algorithms,
+          "abandoned device transaction changed committed result or charged previous generation");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    const auto graph = owner.debugState();
+    require(graph.out_arcs[slot] == other->id.value() && graph.aux_rows[other->source.value()].empty(),
+            "abandonment did not restore the physical adjacency before the failure test");
+  }
   auto wrong_expected = original_net;
   wrong_expected.output_load = csr::test::outputLoad(123.0);
-  // A second payload mismatch must undo the first actual device write.
+  // Base removal completes in an earlier kernel than the payload mismatch.
+  // Actual partial mutation must be restored regardless of payload thread order.
   patch.payload_changes.push_back({other->id, wrong_expected, original_net});
   auto partial = owner.stage(patch, mode);
   require(partial.computationCode() == CsrComputationCode::kInvariantViolation && !owner.poisoned()
-              && owner.timingValues() == committed && owner.telemetry().cuda.kernel_launches == old_launches,
+              && owner.timingValues() == committed && owner.telemetry().cuda.kernel_launches == old_launches
+              && owner.telemetry().cuda.device_algorithm_calls == old_algorithms,
           "partial patch failure changed committed results or rollback accounting");
   require(partial.close() && !owner.poisoned() && owner.timingValues() == committed,
           "closing a rejected candidate destroyed the healthy runtime owner");
@@ -278,6 +296,8 @@ void payloadFailures(CudaLevelizationMode mode)
     require(!verify_device.computationCode() && verify_device.timingValues() == committed,
             "partial patch rollback left modified device state");
   }
+  patch.removes.clear();
+  patch.aux_rows.clear();
   auto malformed = expected;
   ista::csr::test::mutateChildren(malformed.transfer, [&](auto& children) { children[0].delay_tables[0].values.push_back(1.0); });
   patch.payload_changes = {{arc.id, expected, malformed}};
@@ -315,7 +335,7 @@ void persistentFullRebuild()
       + (input.nodes.size() * (incregpusta_debug_checks_enabled ? 2 : 1) + expected.level_offsets.size()) * sizeof(cuda_detail::Index);
   for (unsigned batch = 0; batch < 5; ++batch) {
     auto candidate = owner.stageFull(input, water);
-    require(!candidate.computationCode() && candidate.telemetry().cuda.d2h_bytes == levels_only,
+    require(!candidate.computationCode() && candidate.telemetry().cuda.d2h_bytes == levels_only + sizeof(cuda_detail::Status) + candidate.telemetry().cuda.levelization_decision_bytes,
             "full rebuild materialized unrequested timing");
     require(candidate.telemetry().cuda.h2d_bytes < baseline_upload,
             "full rebuild retransmitted unchanged immutable models");
@@ -394,7 +414,8 @@ void runCudaLazySequence(CudaLevelizationMode mode)
   require(first_query.d2h_bytes > before_query.d2h_bytes && baseline_readback < first_query.d2h_bytes,
           "first query did not download deferred timing");
   require(&owner.timingValues() == &timing && owner.telemetry().cuda.d2h_bytes == first_query.d2h_bytes
-              && owner.telemetry().cuda.kernel_launches == before_query.kernel_launches,
+              && owner.telemetry().cuda.kernel_launches == before_query.kernel_launches
+              && owner.telemetry().cuda.device_algorithm_calls == before_query.device_algorithm_calls,
           "repeated query transferred or recomputed timing");
   const auto expected = timing;
   auto staged = owner.stage(patchFor(input, 3, water, water), mode);
@@ -406,6 +427,7 @@ void runCudaLazySequence(CudaLevelizationMode mode)
 
 void runCudaDualCsrStorageContracts(CudaLevelizationMode mode)
 {
+  runCudaParallelPatchContracts(mode);
   persistentFullRebuild();
   runCudaLazySequence(mode);
   auxReuseAndUndo(mode);

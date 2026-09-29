@@ -15,6 +15,8 @@
 #include "IncreGpuStaPerformanceJson.hpp"
 #include "ProductionFreshSessionLoader.hpp"
 #include "PublicTimingJson.hpp"
+#include "Stage12Benchmark.hpp"
+#include "NativeFullTransactionChecks.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 
 namespace {
@@ -69,7 +71,9 @@ Json telemetry(const csr::CudaFullTraceBatch& batch)
           {"d2h_bytes", c.d2h_bytes},
           {"d2d_bytes", c.d2d_bytes},
           {"allocations", c.allocations},
-          {"kernel_launches", c.kernel_launches},
+          {"explicit_kernel_launches", c.kernel_launches},
+          {"device_algorithm_calls", c.device_algorithm_calls},
+          {"levelization_decision_bytes", c.levelization_decision_bytes},
           {"device_name", c.device_name},
           {"driver_version", c.driver_version},
           {"runtime_version", c.runtime_version}};
@@ -83,10 +87,27 @@ int main(int argc, char** argv)
       std::cout << timing_dual_csr::test::incregpustaBuildInfo().dump() << '\n';
       return 0;
     }
+    if (argc >= 2 && std::string_view(argv[1]) == "benchmark") {
+      require(!incregpusta_debug_checks_enabled, "benchmark requires checks OFF before sampling");
+      if (timing_dual_csr::test::incregpustaBuildInfo().at("build_config") != "Release") {
+        std::cerr << "benchmark skipped: Release build required\n";
+        return 77;
+      }
+      require(argc == 14, "benchmark --replay FILE --prefix N --backend cpu|cuda --strategy full|incremental --threads N --output FILE");
+      std::map<std::string, std::string> options;
+      for (int i = 2; i < argc; i += 2)
+        require(options.emplace(argv[i], argv[i + 1]).second, "duplicate option");
+      const auto result = ista::test::runStage12Benchmark(options);
+      std::ofstream file(options.at("--output"));
+      file << result << '\n';
+      file.close();
+      require(bool(file), "benchmark output write failed");
+      return 0;
+    }
     require(argc == 8, "usage: probe cuda|fresh|performance|public (--trace FILE | --replay FILE) --prefix N --output FILE");
     const std::string mode = argv[1];
-    require(mode == "cuda" || mode == "fresh" || mode == "performance" || mode == "rollback" || mode == "public", "unknown execution mode");
-    require(mode == "public" || (mode == "performance" ? !incregpusta_debug_checks_enabled : incregpusta_debug_checks_enabled),
+    require(mode == "native-transactions" || mode == "cuda" || mode == "fresh" || mode == "performance" || mode == "rollback" || mode == "public", "unknown execution mode");
+    require(mode == "native-transactions" || mode == "public" || (mode == "performance" ? !incregpusta_debug_checks_enabled : incregpusta_debug_checks_enabled),
             "performance requires checks OFF; diagnostics require checks ON");
     std::map<std::string, std::string> options;
     for (int i = 2; i < argc; i += 2)
@@ -99,17 +120,29 @@ int main(int argc, char** argv)
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
     const bool replay_only = options.contains("--replay");
     const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
-    Json output{{"schema_version", "ista-cuda-full-trace/3.0.0"},
+    Json output{{"schema_version", "ista-cuda-full-trace/4.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
-                {"requested_backend", mode == "fresh" ? "cpu" : "cuda"},
-                {"executed_backend", mode == "fresh" ? "cpu" : "cuda"},
+                {"requested_backend", (mode == "fresh" || mode == "native-transactions") ? "cpu" : "cuda"},
+                {"executed_backend", (mode == "fresh" || mode == "native-transactions") ? "cpu" : "cuda"},
                 {"requested_strategy", "full"},
                 {"executed_strategy", "full"},
                 {"fallback_count", 0},
                 {"correctness_comparison", "not_run"},
                 {"build", timing_dual_csr::test::incregpustaBuildInfo()}};
-    if (mode == "fresh") {
+    if (mode == "native-transactions") {
+      timing_dual_csr::test::DualCsrTargetedArtifactSupport artifacts(program);
+      timing_edit::oracle::ProductionFreshSessionLoader::run(artifacts.artifacts(), [&](const auto& view) {
+        ista::test::requireTimingOnlyFiles(artifacts.artifacts().run_directory);
+        ista::test::checkNativeFullTransactions(view, program);
+      });
+      const auto temporary_root = artifacts.artifacts().run_directory.parent_path();
+      artifacts.close();
+      require(!std::filesystem::exists(temporary_root), "explicit artifact cleanup left the owned directory");
+      artifacts.close();
+      output["transaction_checks"] = "passed";
+      output["lifecycle_cleanup_completed"] = true;
+    } else if (mode == "fresh") {
       auto fresh = timing_dual_csr::test::runProductionFreshSemanticPrefix(program, prefix);
       output["functional"] = timing_dual_csr::test::functionalSemanticReceiptToJson(fresh.functional);
     } else {
@@ -127,7 +160,7 @@ int main(int argc, char** argv)
         timing_edit::oracle::ProductionFreshSessionLoader::run(artifacts.artifacts(), [&](const auto& view) {
           bool rejected = false;
           try {
-            static_cast<void>(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input.analysis_context,
+            static_cast<void>(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input,
                                                            view.authority, rejected_program, prefix));
           } catch (const std::exception& error) {
             rejected = std::string(error.what()).find("CUDA_MISSING_SECOND_BATCH_CELL") != std::string::npos;
@@ -138,7 +171,7 @@ int main(int argc, char** argv)
           restored_input = csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(restored));
         }, StaBackend::kCuda);
         timing_edit::oracle::ProductionFreshSessionLoader::run(artifacts.artifacts(), [&](const auto& view) {
-          static_cast<void>(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input.analysis_context, view.authority, program, 1));
+          static_cast<void>(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input, view.authority, program, 1));
           auto expected = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
           require(std::holds_alternative<csr::CsrReferenceInput>(expected)
                       && restored_input == csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(expected)),
@@ -150,10 +183,14 @@ int main(int argc, char** argv)
           [&](const auto& view) {
             const auto physical_before
                 = incregpusta_debug_checks_enabled ? timing_dual_csr::test::captureTargetedSourcePhysical() : buffer_trace::SourcePhysicalFunctionalReceipt{};
-            result.emplace(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input.analysis_context, view.authority, program, prefix));
+            result.emplace(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input, view.authority, program, prefix));
             // Explicit cross-build consumer test; ordinary performance does not serialize public results.
-            if (mode == "public")
+            if (mode == "public") {
+              ista::test::requireTimingOnlyFiles(artifacts.artifacts().run_directory);
+              const auto streamed = ista::TimingReporterProbeAccess::read();
               output["public"] = ista::test::capturePublicTiming();
+              require(output["public"] == streamed, "stream/file public timing output differs");
+            }
             if constexpr (incregpusta_debug_checks_enabled)
               require(physical_before == timing_dual_csr::test::captureTargetedSourcePhysical(), "source physical state changed");
           },

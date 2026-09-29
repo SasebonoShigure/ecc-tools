@@ -17,6 +17,8 @@
 #include "DualCsrBaselineFactory.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "NativeDesignEditTranslator.hpp"
+#include "NativeDualCsrPayloadCaptureInternal.hpp"
+#include "TimingEditDualCsrCaptureEvidenceInternal.hpp"
 #include "NativeTimingEditPreparer.hpp"
 #include "TimingCellArc.hpp"
 #include "TimingCellPort.hpp"
@@ -290,6 +292,37 @@ bool descriptorHasLoad(const DualCsrBatchDescriptor& descriptor,
              });
 }
 
+void checkCapacitanceEvidenceLookup(const Baseline& baseline,
+                                    const PendingStructuredBatch& pending)
+{
+  csr::detail::NativeLibraryModels models(baseline.fixture.database());
+  auto capture = ista::timing_dual_csr::detail::captureNativeDualCsrPayload(
+      baseline.fixture.database(), models, DualSemanticReadView{baseline.state},
+      baseline.arc_group_index, pending.stagedResolver(), pending.capturePlan());
+  require(capture.success(), "model-evidence fixture capture failed");
+  auto records = std::move(*capture.records);
+  const auto validate = [&] {
+    return ista::timing_dual_csr::detail::validateStructuredNodeModelEvidence(pending, records);
+  };
+  require(!validate(), "valid capacitance evidence was rejected");
+  std::ranges::reverse(records.nodes);
+  std::ranges::reverse(records.cell_pin_capacitances);
+  require(!validate(), "capacitance lookup depends on capture storage order");
+  require(records.cell_pin_capacitances.size() >= 2, "capacitance fixture needs two identities");
+  const auto saved = records.cell_pin_capacitances;
+  records.cell_pin_capacitances.back() = records.cell_pin_capacitances.front();
+  require(validate() == std::optional<std::string>{"pin-capacitance evidence repeats one typed request"},
+          "duplicate capacitance identity was accepted");
+  records.cell_pin_capacitances = saved;
+  records.cell_pin_capacitances.front().requested.expected_port += "_foreign";
+  require(validate() == std::optional<std::string>{"pin-capacitance evidence has a mismatched typed identity"},
+          "lookup matched only the ref and ignored the complete request");
+  records.cell_pin_capacitances = saved;
+  records.cell_pin_capacitances.front().model.default_capacitance += 1.0;
+  require(validate() == std::optional<std::string>{"pin-capacitance evidence differs from its library port"},
+          "capacitance lookup bypassed the library-value check");
+}
+
 void checkStableReresolutionAndBoundaryCanaries()
 {
   Baseline baseline = makeBaseline();
@@ -312,6 +345,13 @@ void checkStableReresolutionAndBoundaryCanaries()
               && rejected.audit() != nullptr
               && !rejected.audit()->full_export_guard_active,
           "duplicate stable request was not rejected before capture");
+
+  auto malformed_kind = plan;
+  require(malformed_kind.node_roles.size() >= 2, "fixture needs two model requests");
+  malformed_kind.node_roles[1].expected_key.kind = static_cast<csr::NodeKind>(255);
+  rejected = read(baseline, baseline.fixture.database(), pending, malformed_kind);
+  require(rejected.error() == NarrowCaptureError::kUnplannedDependency,
+          "malformed second model key escaped the typed error boundary");
 
   auto wrong_multiplicity = plan;
   auto active = std::ranges::find_if(
@@ -340,6 +380,7 @@ void checkStableReresolutionAndBoundaryCanaries()
   require(rejected.error() == NarrowCaptureError::kBatchBindingMismatch,
           "typed exact plan/batch mismatch was accepted");
 
+  checkCapacitanceEvidenceLookup(baseline, pending);
   CandidateBoundCapture capture
       = read(baseline, baseline.fixture.database(), pending, plan);
   require(capture.success() && capture.audit() != nullptr,

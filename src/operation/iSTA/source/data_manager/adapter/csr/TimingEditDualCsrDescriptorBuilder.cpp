@@ -33,6 +33,17 @@ using detail::CapturedNetLoad;
 using detail::CapturedNode;
 using detail::NarrowTimingRecords;
 
+// Borrow only within build(): capture records and the frozen plan outlive these
+// indexes. Their iteration order never determines descriptor or traversal order.
+struct ArcRefLess
+{
+  bool operator()(const timing_edit::StableArcRef* lhs,
+                  const timing_edit::StableArcRef* rhs) const
+  {
+    return *lhs < *rhs;
+  }
+};
+
 [[noreturn]] void invalid(std::string message)
 {
   throw std::invalid_argument("dual csr descriptor builder: "
@@ -219,13 +230,34 @@ void requireArcCoverage(const PendingStructuredBatch& pending,
       = pending.expectedBefore().arcGroupIndex();
   if (records.arcs.size() != plan.arcs.size())
     invalid("captured arc coverage is not exact");
+  std::map<const timing_edit::StableArcRef*, const CapturedArc*, ArcRefLess> arcs;
+  const auto base_less = [](const csr::ArcKeyBase* lhs, const csr::ArcKeyBase* rhs) {
+    return csr::arcKeyBaseLess(*lhs, *rhs);
+  };
+  std::map<const csr::ArcKeyBase*, std::vector<std::uint64_t>, decltype(base_less)> groups(base_less);
+  for (const auto& captured : records.arcs) {
+    if (!arcs.emplace(&captured.ref, &captured).second)
+      invalid("arcs has duplicate records");
+    if (captured.active)
+      groups[&captured.payload.key.base].push_back(captured.payload.key.parallel_ordinal);
+  }
+  for (auto& [base, ordinals] : groups) {
+    std::ranges::sort(ordinals);
+    if (std::ranges::adjacent_find(ordinals) != ordinals.end())
+      invalid("active candidate canonical key is not unique");
+    for (std::size_t index = 0; index < ordinals.size(); ++index)
+      if (ordinals[index] != index)
+        invalid("captured ArcKeyBase ordinals are not continuous");
+  }
+  std::map<const timing_edit::StableArcRef*, std::size_t, ArcRefLess> delay_changes_by_ref;
+  for (const auto& ref : plan.invalidation_closure.arc_delays)
+    ++delay_changes_by_ref[&ref];
   std::set<std::uint64_t> ids;
-  std::vector<csr::ArcKey> active_keys;
   for (const auto& request : plan.arcs) {
-    const auto& captured = requireUnique(
-        records.arcs,
-        [&](const auto& value) { return value.ref == request.ref; },
-        "arcs");
+    const auto found = arcs.find(&request.ref);
+    if (found == arcs.end())
+      invalid("arcs is missing a planned record");
+    const auto& captured = *found->second;
     const auto& binding = stagedArcBinding(staged, request.ref);
     const std::uint64_t id = binding.slot.value();
     if (!ids.insert(id).second || captured.id.value() != id
@@ -256,8 +288,8 @@ void requireArcCoverage(const PendingStructuredBatch& pending,
       invalid("active captured arc base differs from post request");
     if (id < before.arc_slots.size()) {
       const auto& expected = before.arc_slots[id].payload;
-      const auto delay_changes = std::ranges::count(
-          plan.invalidation_closure.arc_delays, request.ref);
+      const auto delay = delay_changes_by_ref.find(&request.ref);
+      const auto delay_changes = delay == delay_changes_by_ref.end() ? 0 : delay->second;
       if (delay_changes > 1)
         invalid("arc-delay field policy repeats one StableArcRef");
       const auto captured_sink = std::ranges::find(
@@ -294,21 +326,8 @@ void requireArcCoverage(const PendingStructuredBatch& pending,
                          load->output_load}))
         invalid("captured existing arc changed outside its field policy");
     }
-    if (std::ranges::find(active_keys, captured.payload.key)
-        != active_keys.end())
-      invalid("active candidate canonical key is not unique");
-    active_keys.push_back(captured.payload.key);
-    std::vector<std::uint64_t> ordinals;
-    for (const auto& peer : records.arcs)
-      if (peer.active
-          && peer.payload.key.base == captured.payload.key.base)
-        ordinals.push_back(peer.payload.key.parallel_ordinal);
-    std::ranges::sort(ordinals);
-    if (ordinals.size() != request.expected_post_multiplicity)
+    if (groups.at(&captured.payload.key.base).size() != request.expected_post_multiplicity)
       invalid("captured ArcKeyBase multiplicity differs from plan");
-    for (std::size_t index = 0; index < ordinals.size(); ++index)
-      if (ordinals[index] != index)
-        invalid("captured ArcKeyBase ordinals are not continuous");
   }
 }
 
@@ -451,14 +470,18 @@ void requireReferenceDelta(const PendingStructuredBatch& pending,
       invalid("capacitance refers to an uncaptured appended node");
     return graph.nodes[id.value()].key;
   };
+  std::map<csr::NodeId, const csr::CellPinCapacitanceModel*> current_caps;
+  if (!records.cell_pin_capacitances.empty())
+    for (const auto& cap : current.cell_pin_capacitances)
+      current_caps.emplace(cap.node, &cap);
   std::vector<csr::CellPinCapacitanceModel> caps;
   for (const auto& captured : records.cell_pin_capacitances) {
     if (captured.requested.expected_key != keyForId(captured.model.node))
       invalid("captured capacitance key differs from its logical NodeId");
-    const auto found = std::ranges::find(current.cell_pin_capacitances, captured.model.node, &csr::CellPinCapacitanceModel::node);
-    if (found == current.cell_pin_capacitances.end())
+    const auto found = current_caps.find(captured.model.node);
+    if (found == current_caps.end())
       caps.push_back(captured.model);
-    else if (*found != captured.model)
+    else if (*found->second != captured.model)
       invalid("captured capacitance changes a committed NodeId");
   }
   requireAppend(delta.cell_pin_capacitances, current.cell_pin_capacitances.size(), caps, "reference.cell_pin_capacitances");
@@ -530,11 +553,15 @@ DualCsrBatchDescriptor basicDescriptor(
       descriptor.payload_changes.push_back(
           {captured.id, expected.payload, captured.payload});
   }
+  std::map<const timing_edit::StableArcRef*, const AffectedArcCapture*, ArcRefLess> requests;
+  for (const auto& request : pending.capturePlan().arcs)
+    if (!requests.emplace(&request.ref, &request).second)
+      invalid("arc_index_requests has duplicate records");
   for (const auto& captured : records.arcs) {
-    const auto& request = requireUnique(
-        pending.capturePlan().arcs,
-        [&](const auto& value) { return value.ref == captured.ref; },
-        "arc_index_requests");
+    const auto found = requests.find(&captured.ref);
+    if (found == requests.end())
+      invalid("arc_index_requests is missing a planned record");
+    const auto& request = *found->second;
     const std::optional<csr::ArcKey> replacement
         = captured.active
               ? std::optional<csr::ArcKey>{captured.payload.key}

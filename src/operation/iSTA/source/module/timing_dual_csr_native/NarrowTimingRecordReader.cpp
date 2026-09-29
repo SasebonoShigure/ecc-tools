@@ -246,17 +246,16 @@ std::optional<NarrowCaptureError> validateModelRequests(
 {
   const auto validateSet = [&](const auto& requests) {
     std::set<timing_edit::StableNodeRef> refs;
-    std::vector<csr::NodeKey> keys;
+    std::set<csr::NodeKey, decltype(&csr::nodeKeyLess)> keys(csr::nodeKeyLess);
     for (const auto& request : requests) {
-      if (!refs.insert(request.ref).second
-          || std::ranges::find(keys, request.expected_key)
-                 != keys.end())
-        return std::optional<NarrowCaptureError>{
-            NarrowCaptureError::kDuplicateRequest};
+      // Validate enum values before the canonical ordering comparator sees them.
       if (const auto error = validateModelRequest(
               request, committed, staged, plan))
         return error;
-      keys.push_back(request.expected_key);
+      if (!refs.insert(request.ref).second
+          || !keys.insert(request.expected_key).second)
+        return std::optional<NarrowCaptureError>{
+            NarrowCaptureError::kDuplicateRequest};
     }
     return std::optional<NarrowCaptureError>{};
   };
@@ -340,10 +339,9 @@ std::optional<NarrowCaptureError> validateArcRequests(
     timing_edit::TimingEditResolverView staged,
     const AffectedCapturePlan& plan)
 {
-  std::vector<timing_edit::StableArcRef> refs;
-  refs.reserve(plan.arcs.size());
+  std::map<timing_edit::StableArcRef, const AffectedArcCapture*> requests;
   for (const auto& request : plan.arcs) {
-    if (std::ranges::find(refs, request.ref) != refs.end())
+    if (!requests.emplace(request.ref, &request).second)
       return NarrowCaptureError::kDuplicateRequest;
     if (csr::validateArcKeyBase(request.expected_post_base))
       return NarrowCaptureError::kArcOrdinalMismatch;
@@ -390,34 +388,30 @@ std::optional<NarrowCaptureError> validateArcRequests(
                  != request.expected_post_base)
         return NarrowCaptureError::kArcKeyMismatch;
     }
-    refs.push_back(request.ref);
   }
 
+  std::map<csr::ArcKeyBase, std::pair<std::uint64_t, std::uint64_t>,
+           decltype(&csr::arcKeyBaseLess)> multiplicities(csr::arcKeyBaseLess);
   for (const auto& request : plan.arcs) {
     if (request.expected_post_multiplicity == 0)
       continue;
-    std::uint64_t peers = 0;
-    for (const auto& peer : plan.arcs) {
-      if (peer.expected_post_multiplicity > 0
-          && peer.expected_post_base == request.expected_post_base) {
-        if (peer.expected_post_multiplicity
-            != request.expected_post_multiplicity)
-          return NarrowCaptureError::kArcMultiplicityMismatch;
-        ++peers;
-      }
-    }
-    if (peers != request.expected_post_multiplicity)
+    auto [entry, inserted] = multiplicities.try_emplace(
+        request.expected_post_base, request.expected_post_multiplicity, 0);
+    if (!inserted && entry->second.first != request.expected_post_multiplicity)
+      return NarrowCaptureError::kArcMultiplicityMismatch;
+    ++entry->second.second;
+  }
+  for (const auto& [base, counts] : multiplicities) {
+    static_cast<void>(base);
+    if (counts.first != counts.second)
       return NarrowCaptureError::kArcMultiplicityMismatch;
   }
 
   for (const auto& assignment : plan.slot_plan.arcs) {
-    const auto request = std::ranges::find_if(
-        plan.arcs, [&](const auto& request) {
-          return request.ref == assignment.ref;
-        });
-    if (request == plan.arcs.end()
+    const auto request = requests.find(assignment.ref);
+    if (request == requests.end()
         || assignment.tombstone
-               != (request->expected_post_multiplicity == 0)
+               != (request->second->expected_post_multiplicity == 0)
         || assignment.slot.value() >= plan.after.arc_slots
         || (assignment.tombstone
             && assignment.slot.value() >= plan.before.arc_slots))

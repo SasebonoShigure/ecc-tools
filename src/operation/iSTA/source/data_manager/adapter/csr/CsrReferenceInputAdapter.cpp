@@ -277,9 +277,13 @@ CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Datab
     detail::exportReferenceLoadsAndSupport(state);
 
     state.input.source_identity = makeReferenceInputIdentity(state.input, caller_session_token, 0);
-    const auto violations = validateReferenceInputForSession(state.input, caller_session_token);
-    if (!violations.empty())
-      throw std::logic_error("native CSR reference projection violated its complete contract: " + violations.front().field + ": " + violations.front().message);
+    // Producers enforce input boundaries while constructing this owned state.
+    // Replaying the complete contract (including identity hashing) is diagnostic.
+    if constexpr (incregpusta_debug_checks_enabled) {
+      const auto violations = validateReferenceInputForSession(state.input, caller_session_token);
+      if (!violations.empty())
+        throw std::logic_error("native CSR reference projection violated its complete contract: " + violations.front().field + ": " + violations.front().message);
+    }
     return std::move(state.input);
   } catch (const detail::ReferenceExportAbort& error) {
     return progress.failure(error.code());

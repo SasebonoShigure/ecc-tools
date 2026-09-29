@@ -38,6 +38,8 @@ class DualCsrTargetedArtifactSupport final
   artifacts() const noexcept;
   [[nodiscard]] std::vector<buffer_trace::SourceArtifactFunctionalRecord>
   capture() const;
+  // Explicit success path reports cleanup errors; destruction remains no-throw.
+  void close();
 
  private:
   class Impl;

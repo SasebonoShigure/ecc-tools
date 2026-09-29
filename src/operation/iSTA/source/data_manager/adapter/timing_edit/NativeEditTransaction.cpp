@@ -107,10 +107,9 @@ struct NativeEditTransaction::Undo
   {
     raw.database = &target;
   }
-  Undo(Database& target, const PreparedBatch& batch, TimingEditResolverView resolver)
+  Undo(Database& target, std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver, std::uint64_t first_instance_id)
       : database(target),
-        raw(detail::prepareNativeBufferInsertions(target, batch.normalizedEdits(), resolver,
-                                                   detail::nextNativeInstanceId(target))),
+        raw(detail::prepareNativeBufferInsertions(target, edits, resolver, first_instance_id)),
         full(std::in_place, target)
   {
   }
@@ -148,7 +147,15 @@ NativeEditTransaction NativeEditTransaction::prepareFull(
     throw std::invalid_argument("native edit transaction received an empty prepared batch");
   if (batch.policyReceipt().disposition != EditDisposition::kSupported)
     throw std::invalid_argument("native edit transaction requires supported normalized edits");
-  auto undo = std::make_unique<Undo>(STADM.getDatabase(), batch, resolver);
+  return prepareFull(authority, batch.normalizedEdits(), resolver, detail::nextNativeInstanceId(STADM.getDatabase()));
+}
+NativeEditTransaction NativeEditTransaction::prepareFull(
+    const NativeExecutionAuthority& authority, std::span<const BufferInsertionMutation> edits,
+    TimingEditResolverView resolver, std::uint64_t first_instance_id)
+{
+  if (!authority.active())
+    throw std::invalid_argument("native full edit received an expired authority");
+  auto undo = std::make_unique<Undo>(STADM.getDatabase(), edits, resolver, first_instance_id);
   NativeEditTransaction transaction(std::move(undo));
   transaction.attach(authority);
   transaction.apply();

@@ -329,6 +329,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
     std::size_t prefix_batches,
     LevelizationExecutionMode mode)
 {
+  const auto setup_started = SteadyClock::now();
   const auto& trace_batches = batches(program);
   if (prefix_batches == 0 || prefix_batches > trace_batches.size())
     fail(DualCsrTraceFailureCode::kInvalidProgram,
@@ -367,6 +368,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
   DualCsrTransactionEvidence evidence;
   std::uint64_t fallback_calls = 0;
 
+  const double backend_setup_ms = elapsedMilliseconds(setup_started);
   for (std::size_t index = 0; index < prefix_batches; ++index) {
       const auto& committed = coordinator.committed();
       DualCsrBatchPhaseTimings batch_timing{
@@ -483,6 +485,8 @@ DualCsrTraceRunResult replayPrefixWithMode(
         context.authority.poison();
       if (!report.succeeded)
         fail(DualCsrTraceFailureCode::kPublishRejected, "CPU propagated timing report failed: " + report.message);
+      if (context.consume_results)
+        context.consume_results();
       batch_timing.report_ms = elapsedMilliseconds(report_started);
       batch_timing.consumer_step_ms = elapsedMilliseconds(prepare_started);
       if constexpr (incregpusta_debug_checks_enabled)
@@ -512,7 +516,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
     return {.transaction_receipt = std::nullopt,
             .result = actual,
             .published_observations = {},
-            .envelope = {.batch_phase_timings = std::move(phase_timings), .batch_resource_observations = {}}};
+            .envelope = {.backend_setup_ms = backend_setup_ms, .batch_phase_timings = std::move(phase_timings), .batch_resource_observations = {}}};
   }
 
   const auto full_after = incregpusta_debug_checks_enabled ? csr::detail::currentNativeFullExportCounters() : csr::detail::NativeFullExportCounters{};
@@ -537,7 +541,8 @@ DualCsrTraceRunResult replayPrefixWithMode(
           .result = actual,
           .published_observations = std::move(observations),
           .envelope
-          = {.baseline_factory_calls_outside_targeted = baseline_outside,
+          = {.backend_setup_ms = backend_setup_ms,
+             .baseline_factory_calls_outside_targeted = baseline_outside,
              .baseline_factory_calls_inside_targeted = counterDelta(targeted_baseline_before, targeted_baseline_after, "inside-targeted baseline factory"),
              .batch_phase_timings = std::move(phase_timings),
              .batch_resource_observations = std::move(resource_observations)}};

@@ -19,6 +19,26 @@ inline void check(cudaError_t error, const char* operation)
     throw CudaError(std::string(operation) + ": " + cudaGetErrorString(error));
 }
 
+inline void describeDevice(CsrCudaTelemetry& telemetry)
+{
+  int device = 0;
+  check(cudaGetDevice(&device), "cudaGetDevice");
+  cudaDeviceProp properties{};
+  check(cudaGetDeviceProperties(&properties, device), "cudaGetDeviceProperties");
+  telemetry.device_name = properties.name;
+  telemetry.device_uuid = "GPU-";
+  constexpr char hex[] = "0123456789abcdef";
+  for (std::size_t index = 0; index < sizeof(properties.uuid.bytes); ++index) {
+    if (index == 4 || index == 6 || index == 8 || index == 10)
+      telemetry.device_uuid += '-';
+    const auto byte = static_cast<unsigned char>(properties.uuid.bytes[index]);
+    telemetry.device_uuid += hex[byte >> 4];
+    telemetry.device_uuid += hex[byte & 15];
+  }
+  check(cudaDriverGetVersion(&telemetry.driver_version), "cudaDriverGetVersion");
+  check(cudaRuntimeGetVersion(&telemetry.runtime_version), "cudaRuntimeGetVersion");
+}
+
 template <class T> struct DeviceBuffer
 {
   T* data{};
@@ -58,17 +78,14 @@ class Runtime final
       throw std::length_error("CUDA buffer byte capacity overflow");
     const auto extra = buffer.capacity / 2 + 1;
     const auto grown = extra <= limit - buffer.capacity ? buffer.capacity + extra : limit;
+    if (buffer.data && _retired.size() == _retired.capacity())
+      _retired.reserve(_allocations.size());
     auto* replacement = allocate<T>(std::max(count, grown));
     copy(buffer.data, replacement, preserve);
-    // Retiring a grown buffer is the only path that waits for its old contents.
-    if (buffer.data) {
-      synchronize();
-      const auto found = std::find(_allocations.begin(), _allocations.end(), buffer.data);
-      if (found == _allocations.end())
-        throw std::logic_error("CUDA buffer does not belong to this runtime");
-      check(cudaFree(buffer.data), "cudaFree grown buffer");
-      *found = nullptr;
-    }
+    // Copies and previous users stay ordered on the session stream. Retire all
+    // grown buffers at the next required decision/delivery wait, not per array.
+    if (buffer.data)
+      _retired.push_back(buffer.data);
     buffer = {replacement, std::max(count, grown)};
     return true;
   }
@@ -134,7 +151,21 @@ class Runtime final
   }
 
   void record(std::size_t index) { check(cudaEventRecord(_events.at(index), _stream), "cudaEventRecord"); }
-  void synchronize() { check(cudaStreamSynchronize(_stream), "cudaStreamSynchronize"); }
+  void synchronize()
+  {
+    check(cudaStreamSynchronize(_stream), "cudaStreamSynchronize");
+    for (void*& allocation : _retired) {
+      if (!allocation)
+        continue;
+      const auto found = std::find(_allocations.begin(), _allocations.end(), allocation);
+      if (found == _allocations.end())
+        throw std::logic_error("CUDA retired buffer does not belong to this runtime");
+      check(cudaFree(allocation), "cudaFree grown buffer");
+      *found = nullptr;
+      allocation = nullptr;
+    }
+    _retired.clear();
+  }
   double milliseconds(std::size_t begin, std::size_t end) const
   {
     float value = 0.0F;
@@ -168,7 +199,7 @@ class Runtime final
   CsrCudaTelemetry* _telemetry;
   cudaStream_t _stream{nullptr};
   std::array<cudaEvent_t, 8> _events{};
-  std::vector<void*> _allocations;
+  std::vector<void*> _allocations, _retired;
 };
 
 

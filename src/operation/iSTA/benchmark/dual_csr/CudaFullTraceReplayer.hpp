@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 
 #include <optional>
 #include <vector>
@@ -22,12 +23,13 @@ struct CudaFullTraceBatch
 };
 struct CudaFullTraceResult
 {
+  double backend_setup_ms{};
   std::vector<CudaFullTraceBatch> batches;
 };
 // The caller's existing operation guard owns the authority and baseline.
 // Each generation rebuilds and uploads the complete graph, reusing session models
 // and capacity. No CPU levelization/propagation or CPU Dual-CSR updater is called.
-[[nodiscard]] CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Database& baseline, const StaAnalysisContext& analysis,
+[[nodiscard]] CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Database& baseline, const CsrReferenceInput& baseline_input,
                                                             const timing_edit::NativeExecutionAuthority& authority, const buffer_trace::ReplayProgram& program,
-                                                            std::size_t prefix);
+                                                            std::size_t prefix, const std::function<void()>& consume_results = {});
 }  // namespace ista::csr

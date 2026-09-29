@@ -305,7 +305,8 @@ class STAInterface
   [[nodiscard]] static bool operationSentinelActive() noexcept;
   [[nodiscard]] static std::uint64_t constructorCountForTesting() noexcept;
   StaStatus initializeOwned(StaOwner owner, std::map<std::string, std::any>& config_map);
-  StaStatus runOwned(StaOwner owner, StaCsrSessionContext* capture_or_null);
+  StaStatus runOwned(StaOwner owner, StaCsrSessionContext* capture_or_null, bool include_artifacts = true);
+  StaStatus runOwnedCudaBaseline(uint64_t token, StaCsrSessionContext* context, bool include_artifacts);
   StaStatus closeOwned(StaOwner owner, StaCsrSessionContext* context, std::unique_ptr<csr::CsrSnapshotObservation>* released_out);
   void inspectSessionDatabaseForTesting(uint64_t token, const std::function<void(const Database&)>& callback);
 

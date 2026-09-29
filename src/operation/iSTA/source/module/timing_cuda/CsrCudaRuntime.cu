@@ -25,16 +25,7 @@ double elapsed(Clock::time_point start)
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
-void describeDevice(CsrCudaTelemetry& telemetry)
-{
-  int device = 0;
-  check(cudaGetDevice(&device), "cudaGetDevice");
-  cudaDeviceProp properties{};
-  check(cudaGetDeviceProperties(&properties, device), "cudaGetDeviceProperties");
-  telemetry.device_name = properties.name;
-  check(cudaDriverGetVersion(&telemetry.driver_version), "cudaDriverGetVersion");
-  check(cudaRuntimeGetVersion(&telemetry.runtime_version), "cudaRuntimeGetVersion");
-}
+
 
 }  // namespace
 

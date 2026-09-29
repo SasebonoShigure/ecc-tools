@@ -22,6 +22,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <map>
+#include <set>
 #include <vector>
 
 #include "CsrReferenceTypes.hpp"
@@ -126,23 +128,116 @@ LibraryCellRef requireBuffer(const FreshBaselineView& view, const OracleTraceCre
   return reference;
 }
 
+// Select stable semantic net/sink positions, never timing-ranked or greedy sites.
+// The independent builder checks raw Liberty roles rather than calling the subject's preparer.
+std::vector<std::pair<std::string, csr::NodeKey>> dataSites(
+    const FreshBaselineView& view, std::string_view side)
+{
+  std::map<std::pair<std::string, std::string>, csr::NodeKey> sites;
+  std::set<std::string> clock_nets;
+  for (const auto& node : view.reference_input.nodes)
+    if (node.is_clock_pin || view.reference_input.clock_owner_by_node.at(node.id.value()))
+      clock_nets.insert(node.net_name);
+  for (const auto& [name, clock] : view.database.get_timing_constraint().get_clock_map()) {
+    static_cast<void>(name);
+    for (const auto& source : clock.get_source_list()) {
+      const auto pin = view.database.get_pin_map().find(source);
+      if (pin != view.database.get_pin_map().end())
+        clock_nets.insert(pin->second.get_net_name());
+    }
+  }
+  for (const auto& arc : view.reference_input.arcs)
+    if (arc.kind == csr::ArcKind::kNet && arc.eligibility.clock
+        && view.reference_input.clock_owner_by_node.at(arc.source.value()))
+      clock_nets.insert(view.reference_input.nodes.at(arc.source.value()).net_name);
+  const auto legal_sink = [&](const csr::NodeRecord& node) {
+    if (node.is_port)
+      return node.direction == csr::PinDirection::kOutput;
+    if (node.direction != csr::PinDirection::kInput || node.is_clock_pin)
+      return false;
+    const auto& instance = view.database.get_instance_map().at(node.key.instance_name);
+    const auto& cell = view.database.get_timing_library().get_cell_map().at(instance.get_cell_name());
+    if (cell.get_is_clock_gating() || cell.get_is_macro())
+      return false;
+    const auto& pin = view.database.get_pin_map().at(node.key.full_name);
+    const auto& port = cell.get_port_map().at(pin.get_pin_name());
+    if (port.get_is_clock() || !port.get_is_input() || port.get_is_output())
+      return false;
+    for (const auto& arc : cell.get_cell_arc_list())
+      if (arc.get_source_port() == pin.get_pin_name() && (arc.get_is_clock_arc() || arc.get_is_clear_preset_arc()))
+        return false;
+    if (!cell.get_is_sequential())
+      return true;
+    bool ordinary_data = false;
+    for (const auto& check : cell.get_check_arc_list()) {
+      if (check.get_clock_port() == pin.get_pin_name())
+        return false;
+      if (check.get_data_port() != pin.get_pin_name())
+        continue;
+      if (check.get_check_type() != TimingCheckType::kSetup && check.get_check_type() != TimingCheckType::kHold)
+        return false;
+      ordinary_data = true;
+    }
+    return ordinary_data && instance.get_data_pin_name() == node.key.full_name;
+  };
+  for (const auto& arc : view.reference_input.arcs) {
+    if (arc.kind != csr::ArcKind::kNet || !arc.eligibility.data_arrival)
+      continue;
+    const auto& source = view.reference_input.nodes.at(arc.source.value());
+    const auto& sink = view.reference_input.nodes.at(arc.sink.value());
+    if (clock_nets.contains(sink.net_name) || view.reference_input.clock_owner_by_node.at(source.id.value())
+        || view.reference_input.clock_owner_by_node.at(sink.id.value()) || !legal_sink(sink))
+      continue;
+    if ((side == "q" && !(source.is_sequential && source.is_output_pin))
+        || (side == "d" && !(sink.is_sequential && sink.is_data_pin)))
+      continue;
+    sites.emplace(std::pair{sink.net_name, sink.key.full_name}, sink.key);
+  }
+  std::vector<std::pair<std::string, csr::NodeKey>> result;
+  for (const auto& [name, key] : sites)
+    result.emplace_back(name.first, key);
+  return result;
+}
+
 TimingEditTrace makeRealTrace(const FreshBaselineView& view,
                               const OracleTraceCreationOptions& options)
 {
   const auto& profile = options.profile;
   const auto seed = options.seed;
   const BaselineSemanticIdentity baseline = baselineIdentity(view);
-  const CreationToken first_token{1, view.database.get_design_name(), profile,
-                                  seed, 1, 0};
-  const CreationToken second_token{1, view.database.get_design_name(), profile,
-                                   seed, 2, 0};
   const LibraryCellRef library = requireBuffer(view, options);
-  const StableNodeRef sink = ExistingNodeRef{requireNode(view.reference_input, options.sink)};
-  std::vector<BufferInsertionMutation> edits;
-  edits.push_back({ExistingNetRef{options.net}, {sink}, library, UnplacedInputs{},
-                   NoParasiticRcInputs{}, first_token});
-  edits.push_back({CreatedNetRef{first_token, CreatedNetRole::kOutputNet}, {sink}, library,
-                   UnplacedInputs{}, NoParasiticRcInputs{}, second_token});
+  std::vector<std::vector<BufferInsertionMutation>> batches;
+  if (options.data_side.empty()) {
+    const CreationToken first{1, view.database.get_design_name(), profile, seed, 1, 0};
+    const CreationToken second{1, view.database.get_design_name(), profile, seed, 2, 0};
+    const StableNodeRef sink = ExistingNodeRef{requireNode(view.reference_input, options.sink)};
+    batches = {{{ExistingNetRef{options.net}, {sink}, library, UnplacedInputs{}, NoParasiticRcInputs{}, first}},
+               {{CreatedNetRef{first, CreatedNetRole::kOutputNet}, {sink}, library, UnplacedInputs{}, NoParasiticRcInputs{}, second}}};
+  } else {
+    const auto legal_sites = dataSites(view, options.data_side);
+    std::vector<std::pair<std::string, csr::NodeKey>> sites;
+    std::map<std::string, std::size_t> per_net;
+    for (const auto& site : legal_sites)
+      if (per_net[site.first]++ < 10)
+        sites.push_back(site);
+    const std::size_t per_batch = std::min<std::size_t>(100, sites.size() / 10);
+    nlohmann::json selection{{"schema_version", "ista-trace-selection/1.0.0"},
+                             {"data_side", options.data_side}, {"node_count", view.reference_input.nodes.size()},
+                             {"arc_count", view.reference_input.arcs.size()}, {"raw_legal_position_count", legal_sites.size()},
+                             {"legal_position_count", sites.size()}, {"schedule", "stable_net_sink_first_ten_per_net_round_robin"},
+                             {"batch_count", 10}, {"edits_per_batch", per_batch}, {"selected_position_count", per_batch * 10}, {"selected_positions", nlohmann::json::array()}};
+    batches.resize(10);
+    for (std::size_t position = 0; position < per_batch * 10; ++position) {
+      const std::size_t batch = position % 10;
+      const auto& [net, sink] = sites[position];
+      const CreationToken token{1, view.database.get_design_name(), profile, seed, batch + 1, batches[batch].size()};
+      batches[batch].push_back({ExistingNetRef{net}, {ExistingNodeRef{sink}}, library, UnplacedInputs{}, NoParasiticRcInputs{}, token});
+      selection["selected_positions"].push_back({{"net", net}, {"sink", sink.full_name}, {"batch", batch + 1}});
+    }
+    writeOracleFile(options.trace_output.string() + ".selection.json", selection.dump(2) + "\n");
+    if (per_batch == 0)
+      fail("fewer than ten legal positions for the requested data side");
+  }
 
   TimingEditTrace trace;
   trace.workload_kind = TraceWorkloadKind::kRealDesign;
@@ -155,15 +250,24 @@ TimingEditTrace makeRealTrace(const FreshBaselineView& view,
 
   CommittedEditIdentity before{TransactionGeneration{0}, baseline.fingerprints,
                                baseline.canonical_pre_state};
-  for (std::size_t index = 0; index < edits.size(); ++index) {
+  for (std::size_t index = 0; index < batches.size(); ++index) {
     const std::uint64_t ordinal = index + 1;
     DesignEditPlan plan{.baseline = baseline, .expected_generation = before.generation,
-                        .edits = {edits[index]}};
+                        .edits = batches[index]};
+    auto normalized = normalizeDesignEditPlan(std::move(plan));
+    if (const auto* errors = std::get_if<TimingEditContractViolations>(&normalized))
+      fail("selected edits are invalid: " + errors->front().field + ": " + errors->front().message);
+    plan = std::get<DesignEditPlan>(std::move(normalized));
+    // Replay tokens name edits in canonical execution order. Selection remains
+    // by stable net/sink name; all selected references are baseline identities.
+    if (!options.data_side.empty())
+      for (std::size_t edit = 0; edit < plan.edits.size(); ++edit)
+        plan.edits[edit].creation_token.accepted_ordinal = edit;
     static_cast<void>(IndependentSemanticReplayer::replayPlan(view.database, plan));
     const CommittedEditIdentity after
         = currentIdentity(view, TransactionGeneration{ordinal});
     trace.batches.push_back(
-        {ordinal, before, {std::move(edits[index])}, PolicyReceipt{}, after});
+        {ordinal, before, std::move(plan.edits), PolicyReceipt{}, after});
     before = after;
   }
 

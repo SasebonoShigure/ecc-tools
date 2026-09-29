@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 
 #include <memory>
 #include <optional>
@@ -69,8 +70,8 @@ class CudaDualCsrSession final
   friend class CsrCudaBackend;
   friend class ista::StaCudaSessionState;
   friend CudaFullTraceResult replayCudaFullTracePrefix(
-      StaCsrSessionContext&, Database&, const StaAnalysisContext&,
-      const timing_edit::NativeExecutionAuthority&, const buffer_trace::ReplayProgram&, std::size_t);
+      StaCsrSessionContext&, Database&, const CsrReferenceInput&,
+      const timing_edit::NativeExecutionAuthority&, const buffer_trace::ReplayProgram&, std::size_t, const std::function<void()>&);
   // Only the direct, validated native-export paths can use these cores.
   [[nodiscard]] static CudaDualCsrSession fromNativeExport(
       const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);

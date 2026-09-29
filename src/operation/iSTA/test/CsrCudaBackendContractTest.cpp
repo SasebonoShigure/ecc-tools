@@ -143,6 +143,25 @@ void runPackingCases()
   requireCpuReference(models.intern(std::make_shared<const std::vector<ChildTimingArcModel>>(std::move(positive_zero)))
                           != models.intern(std::make_shared<const std::vector<ChildTimingArcModel>>(std::move(negative_zero))),
                       "model interning discarded the sign of a timing-table zero");
+  auto duplicate_seeds = makeCpuReferenceNetFixture();
+  duplicate_seeds.clock_tags.push_back("second");
+  const auto append_seed = [&](const std::string& tag, double arrival) {
+    auto seed = duplicate_seeds.start_seeds.front();
+    seed.clock_tag = tag;
+    for (auto& analysis : seed.arrival)
+      for (auto& value : analysis)
+        value = arrival;
+    duplicate_seeds.ordered_start_ids.push_back(seed.seed_node);
+    duplicate_seeds.start_seeds.push_back(std::move(seed));
+  };
+  append_seed("second", 0.5);
+  append_seed(duplicate_seeds.start_seeds.front().clock_tag, 0.75);
+  const auto folded = pack(duplicate_seeds, models);
+  requireCpuReference(folded.path_seeds.size() == 8 && folded.node_seeds.front().state.arrival == 0.75,
+                      "duplicate seed folding lost a tag or scalar last write");
+  for (const auto& seed : folded.path_seeds)
+    requireCpuReference(seed.state.present && seed.state.arrival == (seed.tag == 0 ? 0.75 : 0.5),
+                        "duplicate seed folding changed last-write path values");
   auto many_tags = makeCpuReferenceNetFixture();
   for (unsigned tag = 0; tag < 256; ++tag)
     many_tags.clock_tags.push_back("unused-" + std::to_string(tag));
@@ -188,7 +207,8 @@ void runPerformance()
     const auto& t = output.telemetry;
     std::cout << "{\"sample\":" << sample << ",\"debug_checks_enabled\":false,\"correctness_comparison\":\"not_run\","
               << "\"end_to_end_ms\":" << t.end_to_end_ms << ",\"h2d_bytes\":" << t.h2d_bytes << ",\"d2h_bytes\":" << t.d2h_bytes
-              << ",\"allocations\":" << t.allocations << ",\"kernel_launches\":" << t.kernel_launches << "}\n";
+              << ",\"allocations\":" << t.allocations << ",\"explicit_kernel_launches\":" << t.kernel_launches << ",\"device_algorithm_calls\":" << t.device_algorithm_calls
+              << ",\"levelization_decision_bytes\":" << t.levelization_decision_bytes << "}\n";
   }
 }
 

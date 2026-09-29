@@ -5,6 +5,7 @@
 // Licensed under Mulan PSL v2.
 // ***************************************************************************************
 #pragma once
+#include <functional>
 
 #include <cstdint>
 #include <optional>
@@ -36,6 +37,7 @@ struct DualCsrTraceContext
   const timing_edit::NativeExecutionAuthority& authority;
   std::uint64_t session_token{0};
   csr::detail::NativeLibraryModels& models;
+  std::function<void()> consume_results{};
 };
 
 struct DualCsrBatchPhaseTimings
@@ -65,6 +67,7 @@ struct DualCsrBatchPhaseTimings
 
 struct DualCsrTraceRunEnvelope
 {
+  double backend_setup_ms{};
   std::uint64_t baseline_factory_calls_outside_targeted{0};
   std::uint64_t baseline_factory_calls_inside_targeted{0};
   std::vector<DualCsrBatchPhaseTimings> batch_phase_timings;

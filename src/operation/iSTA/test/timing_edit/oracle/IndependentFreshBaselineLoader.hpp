@@ -44,6 +44,7 @@ struct FreshBaselineArtifacts
   std::filesystem::path run_directory;
   std::string top;
   csr::StaAnalysisContext analysis_context;
+  std::int32_t threads{1};
 };
 
 // Mechanical source ordering only; targeted and oracle execution stay separate.

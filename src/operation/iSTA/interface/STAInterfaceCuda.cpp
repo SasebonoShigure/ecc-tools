@@ -28,6 +28,11 @@ namespace ista {
 
 StaStatus STAInterface::runSessionCudaBaseline(std::uint64_t token, StaCsrSessionContext* context)
 {
+  return runOwnedCudaBaseline(token, context, true);
+}
+
+StaStatus STAInterface::runOwnedCudaBaseline(std::uint64_t token, StaCsrSessionContext* context, bool include_artifacts)
+{
   StaStatus failure;
   auto authority = acquireUse(StaOwner::session(token), context, true, StaSessionState::kInitialized, &failure);
   if (!authority)
@@ -53,19 +58,24 @@ StaStatus STAInterface::runSessionCudaBaseline(std::uint64_t token, StaCsrSessio
       context->_cuda.reset(new StaCudaSessionState(STADM.getDatabase(), input));
       const auto& telemetry = context->_cuda->device.telemetry().cuda;
       STALOG.info(Loc::current(), "CUDA full H2D bytes=", telemetry.h2d_bytes, " D2H bytes=", telemetry.d2h_bytes,
-                  " kernels=", telemetry.kernel_launches, " synchronized_ms=", telemetry.end_to_end_ms);
+                  " explicit_kernels=", telemetry.kernel_launches, " device_algorithm_calls=", telemetry.device_algorithm_calls, " synchronized_ms=", telemetry.end_to_end_ms);
     };
+    std::vector<StaLifecycleStage> stages{
+        {"GraphBuilder", [] { GraphBuilder::initInst(); }, [] { STAGB.buildStructure(); }, [] { GraphBuilder::destroyInst(); }},
+        {"CUDA full timing", [] {}, compute, [] {}},
+        {"CUDA timing consumer", [] {}, [&] { context->_cuda->materialize(STADM.getDatabase()); }, [] {}},
+    };
+    if (include_artifacts)
+      stages.push_back({"PowerPropagator", [] { PowerPropagator::initInst(); }, [] { STAPP.propagate(); }, [] { PowerPropagator::destroyInst(); }});
+    stages.push_back({"CUDA report preparation", [] {}, [&] { context->_cuda->prepareReport(STADM.getDatabase()); }, [] {}});
+    if (include_artifacts) {
+      stages.push_back({"PowerAnalyzer", [] { PowerAnalyzer::initInst(); }, [] { STAPA.analyze(); }, [] { PowerAnalyzer::destroyInst(); }});
+      stages.push_back({"TimingReporter", [] { TimingReporter::initInst(); }, [] { STATR.report(); }, [] { TimingReporter::destroyInst(); }});
+      stages.push_back({"PowerReporter", [] { PowerReporter::initInst(); }, [] { STAPR.report(); }, [] { PowerReporter::destroyInst(); }});
+      stages.push_back({"SDFWriter", [] { SDFWriter::initInst(); }, [] { STASW.write(); }, [] { SDFWriter::destroyInst(); }});
+    }
     const auto result = executeStaLifecyclePipeline(
-        {{"GraphBuilder", [] { GraphBuilder::initInst(); }, [] { STAGB.buildStructure(); }, [] { GraphBuilder::destroyInst(); }},
-         {"CUDA full timing", [] {}, compute, [] {}},
-         {"CUDA timing consumer", [] {}, [&] { context->_cuda->materialize(STADM.getDatabase()); }, [] {}},
-         {"PowerPropagator", [] { PowerPropagator::initInst(); }, [] { STAPP.propagate(); }, [] { PowerPropagator::destroyInst(); }},
-         {"CUDA report preparation", [] {}, [&] { context->_cuda->prepareReport(STADM.getDatabase()); }, [] {}},
-         {"PowerAnalyzer", [] { PowerAnalyzer::initInst(); }, [] { STAPA.analyze(); }, [] { PowerAnalyzer::destroyInst(); }},
-         {"TimingReporter", [] { TimingReporter::initInst(); }, [] { STATR.report(); }, [] { TimingReporter::destroyInst(); }},
-         {"PowerReporter", [] { PowerReporter::initInst(); }, [] { STAPR.report(); }, [] { PowerReporter::destroyInst(); }},
-         {"SDFWriter", [] { SDFWriter::initInst(); }, [] { STASW.write(); }, [] { SDFWriter::destroyInst(); }}},
-        StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+        stages, StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
     if (!result.succeeded) {
       if (result.cleanup_failed) {
         std::scoped_lock lifecycle_lock(_lifecycle_mutex);
@@ -83,6 +93,7 @@ StaStatus STAInterface::runSessionCudaBaseline(std::uint64_t token, StaCsrSessio
     return StaStatus::failure(StaSessionStatusCode::kRunFailed, StaSessionState::kPoisoned, error.what());
   }
 #else
+  static_cast<void>(include_artifacts);
   return StaStatus::failure(StaSessionStatusCode::kUnsupported, StaSessionState::kInitialized, "CUDA STA backend was not built",
                             StaCapabilityReason::kBackendUnavailable);
 #endif

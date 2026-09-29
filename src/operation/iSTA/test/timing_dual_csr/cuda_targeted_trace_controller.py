@@ -7,6 +7,7 @@ import pathlib
 import subprocess
 import sys
 
+from cuda_full_trace_controller import require_cuda_telemetry
 from dual_csr_trace_controller import first_difference, require, run_child, write_json
 
 sys.path.insert(
@@ -22,7 +23,7 @@ def require_performance_result(result: dict, strategy: str, expected_prefix: int
         "performance child generated a diagnostic receipt",
     )
     require(
-        result["schema_version"] == f"ista-cuda-{protocol}-trace/3.0.0"
+        result["schema_version"] == f"ista-cuda-{protocol}-trace/5.0.0"
         and result["debug_checks_enabled"] is False
         and result["correctness_comparison"] == "not_run"
         and result["executed_backend"] == "cuda"
@@ -52,6 +53,7 @@ def compare_values(actual: dict, expected: dict, label: str, *, incremental: boo
 
 
 def require_execution(timing: dict, strategy: str) -> None:
+    require_cuda_telemetry(timing)
     incremental = strategy == "incremental"
     record = timing["execution"]
     require(
@@ -139,7 +141,7 @@ def run(args: argparse.Namespace) -> int:
         write_json(
             root / "performance.json",
             {
-                "schema_version": f"ista-cuda-{protocol}-performance/4.0.0",
+                "schema_version": f"ista-cuda-{protocol}-performance/5.0.0",
                 "debug_checks_enabled": False,
                 "correctness_comparison": "not_run",
                 "build": build,
@@ -189,7 +191,7 @@ def run(args: argparse.Namespace) -> int:
             input_flag=input_flag,
         )
         require(
-            targeted["schema_version"] == f"ista-cuda-{protocol}-trace/3.0.0"
+            targeted["schema_version"] == f"ista-cuda-{protocol}-trace/5.0.0"
             and targeted["executed_backend"] == "cuda"
             and targeted["executed_strategy"] == args.strategy
             and targeted["fallback_count"] == 0,
@@ -219,6 +221,12 @@ def run(args: argparse.Namespace) -> int:
             require(
                 targeted["device_checks"][ordinal]["graph_equivalent"] is True,
                 "actual device decode differs from canonical graph",
+            )
+            visits = targeted["device_checks"][ordinal]["storage_visits"]
+            require(
+                isinstance(visits, list) and len(visits) == 12
+                and all(type(count) is int and count >= 0 for count in visits),
+                "device visits must contain four BaseOut/AuxOut/BaseIn triples",
             )
         compare_values(
             targeted["batches"][-1],
@@ -259,7 +267,7 @@ def run(args: argparse.Namespace) -> int:
     write_json(
         root / "verdict.json",
         {
-            "schema_version": f"ista-cuda-{protocol}-verdict/3.0.0",
+            "schema_version": f"ista-cuda-{protocol}-verdict/5.0.0",
             "build": build,
             "full_oracle_build": full_build,
             "prefixes": verdicts,

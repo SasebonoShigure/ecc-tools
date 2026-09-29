@@ -551,6 +551,20 @@ HostData pack(const CsrReferenceInput& input, ModelStorage& models)
     data.endpoints.push_back({source.node.value(), source.clock_period,
                               {source.output_delay[0].value_or(0.0), source.output_delay[0].has_value()}});
   packSequential(input, data, models);
+  std::stable_sort(data.path_seeds.begin(), data.path_seeds.end(), [](const PathSeed& a, const PathSeed& b) {
+    return std::pair{a.row, a.tag} < std::pair{b.row, b.tag};
+  });
+  std::size_t retained = 0;
+  for (std::size_t first = 0; first < data.path_seeds.size();) {
+    auto end = first + 1;
+    while (end < data.path_seeds.size() && data.path_seeds[end].row == data.path_seeds[first].row
+           && data.path_seeds[end].tag == data.path_seeds[first].tag)
+      ++end;
+    // Preserve the previous serial last write, including absent sequential seeds.
+    data.path_seeds[retained++] = data.path_seeds[end - 1];
+    first = end;
+  }
+  data.path_seeds.resize(retained);
   data.bindings.reserve(input.arcs.size());
   for (const auto& arc : input.arcs) {
     data.bindings.push_back({arc.source.value(), arc.sink.value(), true, arc.eligibility.levelization,

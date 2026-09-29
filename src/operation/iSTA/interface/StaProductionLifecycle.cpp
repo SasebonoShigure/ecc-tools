@@ -111,7 +111,7 @@ StaOperationResult initializeStaResources(std::map<std::string, std::any>& confi
         [] { DelayCalculator::destroyInst(); }}});
 }
 
-StaOperationResult runFullStaPipeline()
+StaOperationResult runFullStaPipeline(bool include_artifacts)
 {
   Monitor monitor;
   STALOG.info(Loc::current(), "Starting...");
@@ -119,13 +119,16 @@ StaOperationResult runFullStaPipeline()
       {"GraphBuilder", [] { GraphBuilder::initInst(); }, [] { STAGB.build(); }, [] { GraphBuilder::destroyInst(); }},
       {"ClockPropagator", [] { ClockPropagator::initInst(); }, [] { STACP.propagate(); }, [] { ClockPropagator::destroyInst(); }},
       {"TimingPropagator", [] { TimingPropagator::initInst(); }, [] { STATP.propagate(); }, [] { TimingPropagator::destroyInst(); }},
-      {"PowerPropagator", [] { PowerPropagator::initInst(); }, [] { STAPP.propagate(); }, [] { PowerPropagator::destroyInst(); }},
-      {"TimingAnalyzer", [] { TimingAnalyzer::initInst(); }, [] { STATA.analyze(); }, [] { TimingAnalyzer::destroyInst(); }},
-      {"PowerAnalyzer", [] { PowerAnalyzer::initInst(); }, [] { STAPA.analyze(); }, [] { PowerAnalyzer::destroyInst(); }},
-      {"TimingReporter", [] { TimingReporter::initInst(); }, [] { STATR.report(); }, [] { TimingReporter::destroyInst(); }},
-      {"PowerReporter", [] { PowerReporter::initInst(); }, [] { STAPR.report(); }, [] { PowerReporter::destroyInst(); }},
-      {"SDFWriter", [] { SDFWriter::initInst(); }, [] { STASW.write(); }, [] { SDFWriter::destroyInst(); }},
   };
+  if (include_artifacts)
+    stages.push_back({"PowerPropagator", [] { PowerPropagator::initInst(); }, [] { STAPP.propagate(); }, [] { PowerPropagator::destroyInst(); }});
+  stages.push_back({"TimingAnalyzer", [] { TimingAnalyzer::initInst(); }, [] { STATA.analyze(); }, [] { TimingAnalyzer::destroyInst(); }});
+  if (include_artifacts) {
+    stages.push_back({"PowerAnalyzer", [] { PowerAnalyzer::initInst(); }, [] { STAPA.analyze(); }, [] { PowerAnalyzer::destroyInst(); }});
+    stages.push_back({"TimingReporter", [] { TimingReporter::initInst(); }, [] { STATR.report(); }, [] { TimingReporter::destroyInst(); }});
+    stages.push_back({"PowerReporter", [] { PowerReporter::initInst(); }, [] { STAPR.report(); }, [] { PowerReporter::destroyInst(); }});
+    stages.push_back({"SDFWriter", [] { SDFWriter::initInst(); }, [] { STASW.write(); }, [] { SDFWriter::destroyInst(); }});
+  }
   StaOperationResult result = executeStaLifecyclePipeline(stages, delayRuntimeStage(true));
   if (result.succeeded)
     STALOG.info(Loc::current(), "Completed", monitor.getStatsInfo());

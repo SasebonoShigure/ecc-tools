@@ -438,9 +438,9 @@ void paperAuxOverflowTrace()
                   "validator accepted a path Arc with the wrong sink endpoint");
   require(first_cpu.telemetry.levelization.aux_out > 0
               && first_cpu.telemetry.arc_initialization.aux_out > 0
-              && first_cpu.telemetry.forward_propagation.aux_out > 0
+              && first_cpu.telemetry.forward_propagation.base_in > 0
               && first_cpu.telemetry.required_propagation.aux_out > 0,
-          "generic CPU path did not consume AuxOut in every traversal stage");
+          "generic CPU path did not consume the expected incoming/Aux storage");
   const auto first_projection = projectDualCsrState(first);
   require(first_projection.success()
               && first_projection.projection->active_arcs.size() == 2,

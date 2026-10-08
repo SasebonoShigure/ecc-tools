@@ -56,6 +56,23 @@ void validateClockAndSlewDomains(const DualCsrState& state,
           lane / (csr::kAnalysisCount * csr::kTransitionCount)};
       const bool owned = state.reference_payload.clock_owner_by_node[node.value()].has_value();
       if (!physical) {
+        const auto& owners = state.reference_payload.clock_owner_by_node;
+        const auto& clocks = state.reference_payload.clocks;
+        const auto owner = owned ? std::ranges::find(clocks, *owners[node.value()], &csr::ClockConstraintModel::map_key) : clocks.end();
+        if (owner != clocks.end() && owner->propagated) {
+          const auto matches = [lane](const auto& actual, const auto& expected) {
+            return lane < expected.presence.size() && lane < expected.values.size()
+                   && actual.presence[lane] == expected.presence[lane]
+                   && (!actual.presence[lane] || actual.values[lane] == expected.values[lane]);
+          };
+          const auto& expected = result.physical_clock;
+          if (!matches(clock.arrivals, expected.arrivals) || !matches(clock.slews, expected.slews)
+              || !matches(clock.predecessor_nodes, expected.predecessor_nodes)
+              || !matches(clock.predecessor_arc_delays, expected.predecessor_arc_delays)
+              || !matches(clock.predecessor_transitions, expected.predecessor_transitions))
+            rejectSemantic(violations, field, "propagated effective clock must preserve physical values and identity");
+          continue;
+        }
         const std::uint8_t expected = owned ? 1 : 0;
         if (clock.arrivals.presence[lane] != expected || clock.slews.presence[lane] != expected
             || (owned && (clock.arrivals.values[lane] != 0.0 || clock.slews.values[lane] != 0.0)))

@@ -34,6 +34,7 @@ class GuardedTestSession final
 {
  public:
   GuardedTestSession();
+  GuardedTestSession(StaExecutionRequest request, csr::StaAnalysisContext context);
   ~GuardedTestSession();
 
   GuardedTestSession(const GuardedTestSession&) = delete;
@@ -47,6 +48,8 @@ class GuardedTestSession final
   [[nodiscard]] StaStatus closeAndRelease();
 
  private:
+  GuardedTestSession(StaExecutionRequest request, csr::StaAnalysisContext context, bool capture_baseline);
+  bool _physical_baseline{false};
   std::unique_ptr<IncrementalStaSession> _session;
   TimingEditSessionToken _token;
   bool _lease_active{false};

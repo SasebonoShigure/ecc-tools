@@ -126,7 +126,7 @@ void fresh(const Options& options)
   auto receipt = timing_dual_csr::test::runProductionFreshSemanticPrefix(
       artifact.replay, static_cast<std::size_t>(prefix));
   Json envelope{
-      {"schema_version", "ista-dual-csr-trace-process/4.0.0"},
+      {"schema_version", "ista-dual-csr-trace-process/5.0.0"},
       {"role", "fresh-oracle"},
       {"prefix_batches", prefix},
       {"functional",
@@ -199,7 +199,7 @@ void targeted(const Options& options)
           timing_dual_csr::test::structuralReceiptToJson(
               observation.structural)}});
   }
-  Json envelope{{"schema_version", "ista-dual-csr-trace-process/4.0.0"},
+  Json envelope{{"schema_version", "ista-dual-csr-trace-process/5.0.0"},
                 {"role", "targeted-under-test"},
                 {"prefix_batches", prefix},
                 {"receipt_validated", true},

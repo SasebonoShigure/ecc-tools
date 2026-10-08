@@ -15,6 +15,7 @@
 
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrUpdaterInternal.hpp"
+#include "DualCsrReferenceValidationInternal.hpp"
 #include "AllocationFailureSupport.hpp"
 #include "DualCsrResourceObservation.hpp"
 #include "DualCsrTestSupport.hpp"
@@ -322,6 +323,168 @@ void payloadAndDescriptorContracts()
           "descriptor accepted payload-change/deactivate overlap");
 }
 
+void localParasiticPatch()
+{
+  auto state = tombstoneBaselineState();
+  auto& parasitics = state.reference_payload.parasitics;
+  parasitics = {"PF", "OHM", {{"n0", "n0", 0.1, {{"p", "p", 0.1, 0.0, 0.0}}, {}},
+                             {"unchanged", "unchanged", 0.2, {{"u", "u", 0.2, 1.0, 2.0}}, {}}}};
+  for (std::size_t slot = 0; slot < parasitics.nets.size(); ++slot)
+    state.parasitic_net_slots.emplace(parasitics.nets[slot].map_key, slot);
+  const auto before_slots = state.parasitic_net_slots;
+  const auto before = parasitics;
+  const auto* unchanged_nodes = parasitics.nets[1].nodes.data();
+  auto descriptor = descriptorFor(state, 0, 0);
+  auto changed = parasitics.nets[0];
+  changed.nodes[0].capacitance = changed.lumped_capacitance = 0.3;
+  descriptor.reference_payload.parasitics = ParasiticNetDelta{
+      2, {{0, parasitics.nets[0], changed}},
+      {{"new", "new", 0.4, {{"q", "q", 0.4, 0.0, 0.0}}, {}}}};
+  const auto validate = [&](const auto& batch) {
+    DualCsrViolations errors;
+    detail::validateReferenceDelta(state, batch, errors);
+    return errors;
+  };
+  require(validate(descriptor).empty(), "valid local RC delta rejected");
+  for (int fault = 0; fault < 5; ++fault) {
+    auto bad = descriptor;
+    auto& delta = *bad.reference_payload.parasitics;
+    if (fault == 0) ++delta.expected_size;
+    if (fault == 1) delta.changes.front().expected.lumped_capacitance = 8.0;
+    if (fault == 2) delta.changes.push_back(delta.changes.front());
+    if (fault == 3) delta.appends.front().map_key = delta.appends.front().embedded_name = "unchanged";
+    if (fault == 4) delta.changes.front().slot = 2;
+    require(!validate(bad).empty(), "malformed local RC delta accepted");
+  }
+  const auto validation_allocations = [&](const auto& graph, const auto& batch) {
+    DualCsrViolations errors;
+    ista_test_allocation::armCountOnly();
+    detail::validateReferenceDelta(graph, batch, errors);
+    const auto count = ista_test_allocation::disable();
+    require(errors.empty(), "valid RC allocation probe rejected");
+    return count;
+  };
+  auto larger = state;
+  for (int index = 0; index < 1024; ++index) {
+    auto extra = parasitics.nets[1];
+    extra.map_key = extra.embedded_name = "unrelated-" + std::to_string(index);
+    larger.parasitic_net_slots.emplace(extra.map_key, larger.reference_payload.parasitics.nets.size());
+    larger.reference_payload.parasitics.nets.push_back(std::move(extra));
+  }
+  auto larger_descriptor = descriptor;
+  larger_descriptor.reference_payload.parasitics->expected_size = larger.reference_payload.parasitics.nets.size();
+  require(validation_allocations(state, descriptor) == validation_allocations(larger, larger_descriptor),
+          "local RC validation allocates for untouched nets");
+  for (bool abandon : {false, true}) {
+    {
+      detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+      ista_test_allocation::armFailure(1);
+      patch.apply();
+      const auto apply_allocations = ista_test_allocation::disable();
+      require(apply_allocations == 0, "RC apply allocated");
+      require(parasitics.nets.size() == 3 && parasitics.nets[0] == changed
+                  && parasitics.nets[1].nodes.data() == unchanged_nodes
+                  && state.parasitic_net_slots.at("new") == 2,
+              "RC apply copied an untouched net or lost a local change");
+      if (!abandon) {
+        ista_test_allocation::armFailure(1);
+        patch.rollback();
+        const auto rollback_allocations = ista_test_allocation::disable();
+        require(rollback_allocations == 0, "RC rollback allocated");
+      }
+    }
+    require(parasitics == before && state.parasitic_net_slots == before_slots
+                && parasitics.nets[1].nodes.data() == unchanged_nodes,
+            "RC rollback or transaction abandonment failed");
+  }
+  {
+    detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+    patch.apply();
+    patch.commit();
+  }
+  require(parasitics.nets.size() == 3 && parasitics.nets[0] == changed
+              && parasitics.nets[1].nodes.data() == unchanged_nodes,
+          "committed RC edit was undone or copied untouched data");
+}
+
+void localSeedPatch()
+{
+  auto state = tombstoneBaselineState();
+  auto& seeds = state.reference_payload.start_seeds;
+  require(!seeds.empty(), "seed fixture is empty");
+  auto unchanged = seeds.front();
+  unchanged.clock_tag = std::string(100, 'u');
+  seeds.push_back(unchanged);
+  const auto before = seeds;
+  const auto* unchanged_tag = seeds.back().clock_tag.data();
+  auto descriptor = descriptorFor(state, 0, 0);
+  auto replacement = seeds.front();
+  replacement.slew[0][0] = 0.25;
+  auto appended = seeds.front();
+  appended.seed_node = csr::NodeId{1};
+  descriptor.reference_payload.start_seeds = StartSeedDelta{
+      seeds.size(), {{0, seeds.front(), replacement}}, {appended}};
+  const auto validate = [&](const auto& batch) {
+    DualCsrViolations errors;
+    detail::validateReferenceDelta(state, batch, errors);
+    return errors;
+  };
+  require(validate(descriptor).empty(), "valid local seed delta rejected");
+  for (int fault = 0; fault < 7; ++fault) {
+    auto bad = descriptor;
+    auto& delta = *bad.reference_payload.start_seeds;
+    if (fault == 0) ++delta.expected_size;
+    if (fault == 1) delta.changes.front().expected.clock_tag = "stale";
+    if (fault == 2) delta.changes.push_back(delta.changes.front());
+    if (fault == 3) delta.changes.front().slot = seeds.size();
+    if (fault == 4) delta.changes.front().replacement.seed_node = csr::NodeId{descriptor.after.node_slots};
+    if (fault == 5) delta.appends.front().slew[0][0] = -1.0;
+    if (fault == 6) delta.appends.front().crpr_node = csr::NodeId{0};
+    require(!validate(bad).empty(), "invalid local seed delta accepted");
+  }
+  const auto allocations = [](auto& graph, const auto& batch) {
+    ista_test_allocation::armCountOnly();
+    detail::PreparedDualCsrGraphPatch patch(graph, batch);
+    const auto count = ista_test_allocation::disable();
+    return count;
+  };
+  auto larger = state;
+  for (int index = 0; index < 1024; ++index)
+    larger.reference_payload.start_seeds.push_back(unchanged);
+  auto larger_descriptor = descriptor;
+  larger_descriptor.reference_payload.start_seeds->expected_size = larger.reference_payload.start_seeds.size();
+  // Compare steady-capacity preparation; expansion is a separate real cost.
+  seeds.reserve(seeds.size() + 1);
+  larger.reference_payload.start_seeds.reserve(larger.reference_payload.start_seeds.size() + 1);
+  const auto small_count = allocations(state, descriptor);
+  const auto large_count = allocations(larger, larger_descriptor);
+  require(small_count == large_count, "seed preparation copied untouched records");
+  for (bool abandon : {false, true}) {
+    {
+      detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+      ista_test_allocation::armFailure(1);
+      patch.apply();
+      const auto apply_count = ista_test_allocation::disable();
+      require(apply_count == 0 && seeds.front() == replacement && seeds.back() == appended
+                  && seeds[1].clock_tag.data() == unchanged_tag, "seed apply allocated or copied untouched data");
+      if (!abandon) {
+        ista_test_allocation::armFailure(1);
+        patch.rollback();
+        const auto rollback_count = ista_test_allocation::disable();
+        require(rollback_count == 0, "seed rollback allocated");
+      }
+    }
+    require(seeds == before && seeds[1].clock_tag.data() == unchanged_tag, "seed rollback failed");
+  }
+  {
+    detail::PreparedDualCsrGraphPatch patch(state, descriptor);
+    patch.apply();
+    patch.commit();
+  }
+  require(seeds.front() == replacement && seeds.back() == appended
+              && seeds[1].clock_tag.data() == unchanged_tag, "seed commit lost its update");
+}
+
 void localPatchAtomicity()
 {
   auto state = tombstoneBaselineState();
@@ -395,6 +558,8 @@ int main()
       ista::timing_dual_csr::test::resourceObservationContracts();
     ista::timing_dual_csr::test::payloadAndDescriptorContracts();
     ista::timing_dual_csr::test::localPatchAtomicity();
+    ista::timing_dual_csr::test::localParasiticPatch();
+    ista::timing_dual_csr::test::localSeedPatch();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

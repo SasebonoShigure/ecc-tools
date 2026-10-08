@@ -3,7 +3,8 @@
 #include <string>
 
 #include "CsrCpuReferenceTestFixture.hpp"
-#include "CudaTargetedExecutionInternal.hpp"
+#include "CudaTargetedExecution.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "timing_dual_csr/DualCsrTestSupport.hpp"
 
 namespace {
@@ -11,6 +12,11 @@ using namespace ista;
 using namespace csr;
 using namespace timing_dual_csr;
 using namespace timing_dual_csr::test;
+struct ExecutionState
+{
+  StaExecutionRecord execution{};
+  std::optional<CudaDualCsrTelemetry> rejected_mixed_attempt;
+};
 struct Fixture
 {
   CsrReferenceInput input = csr::test::makeCpuReferenceNetFixture();
@@ -65,11 +71,11 @@ void rejectAndContinue(const Fixture& fixture, bool actual_cycle)
 {
   auto owner = fixture.owner();
   const auto before = owner.timingValues();
-  CudaTargetedTraceBatch batch;
+  ExecutionState batch;
   bool rejected = false;
   try {
     auto unexpected = csr::detail::stageCudaTargetedBatch(owner, actual_cycle ? fixture.cycle : fixture.conflict, StaUpdateStrategy::kIncremental,
-                                                          actual_cycle ? StaFallbackPolicy::kFullWithRecord : StaFallbackPolicy::kError, batch);
+                                                          actual_cycle ? StaFallbackPolicy::kFullWithRecord : StaFallbackPolicy::kError, batch.execution, batch.rejected_mixed_attempt);
     static_cast<void>(unexpected);
   } catch (const std::runtime_error&) {
     rejected = true;
@@ -77,7 +83,7 @@ void rejectAndContinue(const Fixture& fixture, bool actual_cycle)
   require(rejected && !batch.rejected_mixed_attempt, "production policy accepted conflict or attempted cycle fallback");
   require(owner.generation().value() == 1 && !owner.poisoned() && owner.timingValues() == before, "rejected policy changed origin");
   auto healthy = csr::detail::stageCudaTargetedBatch(owner, fixture.patch(1, fixture.water, fixture.water), StaUpdateStrategy::kIncremental,
-                                                     StaFallbackPolicy::kError, batch);
+                                                     StaFallbackPolicy::kError, batch.execution, batch.rejected_mixed_attempt);
   require(healthy.timingValues() == before && owner.publish(std::move(healthy)), "healthy batch after policy rejection failed");
 }
 void fallbackAndContinue(const Fixture& fixture)
@@ -86,8 +92,8 @@ void fallbackAndContinue(const Fixture& fixture)
   auto independent = fixture.owner();
   auto full = independent.stage(fixture.conflict, CudaLevelizationMode::kFull);
   require(!full.computationCode(), "independent full DAG computation failed");
-  CudaTargetedTraceBatch batch;
-  auto candidate = csr::detail::stageCudaTargetedBatch(owner, fixture.conflict, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kFullWithRecord, batch);
+  ExecutionState batch;
+  auto candidate = csr::detail::stageCudaTargetedBatch(owner, fixture.conflict, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kFullWithRecord, batch.execution, batch.rejected_mixed_attempt);
   const StaExecutionRecord expected{StaBackend::kCuda,
                                     StaUpdateStrategy::kIncremental,
                                     StaFallbackPolicy::kFullWithRecord,
@@ -98,15 +104,18 @@ void fallbackAndContinue(const Fixture& fixture)
                                     false,
                                     true,
                                     StaFallbackReason::kOldLevelOrderConflict};
-  require(batch.execution == expected && batch.rejected_mixed_attempt
-              && batch.rejected_mixed_attempt->mixed_failure == timing_incremental_levelization::MixedStageFailureCode::kOldLevelOrderConflict,
-          "production fallback record or rejected attempt is incorrect");
+  require(batch.execution == expected
+              && batch.rejected_mixed_attempt.has_value() == incregpusta_debug_checks_enabled,
+          "production fallback record or diagnostic boundary is incorrect");
+  if (batch.rejected_mixed_attempt)
+    require(batch.rejected_mixed_attempt->mixed_failure == timing_incremental_levelization::MixedStageFailureCode::kOldLevelOrderConflict,
+            "rejected mixed attempt has the wrong cause");
   require(candidate.timingValues() == full.timingValues(), "production full fallback differs from independent full execution");
   require(owner.publish(std::move(candidate)) && owner.generation().value() == 2, "production full fallback could not publish");
-  CudaTargetedTraceBatch next;
+  ExecutionState next;
   const auto committed = owner.timingValues();
   auto continuation = csr::detail::stageCudaTargetedBatch(owner, fixture.patch(2, fixture.conflict.after, fixture.conflict.after),
-                                                          StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError, next);
+                                                          StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError, next.execution, next.rejected_mixed_attempt);
   require(continuation.timingValues() == committed && next.execution.execution_kind == StaExecutionKind::kIncrementalUpdate
               && !next.rejected_mixed_attempt && owner.publish(std::move(continuation)),
           "mixed execution did not continue after actual full fallback");

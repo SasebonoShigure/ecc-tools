@@ -75,6 +75,12 @@ void PreparedNativeTargetedMetadata::undo() noexcept
     for (auto it : inserted)
       target.erase(it);
   };
+  for (auto& [node, previous] : _parasitics)
+    std::swap(_state.parasitics.at(node), previous);
+  for (const auto node : _new_parasitics)
+    _state.parasitics.erase(node);
+  _parasitics.clear();
+  _new_parasitics.clear();
   _resolver_patch.rollback();
   erase_inserted(_state.node_ids, _ids);
   std::swap(_state.generation, _generation);
@@ -179,11 +185,20 @@ csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTarget
     throw std::invalid_argument("targeted buffer edit touches a clock arc");
   const bool clock_eligible = state.clock_arcs->contains(state.native_arc_ids.at(rank));
   record.eligibility = csr::detail::projectCanonicalArcEligibility(record, nodes[1], false, clock_eligible);
-  record.transfer = csr::detail::projectCanonicalArcTransfer(database, *state.models, record, arc);
-  auto load = loads.find(nodes[1].net_name);
-  if (load == loads.end())
-    load = loads.emplace(nodes[1].net_name, netLoad(database, state, nodes[1].net_name, starts, ends)).first;
-  record.output_load = load->second;
+  csr::detail::projectCanonicalArcTransfer(database, *state.models, record, arc);
+  if (database.get_parasitic_library().get_net_map().contains(nodes[1].net_name)) {
+    record.parasitic = state.parasitics.at(record.sink);
+    const auto& tree = record.parasitic.tree;
+    if (!tree || tree->net_name != nodes[1].net_name || record.parasitic.terminal >= tree->terminals.size()
+        || tree->terminals[record.parasitic.terminal] != record.sink
+        || (record.kind == csr::ArcKind::kCell ? record.sink : record.source) != tree->terminals.front())
+      throw std::invalid_argument("targeted RC payload has a stale driver or terminal");
+  } else {
+    auto load = loads.find(nodes[1].net_name);
+    if (load == loads.end())
+      load = loads.emplace(nodes[1].net_name, netLoad(database, state, nodes[1].net_name, starts, ends)).first;
+    record.output_load = load->second;
+  }
   return {record.key,
           record.source,
           record.sink,
@@ -193,7 +208,7 @@ csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTarget
           record.is_loop_disabled,
           record.eligibility,
           std::move(record.transfer),
-          record.output_load};
+          record.output_load, record.native_cell_arc_ordinal, std::move(record.parasitic)};
 }
 
 std::vector<csr::ArcId> targetedRow(const Database& database, const NativeTargetedEditState& state, csr::NodeId node, bool incoming)

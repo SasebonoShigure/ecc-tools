@@ -230,6 +230,44 @@ void testNativeEquivalentBaseline()
   requireInvalid(validateTimingResult(clockInput(), timingResult(clockInput())), "unsupported input timing result");
 }
 
+void testMixedParasiticArcChecks()
+{
+  const auto input = mixedParasiticInput();
+  requireValid(validateReferenceInput(input), "mixed RC/no-RC reference");
+  auto result = timingResult(referenceInput());
+  const auto duplicate = [](auto& values) {
+    const auto copy = values;
+    values.insert(values.end(), copy.begin(), copy.end());
+  };
+  for (auto* values : {&result.arcs.delays, &result.arcs.min_delays, &result.arcs.max_delays,
+                      &result.arcs.transition_delays, &result.arcs.input_output_delays,
+                      &result.arcs.graph_delays, &result.data_slews, &result.physical_clock.slews}) {
+    duplicate(values->presence);
+    duplicate(values->values);
+  }
+  duplicate(result.arcs.transition_types.presence);
+  duplicate(result.arcs.transition_types.values);
+  result.arcs.timing_arc_row_offsets.push_back(0);
+  const auto validate = [&](const ArcResultSoa& arcs) {
+    detail::TimingResultViolations errors;
+    detail::validateArcResultSoa(input, arcs, result.data_slews, result.physical_clock.slews, errors);
+    return errors;
+  };
+  require(validate(result.arcs).empty(), "valid mixed arc lanes rejected");
+  for (std::size_t arc = 0; arc < 2; ++arc) {
+    auto changed = result.arcs;
+    changed.delays.values[arc] = changed.min_delays.values[arc] = changed.max_delays.values[arc] = 1.0;
+    for (std::size_t lane = arc * 4; lane < arc * 4 + 4; ++lane)
+      changed.transition_delays.values[lane] = 1.0;
+    require(validate(changed).empty() == (arc == 1),
+            "no-RC zero-delay check did not follow the individual net");
+    changed = result.arcs;
+    changed.transition_types.values[arc * 2] = Transition::kFall;
+    require(validate(changed).empty() == (arc == 1),
+            "no-RC identity mapping check did not follow the individual net");
+  }
+}
+
 void testIdentityLevelsAndNodeState()
 {
   const CsrReferenceInput input = referenceInput();
@@ -386,6 +424,29 @@ void testComputedPhysicalClockMutations()
   });
 }
 
+void testPropagatedClockPublication()
+{
+  auto input = clockInput();
+  input.clocks.front().propagated = true;
+  refreshIdentity(input);
+  const auto computation = CsrCpuReferenceBackend{}.compute(input);
+  const auto* result = std::get_if<CsrTimingResult>(&computation.outcome);
+  require(result != nullptr, "propagated clock did not execute");
+  require(result->effective_clock == result->physical_clock, "propagated publication lost physical identity");
+  requireValid(validateTimingResult(input, *result), "propagated clock result");
+  rejectMutation(input, *result, "propagated effective predecessor lost", [](auto& value) {
+    value.effective_clock.predecessor_nodes.presence[4] = 0;
+    value.effective_clock.predecessor_arc_delays.presence[4] = 0;
+    value.effective_clock.predecessor_transitions.presence[4] = 0;
+  });
+  rejectMutation(input, *result, "propagated effective arrival changed", [](auto& value) {
+    value.effective_clock.arrivals.values[4] += 1.0;
+  });
+  rejectMutation(input, *result, "propagated effective slew changed", [](auto& value) {
+    value.effective_clock.slews.values[4] += 1.0;
+  });
+}
+
 void testTypedClassificationAndLegacyProjection()
 {
   const CsrReferenceInput input = referenceInput();
@@ -446,8 +507,8 @@ void testTypedClassificationAndLegacyProjection()
           "malformed input legacy behavior must remain exact");
 
   CsrReferenceInput unsupported = clockInput();
-  unsupported.clocks[0].propagated = true;
-  unsupported.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
+  unsupported.case_analysis_constraints = {{"in", NodeId{0}, true}};
+  unsupported.unsupported_reasons = {CsrReferenceUnsupportedReason::kCaseAnalysis};
   refreshIdentity(unsupported);
   CsrTimingResult unsupported_result = result;
   unsupported_result.schema_version = "2.0.0";
@@ -462,11 +523,13 @@ void testTypedClassificationAndLegacyProjection()
 int main()
 {
   testNativeEquivalentBaseline();
+  testMixedParasiticArcChecks();
   testIdentityLevelsAndNodeState();
   testClockDataAndPathState();
   testArcMapsAndTimingRows();
   testClockSourceNamePriority();
   testComputedPhysicalClockMutations();
+  testPropagatedClockPublication();
   testTypedClassificationAndLegacyProjection();
   return 0;
 }

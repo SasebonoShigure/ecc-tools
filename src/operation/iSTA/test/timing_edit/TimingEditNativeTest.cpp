@@ -31,6 +31,8 @@
 #include "TimingEditNativeFixture.hpp"
 #include "TimingEditResolver.hpp"
 
+void testNativeRcLocalUndo();
+
 namespace {
 
 using namespace ista;
@@ -326,6 +328,7 @@ void testTranslatorChecksSequentialDataAndControlSinkRoles()
 
 int main()
 {
+  testNativeRcLocalUndo();
   testOnlyExactNonInvertingTwoPortBufferIsAccepted();
   testNativeDatabaseRejectsIncompleteTimingOrder();
   testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs();

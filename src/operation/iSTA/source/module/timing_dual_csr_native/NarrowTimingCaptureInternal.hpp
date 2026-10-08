@@ -60,7 +60,7 @@ struct CapturedNetLoad
 {
   timing_edit::StableNetRef ref;
   std::string net_name;
-  csr::ArcOutputLoadMatrix output_load{};
+  std::optional<csr::ArcOutputLoadMatrix> output_load;
   friend bool operator==(const CapturedNetLoad&,
                          const CapturedNetLoad&) = default;
 };

@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include "STAInterface.hpp"
+#include "IdbTimingPinName.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -214,7 +215,7 @@ void STAInterface::wrapInstancePin(idb::IdbInstance* idb_instance, idb::IdbPin* 
     return;
   }
 
-  std::string full_name = wrapInstancePinName(idb_instance, idb_pin);
+  std::string full_name = idbTimingPinName(*idb_pin);
   Pin pin;
   pin.set_pin_name(idb_pin->get_pin_name());
   pin.set_full_name(full_name);
@@ -228,11 +229,6 @@ bool STAInterface::wrapSignalConnectType(idb::IdbConnectType connect_type)
 {
   return connect_type == idb::IdbConnectType::kNone || connect_type == idb::IdbConnectType::kSignal || connect_type == idb::IdbConnectType::kClock
          || connect_type == idb::IdbConnectType::kReset || connect_type == idb::IdbConnectType::kScan || connect_type == idb::IdbConnectType::kTieOff;
-}
-
-std::string STAInterface::wrapInstancePinName(idb::IdbInstance* idb_instance, idb::IdbPin* idb_pin)
-{
-  return idb_instance->get_name() + ":" + idb_pin->get_pin_name();
 }
 
 PinDirection STAInterface::wrapPinDirection(idb::IdbConnectDirection idb_direction)
@@ -325,23 +321,8 @@ void STAInterface::wrapNetPinList(idb::IdbPins* io_pin_list, idb::IdbPins* insta
 
 void STAInterface::wrapNetPin(idb::IdbPin* idb_pin, Net& net)
 {
-  std::string pin_name;
-  if (idb_pin->is_io_pin()) {
-    pin_name = wrapNetIOPinName(idb_pin);
-  } else {
-    pin_name = wrapNetInstancePinName(idb_pin);
-  }
+  std::string pin_name = idbTimingPinName(*idb_pin);
   wrapNetPinNameList(net, pin_name);
-}
-
-std::string STAInterface::wrapNetIOPinName(idb::IdbPin* idb_pin)
-{
-  return idb_pin->get_pin_name();
-}
-
-std::string STAInterface::wrapNetInstancePinName(idb::IdbPin* idb_pin)
-{
-  return idb_pin->get_instance()->get_name() + ":" + idb_pin->get_pin_name();
 }
 
 void STAInterface::wrapNetPinNameList(Net& net, std::string& pin_name)

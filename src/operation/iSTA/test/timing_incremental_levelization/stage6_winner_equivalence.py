@@ -239,7 +239,8 @@ def _selected_path_delay(io: dict[str, list[Any]],
 
 def _root_seed_matches(graph: dict[str, Any], seeds: list[dict[str, Any]],
                        coordinates: tuple[int, int, int, int], entry: int,
-                       paths: dict[str, Any], require: Callable,
+                       paths: dict[str, Any], effective: dict[str, Any],
+                       node_index: dict[str, int], require: Callable,
                        label: str) -> bool:
     _, analysis, source, transition = coordinates
     payload = graph["reference_payload"]
@@ -259,11 +260,18 @@ def _root_seed_matches(graph: dict[str, Any], seeds: list[dict[str, Any]],
                 or canonical(seed.get("path_start_node")) != start:
             continue
         if seed.get("availability") == "deferred_sequential":
-            if sources[source] != "register" or _number(
-                    paths["launches"], entry, require,
-                    f"{label}.paths.launches") != 0.0 \
-                    or seed.get("crpr_node") is None \
-                    or seed.get("crpr_transition") not in ("rise", "fall"):
+            clock_node = node_index.get(canonical(seed.get("crpr_node")))
+            trigger = seed.get("crpr_transition")
+            if sources[source] != "register" or clock_node is None \
+                    or trigger not in ("rise", "fall"):
+                continue
+            clock_lane = (clock_node * 2 + analysis) * 2 + (trigger == "fall")
+            clock_arrivals = effective["arrivals"]
+            expected_launch = _number(clock_arrivals, clock_lane, require,
+                                      f"{label}.effective_clock.arrivals") \
+                if clock_arrivals["presence"][clock_lane] else 0.0
+            if _number(paths["launches"], entry, require,
+                       f"{label}.paths.launches") != expected_launch:
                 continue
         elif seed.get("availability") == "materialized":
             raw_arrival = seed.get("arrival")
@@ -388,7 +396,7 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
             require(_root_seed_matches(
                         graph, seeds_by_node.get(canonical(nodes[sink]), []),
                         (sink, analysis, source_kind, transition), entry,
-                        paths, require, label),
+                        paths, timing["effective_clock"], node_index, require, label),
                     f"{label}.paths[{entry}] is not an exact root seed")
             continue
         predecessor_key = paths["predecessor_nodes"]["values"][entry]
@@ -427,18 +435,38 @@ def _validate_path_winners(graph: dict[str, Any], timing: dict[str, Any],
     return result
 
 
-def _validate_ideal_clock_winners(timing: dict[str, Any], node_count: int,
-                                  require: Callable, label: str) -> None:
-    section = timing["effective_clock"]
-    label = f"{label}.effective_clock"
-    nodes = _soa(section, "predecessor_nodes", node_count * 4, require, label)
-    delays = _soa(section, "predecessor_arc_delays", node_count * 4,
-                  require, label)
-    transitions = _soa(section, "predecessor_transitions", node_count * 4,
-                       require, label)
-    require(nodes["presence"] == delays["presence"]
-            == transitions["presence"] and not any(nodes["presence"]),
-            f"{label} must use isolated ideal-clock roots")
+def _validate_clock_winners(graph: dict[str, Any], timing: dict[str, Any],
+                            require: Callable, label: str) -> None:
+    keys = [canonical(node["key"]) for node in graph["nodes"]]
+    payload = graph["reference_payload"]
+    owners = {canonical(item["node"]): item["clock_name"]
+              for item in payload["clock_owners"]}
+    clocks = {clock["map_key"]: clock for clock in payload["clocks"]}
+    require(set(owners) == set(keys), f"{label} clock owners omit nodes")
+    fields = ("arrivals", "slews", "predecessor_nodes",
+              "predecessor_arc_delays", "predecessor_transitions")
+    effective = {field: _soa(timing["effective_clock"], field, len(keys) * 4,
+                             require, f"{label}.effective_clock") for field in fields}
+    physical = {field: _soa(timing["physical_clock"], field, len(keys) * 4,
+                            require, f"{label}.physical_clock") for field in fields}
+    for node, key in enumerate(keys):
+        owner = owners[key]
+        require(owner is None or owner in clocks, f"{label} unknown clock owner")
+        propagated = owner is not None and clocks[owner]["propagated"]
+        for lane in range(node * 4, node * 4 + 4):
+            for field in fields:
+                actual = effective[field]
+                if propagated:
+                    expected = physical[field]
+                    require(actual["presence"][lane] == expected["presence"][lane]
+                            and (not actual["presence"][lane]
+                                 or actual["values"][lane] == expected["values"][lane]),
+                            f"{label}.effective_clock.{field} lost physical identity")
+                else:
+                    present = int(owner is not None and field in ("arrivals", "slews"))
+                    require(actual["presence"][lane] == present
+                            and (not present or _number(actual, lane, require, label) == 0.0),
+                            f"{label}.effective_clock.{field} violates ideal clock mode")
 
 
 
@@ -447,8 +475,7 @@ def admissible_winner_sets(graph: dict[str, Any], timing: dict[str, Any],
                            ) -> dict[str, Any]:
     nodes = graph.get("nodes")
     require(isinstance(nodes, list), f"{label}.graph.nodes is malformed")
-    _validate_ideal_clock_winners(
-        timing, len(nodes), require, f"{label}.timing")
+    _validate_clock_winners(graph, timing, require, f"{label}.timing")
     node_sets = _validate_node_winners(
         graph, timing, require, f"{label}.timing")
     path_sets = _validate_path_winners(

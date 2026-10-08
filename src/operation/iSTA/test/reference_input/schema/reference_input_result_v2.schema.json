@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openecos.org/schemas/reference_input_result_v1.schema.json",
-  "title": "Detached complete CSR reference-input poison probe, version 1",
+  "$id": "https://openecos.org/schemas/reference_input_result_v2.schema.json",
+  "title": "Detached complete CSR reference-input poison probe, version 2",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -21,7 +21,7 @@
     "complete"
   ],
   "properties": {
-    "schema": {"const": "ista-csr-reference-input-probe/1"},
+    "schema": {"const": "ista-csr-reference-input-probe/2"},
     "name": {"type": "string", "minLength": 1},
     "top": {"type": "string", "minLength": 1},
     "expected_clock": {"type": "string", "minLength": 1},

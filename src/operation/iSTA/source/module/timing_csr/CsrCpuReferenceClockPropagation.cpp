@@ -102,6 +102,20 @@ CsrCpuReferenceStageStatus propagateCsrCpuReferenceClocks(const ActiveCsrEdgeVie
             clock_state.predecessor_transitions.values[lane] = candidate.input;
           }
         }
+        if (!slew_pass && clock.propagated) {
+          auto& effective = work.result.effective_clock;
+          const auto copy = [node](auto& target, const auto& source) {
+            for (std::size_t lane = node.value() * 4; lane < node.value() * 4 + 4; ++lane) {
+              target.presence[lane] = source.presence[lane];
+              target.values[lane] = source.values[lane];
+            }
+          };
+          copy(effective.arrivals, clock_state.arrivals);
+          copy(effective.slews, clock_state.slews);
+          copy(effective.predecessor_nodes, clock_state.predecessor_nodes);
+          copy(effective.predecessor_arc_delays, clock_state.predecessor_arc_delays);
+          copy(effective.predecessor_transitions, clock_state.predecessor_transitions);
+        }
       }
   return Status::kSuccess;
 }

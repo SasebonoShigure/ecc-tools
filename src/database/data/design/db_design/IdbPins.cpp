@@ -53,9 +53,12 @@ IdbPin::IdbPin()
   _instance = nullptr;
   _orient = IdbOrient::kN_R0;
 
-  _average_coordinate = new IdbCoordinate<int32_t>(-1, -1);
-  _location = new IdbCoordinate<int32_t>(-1, -1);
-  _grid_coordinate = new IdbCoordinate<int32_t>(-1, -1);
+  auto average = std::make_unique<IdbCoordinate<int32_t>>(-1, -1);
+  auto location = std::make_unique<IdbCoordinate<int32_t>>(-1, -1);
+  auto grid = std::make_unique<IdbCoordinate<int32_t>>(-1, -1);
+  _average_coordinate = average.release();
+  _location = location.release();
+  _grid_coordinate = grid.release();
 }
 
 IdbPin::~IdbPin()
@@ -81,6 +84,7 @@ IdbPin::~IdbPin()
   }
 
   clear_port_layer_shape();
+  for (auto* via : _via_list) delete via;
 }
 
 IdbTerm* IdbPin::set_term(IdbTerm* term)
@@ -375,30 +379,34 @@ void IdbPin::set_port_layer_shape()
       for (IdbPort* port : _io_term->get_port_list()) {
         IdbOrientTransform db_transform(port->get_orient(), port->get_coordinate(), 0, 0);
         for (IdbLayerShape* layer_shape : port->get_layer_shape()) {
-          IdbLayerShape* layer_shape_transform = new IdbLayerShape();
+          auto layer_shape_transform = std::make_unique<IdbLayerShape>();
           layer_shape_transform->set_layer(layer_shape->get_layer());
           for (IdbRect* rect : layer_shape->get_rect_list()) {
-            IdbRect* rect_transform = new IdbRect(rect);
+            auto rect_transform = std::make_unique<IdbRect>(rect);
             rect_transform->moveByStep(port->get_coordinate()->get_x(), port->get_coordinate()->get_y());
-            db_transform.transformRect(rect_transform);
-            layer_shape_transform->add_rect(rect_transform);
+            db_transform.transformRect(rect_transform.get());
+            layer_shape_transform->add_rect(rect_transform.get());
+            (void) rect_transform.release();
           }
-          _layer_shape_list.emplace_back(layer_shape_transform);
+          _layer_shape_list.emplace_back(layer_shape_transform.get());
+          (void) layer_shape_transform.release();
         }
       }
     } else {
       IdbOrientTransform db_transform(this->get_orient(), this->get_location(), 0, 0);
       for (IdbPort* port : _io_term->get_port_list()) {
         for (IdbLayerShape* layer_shape : port->get_layer_shape()) {
-          IdbLayerShape* layer_shape_transform = new IdbLayerShape();
+          auto layer_shape_transform = std::make_unique<IdbLayerShape>();
           layer_shape_transform->set_layer(layer_shape->get_layer());
           for (IdbRect* rect : layer_shape->get_rect_list()) {
-            IdbRect* rect_transform = new IdbRect(rect);
+            auto rect_transform = std::make_unique<IdbRect>(rect);
             rect_transform->moveByStep(_location->get_x(), _location->get_y());
-            db_transform.transformRect(rect_transform);
-            layer_shape_transform->add_rect(rect_transform);
+            db_transform.transformRect(rect_transform.get());
+            layer_shape_transform->add_rect(rect_transform.get());
+            (void) rect_transform.release();
           }
-          _layer_shape_list.emplace_back(layer_shape_transform);
+          _layer_shape_list.emplace_back(layer_shape_transform.get());
+          (void) layer_shape_transform.release();
         }
       }
     }
@@ -407,15 +415,17 @@ void IdbPin::set_port_layer_shape()
                                     _instance->get_cell_master()->get_height());
     for (IdbPort* port : _io_term->get_port_list()) {
       for (IdbLayerShape* layer_shape : port->get_layer_shape()) {
-        IdbLayerShape* layer_shape_transform = new IdbLayerShape();
+        auto layer_shape_transform = std::make_unique<IdbLayerShape>();
         layer_shape_transform->set_layer(layer_shape->get_layer());
         for (IdbRect* rect : layer_shape->get_rect_list()) {
-          IdbRect* rect_transform = new IdbRect(rect);
+          auto rect_transform = std::make_unique<IdbRect>(rect);
           rect_transform->moveByStep(_instance->get_coordinate()->get_x(), _instance->get_coordinate()->get_y());
-          db_transform.transformRect(rect_transform);
-          layer_shape_transform->add_rect(rect_transform);
+          db_transform.transformRect(rect_transform.get());
+          layer_shape_transform->add_rect(rect_transform.get());
+            (void) rect_transform.release();
         }
-        _layer_shape_list.emplace_back(layer_shape_transform);
+        _layer_shape_list.emplace_back(layer_shape_transform.get());
+          (void) layer_shape_transform.release();
       }
     }
   }
@@ -427,7 +437,7 @@ void IdbPin::set_port_vias()
   _via_list.clear();
 
   auto cloneVia = [&](IdbVia* via, int32_t x_off = 0, int32_t y_off = 0) {
-    auto* pin_via = via->clone();
+    auto pin_via = std::unique_ptr<IdbVia>(via->clone());
     auto* coord = pin_via->get_coordinate();
     coord->get_x() += x_off;
     coord->get_y() += y_off;
@@ -441,7 +451,8 @@ void IdbPin::set_port_vias()
       db_transform.transformCoordinate(coord);
     }
 
-    return pin_via;
+    _via_list.push_back(pin_via.get());
+    (void) pin_via.release();
   };
   if (is_io_pin()) {
     if (!_io_term->is_placed())
@@ -451,20 +462,20 @@ void IdbPin::set_port_vias()
       for (IdbPort* port : _io_term->get_port_list()) {
         for (IdbVia* via : port->get_via_list()) {
           auto* coord = port->get_coordinate();
-          _via_list.push_back(cloneVia(via, coord->get_x(), coord->get_y()));
+          cloneVia(via, coord->get_x(), coord->get_y());
         }
       }
     } else {
       for (IdbPort* port : _io_term->get_port_list()) {
         for (IdbVia* via : port->get_via_list()) {
-          _via_list.push_back(cloneVia(via, _location->get_x(), _location->get_y()));
+          cloneVia(via, _location->get_x(), _location->get_y());
         }
       }
     }
   } else {
     for (IdbPort* port : _io_term->get_port_list()) {
       for (IdbVia* via : port->get_via_list()) {
-        _via_list.push_back(cloneVia(via, _instance->get_coordinate()->get_x(), _instance->get_coordinate()->get_y()));
+        cloneVia(via, _instance->get_coordinate()->get_x(), _instance->get_coordinate()->get_y());
       }
     }
   }
@@ -694,6 +705,8 @@ IdbPin* IdbPins::add_pin_ref_unique(IdbPin* pin)
   }
 
   if (_pin_ref_index != nullptr) {
+    if (_pin_ref_index->contains(pin)) return pin;
+    if (_pin_list.size() == _pin_list.capacity()) _pin_list.reserve(_pin_list.size() + _pin_list.size() / 2 + 1);
     const auto [it, inserted] = _pin_ref_index->insert(pin);
     if (!inserted) {
       return *it;
@@ -708,7 +721,8 @@ IdbPin* IdbPins::add_pin_ref_unique(IdbPin* pin)
   }
 
   _pin_list.emplace_back(pin);
-  update_pin_ref_index(pin);
+  try { update_pin_ref_index(pin); }
+  catch (...) { _pin_list.pop_back(); throw; }
   return pin;
 }
 
@@ -723,13 +737,12 @@ void IdbPins::update_pin_ref_index(IdbPin* pin)
     return;
   }
 
-  _pin_ref_index = std::make_unique<std::unordered_set<IdbPin*>>();
-  _pin_ref_index->reserve(_pin_list.size());
-  for (auto* pin : _pin_list) {
-    if (pin != nullptr) {
-      _pin_ref_index->insert(pin);
-    }
+  auto index = std::make_unique<std::unordered_set<IdbPin*>>();
+  index->reserve(_pin_list.size());
+  for (auto* item : _pin_list) {
+    if (item != nullptr) index->insert(item);
   }
+  _pin_ref_index = std::move(index);
 }
 /**
  * check if same pin exist and remove it

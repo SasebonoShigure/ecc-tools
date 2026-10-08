@@ -215,4 +215,10 @@ const DualCsrReferencePayload& DualSemanticReadView::referencePayload()
   return _state->reference_payload;
 }
 
+std::optional<std::size_t> DualSemanticReadView::parasiticNetSlot(const std::string& name) const noexcept
+{
+  const auto found = _state->parasitic_net_slots.find(name);
+  return found == _state->parasitic_net_slots.end() ? std::nullopt : std::optional<std::size_t>{found->second};
+}
+
 }  // namespace ista::timing_dual_csr

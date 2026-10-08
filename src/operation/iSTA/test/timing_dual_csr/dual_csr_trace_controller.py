@@ -22,7 +22,7 @@ from dual_csr_timing_evidence import (
 from dual_csr_trace_controller_selftest import run_controller_self_test
 from dual_csr_transaction_validator import validate_transaction as validate_full_transaction
 
-WIRE_SCHEMA = "ista-dual-csr-trace-process/4.0.0"
+WIRE_SCHEMA = "ista-dual-csr-trace-process/5.0.0"
 ABS_TOLERANCE = 1.0e-9
 REL_TOLERANCE = 1.0e-9
 
@@ -439,7 +439,7 @@ def replay(args: argparse.Namespace) -> None:
         del targeted, fresh, targeted_functional, fresh_functional
         del target_source, fresh_source
     write_json(root / "controller-summary.json", {
-        "schema_version": "ista-dual-csr-differential-verdict/3.0.0",
+        "schema_version": "ista-dual-csr-differential-verdict/4.0.0",
         "trace": str(trace),
         "controller_pid": os.getpid(),
         "all_process_ids_distinct": True,

@@ -6,7 +6,7 @@ namespace {
 
 ArcSemanticPayload semanticPayload(const ArcRecord& arc)
 {
-  return {arc.key, arc.source, arc.sink, arc.kind, arc.is_clock_arc, arc.is_disabled, arc.is_loop_disabled, arc.eligibility, arc.transfer, arc.output_load};
+  return {arc.key, arc.source, arc.sink, arc.kind, arc.is_clock_arc, arc.is_disabled, arc.is_loop_disabled, arc.eligibility, arc.transfer, arc.output_load, arc.native_cell_arc_ordinal, arc.parasitic};
 }
 
 EdgeVisitResult normalizedResult(EdgeVisitResult result)

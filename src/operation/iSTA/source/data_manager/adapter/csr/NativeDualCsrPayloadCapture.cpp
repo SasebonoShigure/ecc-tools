@@ -19,6 +19,8 @@
 #include "NativeDualCsrOutgoingOrderInternal.hpp"
 #include "NativeDualCsrPayloadCaptureInternal.hpp"
 #include "NativeDualCsrReferenceCapture.hpp"
+#include "NativeDualCsrParasiticCapture.hpp"
+#include "NativeTargetedEditPreparer.hpp"
 #include "NativeDualCsrTypedCaptureInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
@@ -50,13 +52,14 @@ class CaptureBuilder final
                  const DualSemanticReadView& committed,
                  const DualCsrArcGroupIndex& committed_index,
                  timing_edit::TimingEditResolverView staged,
-                 const AffectedCapturePlan& plan, CaptureRun& run)
+                 const AffectedCapturePlan& plan, CaptureRun& run,
+                 const timing_edit::NativeTargetedEditBatch* native)
       : _database(database), _models(models),
         _committed(committed),
         _committed_index(committed_index),
         _staged(staged),
         _plan(plan),
-        _run(run),
+        _run(run), _native(native),
         _nodes(plan.after.node_slots)
   {
   }
@@ -64,7 +67,7 @@ class CaptureBuilder final
   void build()
   {
     _models.requireDatabase(_database);
-    validateNoParasiticMode();
+    validateParasiticMode();
     if (const auto error = detail::validateNativeDataOnlyNets(
             _database, _plan))
       abortCapture(*error);
@@ -104,14 +107,23 @@ class CaptureBuilder final
     if (const auto error = detail::finalizeNativeDualCsrReferenceCapture(
             _committed, _plan, captured_node_keys, _run.records()))
       abortCapture(*error);
+    if (_native)
+      if (const auto error = detail::captureNativeDualCsrParasitics(
+              _database, *_native, _committed, _plan, _run.records()))
+        abortCapture(*error);
   }
 
  private:
-  void validateNoParasiticMode() const
+  void validateParasiticMode() const
   {
-    if (!_committed.referencePayload().parasitics.nets.empty()
-        || !_database.get_parasitic_library().get_net_map().empty())
+    const bool has_rc = !_database.get_parasitic_library().get_net_map().empty();
+    const auto& before = _committed.referencePayload();
+    if (has_rc != !before.parasitics.nets.empty()
+        || (has_rc && (!_native || before.analysis_context.rc_corner != "pre_route")))
       abortCapture(NarrowCaptureError::kParasiticModeMismatch);
+    for (const auto& edit : _plan.normalized_edits)
+      if (has_rc != std::holds_alternative<timing_edit::ParasiticRcInputs>(edit.rc_inputs))
+        abortCapture(NarrowCaptureError::kParasiticModeMismatch);
   }
 
   const timing_edit::BufferInsertionMutation& editForToken(
@@ -415,8 +427,9 @@ class CaptureBuilder final
         if (!facts.emplace(pin_name, std::move(pin)).second)
           abortCapture(NarrowCaptureError::kMalformedNativeRecord);
       }
-      const auto load = csr::detail::projectCanonicalNoParasiticNetLoad(
-          _database, request.expected_name, facts);
+      const auto load = _database.get_parasitic_library().get_net_map().contains(request.expected_name)
+          ? std::optional<csr::ArcOutputLoadMatrix>{}
+          : std::optional{csr::detail::projectCanonicalNoParasiticNetLoad(_database, request.expected_name, facts)};
       if (!_load_by_net.emplace(request.expected_name, load).second)
         abortCapture(NarrowCaptureError::kDuplicateRequest);
       _run.records().net_loads.push_back(
@@ -473,7 +486,7 @@ class CaptureBuilder final
       semantic.is_disabled = native[index]->get_is_disable_arc();
       semantic.is_loop_disabled
           = native[index]->get_is_loop_disable();
-      semantic.transfer = csr::detail::projectCanonicalArcTransfer(
+      csr::detail::projectCanonicalArcTransfer(
           _database, _models, semantic, *native[index]);
       if (semantic.kind == csr::ArcKind::kCell
           && semantic.transfer.children().size()
@@ -482,7 +495,7 @@ class CaptureBuilder final
       result.push_back({indices[index], semantic.key, semantic.source,
                         semantic.sink, semantic.is_clock_arc,
                         semantic.is_disabled, semantic.is_loop_disabled,
-                        std::move(semantic.transfer), std::nullopt});
+                        std::move(semantic.transfer), std::nullopt, semantic.native_cell_arc_ordinal});
     }
     return result;
   }
@@ -495,6 +508,7 @@ class CaptureBuilder final
     csr::ArcRecord record;
     record.id = arcIdForRequest(request);
     record.key = projected.key;
+    record.native_cell_arc_ordinal = projected.native_cell_arc_ordinal;
     record.source = projected.source;
     record.sink = projected.sink;
     record.kind = projected.key.base.kind;
@@ -524,6 +538,19 @@ class CaptureBuilder final
     } else {
       abortCapture(NarrowCaptureError::kUnplannedDependency);
     }
+    if (_native) {
+      const auto binding = _native->staged.parasitics.find(record.sink);
+      if (binding != _native->staged.parasitics.end()) {
+        record.parasitic = binding->second;
+        if (!record.parasitic.tree || record.parasitic.tree->net_name != sink.net_name
+            || record.parasitic.terminal >= record.parasitic.tree->terminals.size()
+            || record.parasitic.tree->terminals[record.parasitic.terminal] != record.sink
+            || record.parasitic.tree->terminals.front() != (record.kind == csr::ArcKind::kNet ? record.source : record.sink)
+            || record.output_load)
+          abortCapture(NarrowCaptureError::kMalformedNativeRecord);
+      } else if (!record.output_load)
+        abortCapture(NarrowCaptureError::kUnplannedDependency);
+    }
     return {record.key,
             record.source,
             record.sink,
@@ -533,7 +560,7 @@ class CaptureBuilder final
             record.is_loop_disabled,
             record.eligibility,
             record.transfer,
-            record.output_load};
+            record.output_load, record.native_cell_arc_ordinal, record.parasitic};
   }
   bool candidateMatchesRequest(const AffectedArcCapture& request,
                                const detail::NativeCandidateArcOrderFact&
@@ -556,10 +583,14 @@ class CaptureBuilder final
            && candidate.is_disabled == old->is_disabled
            && candidate.is_loop_disabled == old->is_loop_disabled
            && candidate.eligibility == old->eligibility
+           && candidate.native_cell_arc_ordinal == old->native_cell_arc_ordinal
            && (delay_count == 1 || candidate.transfer == old->transfer)
            && (load_mutable
-               || candidate.output_load == old->output_load);
+               || (candidate.output_load == old->output_load && candidate.parasitic == old->parasitic));
   }
+  // For existing arcs candidateMatchesRequest has already fixed the native
+  // identity. Only new, value-equal candidates with no old identity may use the
+  // existing ArcId/native-order tie break; the assigned ordinal is retained.
   static bool semanticallyEquivalent(
       const detail::NativeCandidateArcOrderFact& lhs,
       const detail::NativeCandidateArcOrderFact& rhs)
@@ -667,6 +698,7 @@ class CaptureBuilder final
   timing_edit::TimingEditResolverView _staged;
   const AffectedCapturePlan& _plan;
   CaptureRun& _run;
+  const timing_edit::NativeTargetedEditBatch* _native;
   std::map<timing_edit::StableArcRef, std::size_t> _delay_invalidations;
   detail::PlannedNodeCaptureIndex _planned_nodes;
   std::unordered_map<std::string_view, std::size_t> _starts, _ends;
@@ -678,19 +710,19 @@ class CaptureBuilder final
   std::map<std::uint64_t, std::string> _node_name_by_id;
   std::unordered_map<std::string, std::string> _ordered_pin_owners;
   std::map<std::string, const csr::ReferencedLibraryCellModel*> _library_by_name;
-  std::map<std::string, csr::ArcOutputLoadMatrix> _load_by_net;
+  std::map<std::string, std::optional<csr::ArcOutputLoadMatrix>> _load_by_net;
 };
 }
 detail::NativeCaptureResult detail::captureNativeDualCsrPayload(
     const ista::Database& database, csr::detail::NativeLibraryModels& models, const DualSemanticReadView& committed,
     const DualCsrArcGroupIndex& committed_index,
     timing_edit::TimingEditResolverView staged,
-    const AffectedCapturePlan& plan)
+    const AffectedCapturePlan& plan, const timing_edit::NativeTargetedEditBatch* native)
 {
   CaptureRun run(plan);
   try {
     CaptureBuilder{database, models, committed, committed_index, staged, plan,
-                   run}.build();
+                   run, native}.build();
     return run.succeed();
   } catch (const CaptureAbort& error) {
     return run.fail(error.error);

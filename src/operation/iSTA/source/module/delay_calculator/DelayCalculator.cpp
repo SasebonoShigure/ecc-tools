@@ -18,6 +18,7 @@
 
 #include <Eigen/IterativeLinearSolvers>
 #include <Eigen/SparseCore>
+#include <cfloat>
 
 #include "DataManager.hpp"
 #include "Logger.hpp"
@@ -3023,7 +3024,11 @@ double DelayCalculator::calcParasiticArnoldiTableRamp(TimingArc& timing_arc, Tra
   double table_slew = calcTimingArcSlewByRawLoad(timing_arc, output_trans_type, input_slew, capacitance);
   double transition_time = slew_derate * table_slew;
   double min_slew = drive_resistance * capacitance * min_slew_factor;
-  if (voltage_log * drive_resistance * capacitance >= transition_time) {
+  const double natural_transition = voltage_log * drive_resistance * capacitance;
+  // The inverse products are equal for a slew-limited driver, up to roundoff.
+  if (natural_transition >= transition_time
+      || (std::isfinite(transition_time)
+          && transition_time - natural_transition <= 8.0 * DBL_EPSILON * std::abs(transition_time))) {
     return min_slew;
   }
   double ramp = min_slew + 0.3 * transition_time;

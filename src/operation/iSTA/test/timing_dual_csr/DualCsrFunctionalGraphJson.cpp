@@ -43,6 +43,7 @@ Json arc(const DualCsrProjectedArc& value)
                             {"data_slew", value.eligibility.data_slew},
                             {"clock", value.eligibility.clock}}},
           {"transfer", transfer(value.transfer)},
+          {"native_cell_arc_ordinal", optionalValue(value.native_cell_arc_ordinal, [](auto ordinal) { return Json(ordinal); })},
           {"output_load", optionalValue(
                               value.output_load,
                               [](const auto& present) {

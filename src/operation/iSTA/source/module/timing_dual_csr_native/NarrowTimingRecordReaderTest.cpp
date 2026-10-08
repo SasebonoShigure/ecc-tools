@@ -298,7 +298,7 @@ void checkCapacitanceEvidenceLookup(const Baseline& baseline,
   csr::detail::NativeLibraryModels models(baseline.fixture.database());
   auto capture = ista::timing_dual_csr::detail::captureNativeDualCsrPayload(
       baseline.fixture.database(), models, DualSemanticReadView{baseline.state},
-      baseline.arc_group_index, pending.stagedResolver(), pending.capturePlan());
+      baseline.arc_group_index, pending.stagedResolver(), pending.capturePlan(), nullptr);
   require(capture.success(), "model-evidence fixture capture failed");
   auto records = std::move(*capture.records);
   const auto validate = [&] {

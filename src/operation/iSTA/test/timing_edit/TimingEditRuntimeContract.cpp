@@ -9,6 +9,9 @@
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
 
+void testNativeFullRcTransactions();
+void testNativeTargetedRcTransactions();
+
 namespace {
 using namespace ista;
 using namespace ista::timing_edit;
@@ -83,4 +86,6 @@ int main()
 {
   NativeTransactionRuntime runtime;
   testCommitAndRollback();
+  testNativeFullRcTransactions();
+  testNativeTargetedRcTransactions();
 }

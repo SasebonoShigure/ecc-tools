@@ -60,6 +60,16 @@ void runCpuReferenceClockContracts()
   requireCpuReference(propagateCsrCpuReferenceRequired(edges, payloads, work) == CsrCpuReferenceStageStatus::kSuccess, "physical clock result publication failed");
   requireCpuReference(work.result.physical_clock == physical, "final result lost physical clock values or predecessors");
 
+  input.clocks.front().propagated = true;
+  CsrCpuReferenceWorkState propagated;
+  requireCpuReference(initializeCsrCpuReferenceResult(payloads, levels, propagated) == CsrCpuReferenceStageStatus::kSuccess
+                          && initializeCsrCpuReferenceArcs(edges, propagated) == CsrCpuReferenceStageStatus::kSuccess
+                          && propagateCsrCpuReferenceClocks(edges, payloads, propagated) == CsrCpuReferenceStageStatus::kSuccess,
+                      "propagated clock calculation failed");
+  requireCpuReference(propagated.result.effective_clock == physical,
+                      "propagated clock lost arrival, slew or predecessor identity");
+  input.clocks.front().propagated = false;
+
   for (auto& table : child.delay_tables)
     std::ranges::fill(table.values, std::numeric_limits<double>::max());
   input.arcs[1].transfer.setChildren(children);

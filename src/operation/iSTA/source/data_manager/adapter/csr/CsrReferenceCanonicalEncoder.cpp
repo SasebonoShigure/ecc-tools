@@ -256,6 +256,10 @@ void appendLibraryCell(CanonicalEncoder& encoder, const ReferencedLibraryCellMod
   encoder.appendString(cell.clock_pin_name);
   encoder.appendString(cell.data_pin_name);
   encoder.appendString(cell.output_pin_name);
+  encoder.appendDouble(cell.slew_derate);
+  for (const auto& thresholds : {cell.slew_lower_threshold_pct, cell.slew_upper_threshold_pct, cell.input_threshold_pct})
+    for (double value : thresholds)
+      encoder.appendDouble(value);
   encoder.appendU64(cell.ports.size());
   for (const auto& port : cell.ports) {
     encoder.appendString(port.name);
@@ -288,6 +292,9 @@ void appendParasitics(CanonicalEncoder& encoder, const ParasiticModel& parasitic
 {
   encoder.appendString(parasitics.capacitance_unit);
   encoder.appendString(parasitics.resistance_unit);
+  encoder.appendDouble(parasitics.input_port_thresholds.slew_derate);
+  for (double value : parasitics.input_port_thresholds.lower) encoder.appendDouble(value);
+  for (double value : parasitics.input_port_thresholds.upper) encoder.appendDouble(value);
   encoder.appendU64(parasitics.nets.size());
   for (const auto& net : parasitics.nets) {
     encoder.appendString(net.map_key);
@@ -453,6 +460,8 @@ std::vector<std::uint8_t> canonicalReferenceInputBytes(const CsrReferenceInput& 
     encoder.appendU64(arc.sink.value());
     encoder.appendString(token(arc.kind));
     encoder.appendU64(arc.native_traversal_rank);
+    encoder.appendBool(arc.native_cell_arc_ordinal.has_value());
+    if (arc.native_cell_arc_ordinal) encoder.appendU64(*arc.native_cell_arc_ordinal);
     encoder.appendBool(arc.is_clock_arc);
     encoder.appendBool(arc.is_disabled);
     encoder.appendBool(arc.is_loop_disabled);

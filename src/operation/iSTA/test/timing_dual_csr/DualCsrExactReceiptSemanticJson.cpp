@@ -170,7 +170,8 @@ Json arcPayload(const csr::ArcSemanticPayload& value)
                             {"data_slew", value.eligibility.data_slew},
                             {"clock", value.eligibility.clock}}},
           {"transfer", transfer(value.transfer)},
-          {"output_load", optionalValue(value.output_load, loadMatrix)}};
+          {"output_load", optionalValue(value.output_load, loadMatrix)},
+          {"native_cell_arc_ordinal", optionalValue(value.native_cell_arc_ordinal, [](auto ordinal) { return Json(ordinal); })}};
 }
 
 Json arcRecord(const csr::ArcRecord& value)
@@ -189,7 +190,8 @@ Json arcRecord(const csr::ArcRecord& value)
                             {"data_slew", value.eligibility.data_slew},
                             {"clock", value.eligibility.clock}}},
           {"transfer", transfer(value.transfer)},
-          {"output_load", optionalValue(value.output_load, loadMatrix)}};
+          {"output_load", optionalValue(value.output_load, loadMatrix)},
+          {"native_cell_arc_ordinal", optionalValue(value.native_cell_arc_ordinal, [](auto ordinal) { return Json(ordinal); })}};
 }
 
 Json instanceRecord(const csr::InstanceRecord& value)
@@ -318,6 +320,17 @@ Json append(const std::optional<RecordAppend<T>>& value, Convert convert)
   });
 }
 
+Json parasiticDelta(const std::optional<ParasiticNetDelta>& value)
+{
+  if (!value) return nullptr;
+  return {{"expected_size", value->expected_size},
+          {"changes", arrayOf(value->changes, [](const ParasiticNetChange& item) {
+            return Json{{"slot", item.slot}, {"expected", parasiticNet(item.expected)},
+                        {"replacement", parasiticNet(item.replacement)}};
+          })},
+          {"appends", arrayOf(value->appends, parasiticNet)}};
+}
+
 Json referenceDelta(const DualCsrReferencePayloadDelta& value)
 {
   const auto text = [](const std::string& item) { return Json(item); };
@@ -368,9 +381,14 @@ Json referenceDelta(const DualCsrReferencePayloadDelta& value)
        append(value.referenced_library_cells, [](const auto& items) {
          return arrayOf(items, libraryCell);
        })},
-      {"parasitics", replacement(value.parasitics, parasitics)},
-      {"start_seeds", replacement(value.start_seeds, [](const auto& items) {
-         return arrayOf(items, startSeed);
+      {"parasitics", parasiticDelta(value.parasitics)},
+      {"start_seeds", optionalValue(value.start_seeds, [](const StartSeedDelta& item) {
+         return Json{{"expected_size", item.expected_size},
+                     {"changes", arrayOf(item.changes, [](const StartSeedChange& change) {
+                        return Json{{"slot", change.slot}, {"expected", startSeed(change.expected)},
+                                    {"replacement", startSeed(change.replacement)}};
+                      })},
+                     {"appends", arrayOf(item.appends, startSeed)}};
        })},
       {"endpoint_required",
        replacement(value.endpoint_required, [](const auto& items) {

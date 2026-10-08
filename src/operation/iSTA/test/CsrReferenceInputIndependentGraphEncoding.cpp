@@ -120,6 +120,7 @@ void appendArc(Writer& writer, const ArcRecord& arc)
   writer.appendU64(arc.sink.value());
   writer.appendEnum(arc.kind);
   writer.appendU64(arc.native_traversal_rank);
+  writer.appendOptional(arc.native_cell_arc_ordinal, [](Writer& local, std::uint64_t value) { local.appendU64(value); });
   writer.appendBool(arc.is_clock_arc);
   writer.appendBool(arc.is_disabled);
   writer.appendBool(arc.is_loop_disabled);

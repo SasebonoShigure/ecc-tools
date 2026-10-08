@@ -541,7 +541,7 @@ def run_descriptor_replay_self_test(require: Require) -> None:
                     "delay": delay, "delay_min": delay, "delay_max": delay,
                     "is_clock_arc": False, "is_disabled": False,
                     "is_clear_or_preset": False, "children": []},
-                "output_load": None}
+                "output_load": None, "native_cell_arc_ordinal": None}
 
     def node_record(key_value: dict[str, Any], net_name: str) -> dict[str, Any]:
         return {"key": key_value, "direction": "input", "instance_cell": "",

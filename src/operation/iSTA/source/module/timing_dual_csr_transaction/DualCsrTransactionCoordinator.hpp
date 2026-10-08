@@ -99,7 +99,7 @@ class DualCsrCommitBinding final
       : _owner(&state), _session(state.graph.session_token), _generation(state.generation)
   {
   }
-  [[nodiscard]] bool matches(const CommittedDualCsrAnalysisState& state) const
+  [[nodiscard]] bool matches(const CommittedDualCsrAnalysisState& state) const noexcept
   {
     if (_owner != &state || _session != state.graph.session_token || _generation != state.generation)
       return false;
@@ -201,13 +201,15 @@ class DualCsrTransactionCoordinator final
   [[nodiscard]] PendingStructuredBatch prepareBatch(timing_edit::EditBatch edits) const;
   [[nodiscard]] bool poisoned() const noexcept { return _poisoned; }
 
+  [[nodiscard]] bool canPublish(const DualCsrVerifiedStage& staged) const noexcept;
   [[nodiscard]] DualCsrTransactionStatus publish(
       DualCsrVerifiedStage staged,
-      DualCsrPublishFailpoint failpoint = DualCsrPublishFailpoint::kNone);
+      DualCsrPublishFailpoint failpoint = DualCsrPublishFailpoint::kNone) noexcept;
   [[nodiscard]] DualCsrTransactionStatus recover(
       DualCsrVerifiedModeRecovery rebuilt);
 
  private:
+  [[nodiscard]] DualCsrTransactionCode publicationError(const DualCsrVerifiedStage& staged) const noexcept;
   [[nodiscard]] DualCsrTransactionStatus reject(
       DualCsrTransactionCode code) const noexcept;
 

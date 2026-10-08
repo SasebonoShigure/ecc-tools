@@ -78,11 +78,12 @@ void runCudaSequentialContracts()
     seed.child_count = node == 1 ? 1 : 0;
   }
   seeds[3].sequential.kind = SeedKind::scalar;
+  seeds[0].propagated_clock = seeds[2].propagated_clock = true;
   for (unsigned lane = 0; lane < 4; ++lane) {
-    seeds[0].effective_arrival[lane] = {lane % 2 == 0 ? 99.0 : (lane < 2 ? 7.0 : 3.0), true};
-    seeds[0].effective_slew[lane] = {lane % 2 == 0 ? 99.0 : (lane < 2 ? 4.0 : 2.0), true};
-    seeds[2].effective_arrival[lane] = {999.0, true};
-    seeds[2].effective_slew[lane] = {999.0, true};
+    seeds[0].physical_clock[lane].arrival = {lane % 2 == 0 ? 99.0 : (lane < 2 ? 7.0 : 3.0), true};
+    seeds[0].physical_clock[lane].slew = {lane % 2 == 0 ? 99.0 : (lane < 2 ? 4.0 : 2.0), true};
+    seeds[2].physical_clock[lane].arrival = {999.0, true};
+    seeds[2].physical_clock[lane].slew = {999.0, true};
     arcs[0].load[lane] = 2.0;
   }
   arcs[0].source = 1;
@@ -183,6 +184,11 @@ void runCudaSequentialContracts()
   for (std::size_t index = 0; index < paths.size(); ++index)
     demand(pathFields(result_paths[index]) == pathFields(expected_paths[index]), "CUDA register path, winner or CRPR identity differs");
   demand(result_cache[0].delay == 42.0, "standalone CUDA CTQ changed graph cache");
+  seeds[0].propagated_clock = false;
+  demand(run() == Status::success && result[0].arrival == 0.0 && result[1].arrival == 3.0
+             && result[3].required == 97.5,
+         "ideal clock consumed physical delay or slew");
+  seeds[0].propagated_clock = true;
   for (auto& load : arcs[0].load)
     load = 4.0;
   rise = fall0 = fall1 = {};
@@ -207,8 +213,8 @@ void runCudaSequentialContracts()
   for (Index node = 0; node < 2; ++node) {
     seeds[node].sequential.clock_node = 0;
     for (unsigned lane = 0; lane < 4; ++lane) {
-      seeds[node].effective_arrival[lane] = {};
-      seeds[node].effective_slew[lane] = {};
+      seeds[node].physical_clock[lane].arrival = {};
+      seeds[node].physical_clock[lane].slew = {};
     }
   }
   demand(run() == Status::success && result[0].arrival == 0.0 && result[1].arrival == 5.0,

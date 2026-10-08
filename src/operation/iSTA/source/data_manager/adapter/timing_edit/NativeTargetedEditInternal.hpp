@@ -26,6 +26,7 @@ struct PreparedNativeTargetedMetadata
   [[nodiscard]] const std::string& nodeName(std::size_t id) const
   { return id < _node_count ? _state.node_names.at(id) : _names.at(id - _node_count); }
   void apply() noexcept;
+  void applyParasitics(std::map<csr::NodeId, csr::CsrParasiticBinding> bindings);
   void undo() noexcept;
   void commit() noexcept { _resolver_patch.commit(); }
 
@@ -40,8 +41,13 @@ struct PreparedNativeTargetedMetadata
   std::vector<std::map<std::string, csr::NodeId>::iterator> _ids;
   std::vector<std::pair<std::size_t, csr::ArcId>> _old_native_ids;
   std::vector<std::pair<std::size_t, std::optional<std::size_t>>> _old_ranks;
+  std::map<csr::NodeId, csr::CsrParasiticBinding> _parasitics;
+  std::vector<csr::NodeId> _new_parasitics;
   bool _applied{false};
 };
+std::map<csr::NodeId, csr::CsrParasiticBinding> prepareTargetedParasitics(
+    const Database& database, const NativeTargetedEditState& state, const std::vector<std::string>& nets);
+void bindTargetedBaselineParasitics(NativeTargetedEditState& state, const csr::CsrReferenceInput& input);
 csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditState& state, const std::string& name,
                              const std::set<std::string>& starts, const std::set<std::string>& ends);
 csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTargetedEditState& state, std::size_t rank,

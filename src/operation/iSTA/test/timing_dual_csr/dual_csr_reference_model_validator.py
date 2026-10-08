@@ -3,7 +3,8 @@
 
 import math
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 Require = Callable[[bool, str], None]
 NODE_KINDS = {"port", "instance_pin"}
@@ -203,13 +204,18 @@ def _instance(value: object, label: str, require: Require) -> None:
 def _library_cell(value: object, label: str, require: Require) -> None:
     keys = {"cell_name", "present", "library_name", "is_sequential",
             "is_clock_gating", "is_macro", "clock_pin_name", "data_pin_name",
-            "output_pin_name", "ports", "cell_arcs", "timing_checks"}
+            "output_pin_name", "ports", "cell_arcs", "timing_checks", "slew_derate",
+            "slew_lower_threshold_pct", "slew_upper_threshold_pct", "input_threshold_pct"}
     item = _object(value, keys, label, require)
     for field in ("cell_name", "library_name", "clock_pin_name",
                   "data_pin_name", "output_pin_name"):
         _text(item[field], f"{label}.{field}", require)
     for field in ("present", "is_sequential", "is_clock_gating", "is_macro"):
         _boolean(item[field], f"{label}.{field}", require)
+    _number(item["slew_derate"], f"{label}.slew_derate", require)
+    for field in ("slew_lower_threshold_pct", "slew_upper_threshold_pct", "input_threshold_pct"):
+        for index, number in enumerate(_fixed_array(item[field], 2, f"{label}.{field}", require)):
+            _number(number, f"{label}.{field}[{index}]", require)
     for index, port in enumerate(_array(item["ports"], f"{label}.ports", require)):
         port_label = f"{label}.ports[{index}]"
         typed = _object(port, {"name", "direction", "is_clock", "is_output",
@@ -346,37 +352,48 @@ def _capacitance(value: object, label: str, require: Require) -> None:
 
 
 def _parasitics(value: object, label: str, require: Require) -> None:
-    item = _object(value, {"capacitance_unit", "resistance_unit", "nets"},
+    item = _object(value, {"capacitance_unit", "resistance_unit", "input_port_thresholds", "nets"},
                    label, require)
     _text(item["capacitance_unit"], f"{label}.capacitance_unit", require)
     _text(item["resistance_unit"], f"{label}.resistance_unit", require)
+    thresholds = _object(item["input_port_thresholds"], {"slew_derate", "lower", "upper"},
+                         f"{label}.input_port_thresholds", require)
+    _number(thresholds["slew_derate"], f"{label}.input_port_thresholds.slew_derate", require)
+    for field in ("lower", "upper"):
+        values = _fixed_array(thresholds[field], 2, f"{label}.{field}", require)
+        for index, number in enumerate(values):
+            _number(number, f"{label}.{field}[{index}]", require)
     for net_index, net in enumerate(_array(item["nets"], f"{label}.nets", require)):
         net_label = f"{label}.nets[{net_index}]"
-        typed = _object(net, {"map_key", "embedded_name",
-                              "lumped_capacitance", "nodes", "resistors"},
-                        net_label, require)
-        _text(typed["map_key"], f"{net_label}.map_key", require)
-        _text(typed["embedded_name"], f"{net_label}.embedded_name", require)
-        _number(typed["lumped_capacitance"],
-                f"{net_label}.lumped_capacitance", require)
-        for node_index, node in enumerate(_array(
-                typed["nodes"], f"{net_label}.nodes", require)):
-            node_label = f"{net_label}.nodes[{node_index}]"
-            record = _object(node, {"map_key", "embedded_name", "capacitance",
-                                    "x", "y"}, node_label, require)
-            _text(record["map_key"], f"{node_label}.map_key", require)
-            _text(record["embedded_name"], f"{node_label}.embedded_name", require)
-            for field in ("capacitance", "x", "y"):
-                _number(record[field], f"{node_label}.{field}", require)
-        for resistor_index, resistor in enumerate(_array(
-                typed["resistors"], f"{net_label}.resistors", require)):
-            resistor_label = f"{net_label}.resistors[{resistor_index}]"
-            record = _object(resistor, {"source", "sink", "resistance"},
-                             resistor_label, require)
-            _text(record["source"], f"{resistor_label}.source", require)
-            _text(record["sink"], f"{resistor_label}.sink", require)
-            _number(record["resistance"],
-                    f"{resistor_label}.resistance", require)
+        validate_parasitic_net(net, net_label, require)
+
+
+def validate_parasitic_net(net: object, net_label: str, require: Require) -> None:
+    typed = _object(net, {"map_key", "embedded_name",
+                          "lumped_capacitance", "nodes", "resistors"},
+                    net_label, require)
+    _text(typed["map_key"], f"{net_label}.map_key", require)
+    _text(typed["embedded_name"], f"{net_label}.embedded_name", require)
+    _number(typed["lumped_capacitance"],
+            f"{net_label}.lumped_capacitance", require)
+    for node_index, node in enumerate(_array(
+            typed["nodes"], f"{net_label}.nodes", require)):
+        node_label = f"{net_label}.nodes[{node_index}]"
+        record = _object(node, {"map_key", "embedded_name", "capacitance",
+                                "x", "y"}, node_label, require)
+        _text(record["map_key"], f"{node_label}.map_key", require)
+        _text(record["embedded_name"], f"{node_label}.embedded_name", require)
+        for field in ("capacitance", "x", "y"):
+            _number(record[field], f"{node_label}.{field}", require)
+    for resistor_index, resistor in enumerate(_array(
+            typed["resistors"], f"{net_label}.resistors", require)):
+        resistor_label = f"{net_label}.resistors[{resistor_index}]"
+        record = _object(resistor, {"source", "sink", "resistance"},
+                         resistor_label, require)
+        _text(record["source"], f"{resistor_label}.source", require)
+        _text(record["sink"], f"{resistor_label}.sink", require)
+        _number(record["resistance"],
+                f"{resistor_label}.resistance", require)
 
 
 def _records(value: object, validator: Callable[[object, str, Require], None],
@@ -472,7 +489,7 @@ def validate_reference_value(field: str, value: object, label: str,
     elif field == "cell_pin_capacitances":
         _records(value, _capacitance, label, require)
     else:
-        require(False, f"{label} has an unknown reference field")
+        require(False, f"{label} has an unknown reference field")  # noqa: FBT003
 
 
 def run_reference_model_self_test(require: Require) -> None:
@@ -484,17 +501,31 @@ def run_reference_model_self_test(require: Require) -> None:
     cell = {"cell_name": "BUF", "present": True, "library_name": "lib",
             "is_sequential": False, "is_clock_gating": False, "is_macro": False,
             "clock_pin_name": "", "data_pin_name": "", "output_pin_name": "Y",
-            "ports": [port], "cell_arcs": [], "timing_checks": []}
+            "ports": [port], "cell_arcs": [], "timing_checks": [],
+            "slew_derate": {**zero, "value": 1.0},
+            "slew_lower_threshold_pct": [{**zero, "value": 0.3}] * 2,
+            "slew_upper_threshold_pct": [{**zero, "value": 0.7}] * 2,
+            "input_threshold_pct": [{**zero, "value": 0.5}] * 2}
     errors: list[str] = []
     validate_reference_value("referenced_library_cells", [cell], "valid-cell",
                              lambda ok, message: errors.append(message)
                              if not ok else None)
     require(not errors, f"valid exact library model was rejected: {errors}")
-    tampered = {"capacitance_unit": "pf", "resistance_unit": "ohm",
-                "nets": [{"map_key": "n", "embedded_name": "n",
-                          "lumped_capacitance": zero,
-                          "nodes": [{"same_size": "object"}],
-                          "resistors": []}]}
+    net = {"map_key": "n", "embedded_name": "n", "lumped_capacitance": zero,
+           "nodes": [{"map_key": "p", "embedded_name": "p", "capacitance": zero,
+                      "x": zero, "y": zero}], "resistors": []}
+    pristine = {"capacitance_unit": "pf", "resistance_unit": "ohm",
+                "input_port_thresholds": {
+                    "slew_derate": {**zero, "value": 1.0},
+                    "lower": [{**zero, "value": 0.3}] * 2,
+                    "upper": [{**zero, "value": 0.7}] * 2},
+                "nets": [net]}
+    errors = []
+    validate_reference_value("parasitics", pristine, "valid-parasitics",
+                             lambda ok, message: errors.append(message)
+                             if not ok else None)
+    require(not errors, f"valid exact parasitic model was rejected: {errors}")
+    tampered = {**pristine, "nets": [{**net, "nodes": [{"same_size": "object"}]}]}
     errors = []
     try:
         validate_reference_value("parasitics", tampered, "parasitic-tamper",

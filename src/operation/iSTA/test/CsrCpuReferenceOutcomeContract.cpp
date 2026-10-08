@@ -95,15 +95,6 @@ CsrReferenceInput parasiticUnsupportedInput()
 }
 
 
-CsrReferenceInput propagatedUnsupportedInput()
-{
-  CsrReferenceInput input = clockInput();
-  input.clocks.front().propagated = true;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
-  refreshIdentity(input);
-  return input;
-}
-
 CsrReferenceInput gatingUnsupportedInput(CsrReferenceInput input = cellInput())
 {
   input.instances.front().is_clock_gating = true;
@@ -125,7 +116,7 @@ CsrReferenceInput caseUnsupportedInput()
 
 std::vector<CsrReferenceInput> unsupportedReasonFixtures()
 {
-  return {parasiticUnsupportedInput(), propagatedUnsupportedInput(), gatingUnsupportedInput(), caseUnsupportedInput()};
+  return {parasiticUnsupportedInput(), gatingUnsupportedInput(), caseUnsupportedInput()};
 }
 
 CsrReferenceInput presentEmptySlewOverflowInput(bool unsafe_cap)
@@ -274,7 +265,7 @@ void testRuntimePrecedence()
   expectCode(computeCsrCpuReferenceWithReplay(malformed, &countingReplay), CsrComputationCode::kInvariantViolation, "malformed-before-FIFO");
   requireCpuReference(replay_calls == 0, "malformed input called the FIFO seam");
 
-  const CsrReferenceInput unsupported = propagatedUnsupportedInput();
+  const CsrReferenceInput unsupported = caseUnsupportedInput();
   replay_calls = 0;
   expectSupport(computeCsrCpuReferenceWithReplay(unsupported, &countingReplay), unsupported, "support-before-FIFO");
   requireCpuReference(replay_calls == 0, "unsupported input called the FIFO seam");
@@ -409,7 +400,7 @@ void testOutcomeProjection()
   result.outcome = CsrReferenceSupportResult{{CsrReferenceUnsupportedReason::kParasiticNet}};
   requireCpuReference(!validateComputationResult(supported, result).empty(), "supported complete support alternative was accepted");
 
-  const CsrReferenceInput unsupported = propagatedUnsupportedInput();
+  const CsrReferenceInput unsupported = caseUnsupportedInput();
   result.outcome = CsrReferenceSupportResult{unsupported.unsupported_reasons};
   requireCpuReference(validateComputationResult(unsupported, result).empty(), "exact unsupported projection was rejected");
   result.outcome = CsrComputationCode::kInvariantViolation;

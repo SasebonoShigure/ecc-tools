@@ -48,7 +48,8 @@ NativeFullEditState NativeFullEditPreparer::bindBaseline(
                              detail::nextNativeInstanceId(database), std::move(resolver), std::move(clock_nets));
 }
 NativeFullEditBatch NativeFullEditPreparer::prepare(
-    Database& database, const NativeExecutionAuthority& authority, EditBatch edits, NativeFullEditState& state)
+    Database& database, const NativeExecutionAuthority& authority, EditBatch edits, NativeFullEditState& state,
+    std::map<std::string, ParasiticNet> prepared_rc)
 {
   require(authority.readyForQuery() && authority.sessionToken() == state._session
               && state._database == &database && &database == &STADM.getDatabase(),
@@ -67,7 +68,9 @@ NativeFullEditBatch NativeFullEditPreparer::prepare(
   std::vector<TokenMaterialization> names;
   names.reserve(plan.edits.size());
   for (const auto& edit : plan.edits) {
-    require(std::holds_alternative<NoParasiticRcInputs>(edit.rc_inputs), "native full trace requires explicit NoParasitic edits");
+    const auto* rc = std::get_if<ParasiticRcInputs>(&edit.rc_inputs);
+    require(!rc || rc->parasitic_policy == ParasiticEditPolicy::kPreRouteTree,
+            "native full edit requires NoParasitic or prepared pre-route trees");
     require(!state._resolver.materializations().contains(edit.creation_token), "native full creation token already exists");
     names.push_back(defaultTokenMaterialization(edit.creation_token, edit.library_cell));
     slots.nodes.push_back({CreatedNodeRef{edit.creation_token, CreatedNodeRole::kInput}, append(slots.after.node_slots), false});
@@ -82,7 +85,7 @@ NativeFullEditBatch NativeFullEditPreparer::prepare(
       detail::requireDataOnlyNet(database, net);
     // New nets are checked against the preceding edits by raw preparation.
   }
-  auto transaction = NativeEditTransaction::prepareFull(authority, plan.edits, patch.view(), state._next_instance);
+  auto transaction = NativeEditTransaction::prepareFull(authority, plan.edits, patch.view(), state._next_instance, std::move(prepared_rc));
   return NativeFullEditBatch(state, TransactionGeneration{state._generation.value() + 1},
                             state._next_instance + plan.edits.size(), std::move(patch), std::move(transaction));
 }
@@ -97,9 +100,13 @@ NativeFullEditState::NativeFullEditState(Database& database, TimingEditSessionTo
 NativeFullEditBatch::NativeFullEditBatch(NativeFullEditBatch&& other) noexcept
     : _state(std::exchange(other._state, nullptr)), _target(other._target), _next_instance(other._next_instance),
       _patch(std::move(other._patch)), _transaction(std::move(other._transaction)) {}
+bool NativeFullEditBatch::canCommit() const noexcept
+{
+  return _state && _transaction.active() && _state->_generation.value() + 1 == _target.value();
+}
 bool NativeFullEditBatch::commit() noexcept
 {
-  if (!_state || !_transaction.active() || _state->_generation.value() + 1 != _target.value())
+  if (!canCommit())
     return false;
   _patch.apply();
   _patch.commit();

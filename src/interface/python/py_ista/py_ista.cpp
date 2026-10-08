@@ -28,6 +28,13 @@
 #include "TimingSemanticKey.hpp"
 #include "operation/iSTA/source/module/timing_csr/CsrReferenceValidator.hpp"
 #include "py_ista_snapshot.h"
+#include "PhysicalStaBatchJson.hpp"
+#include "PhysicalStaPlacement.hpp"
+#include "PhysicalGreedySelection.hpp"
+#include "TimingEditJsonInternal.hpp"
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
+#include "StaTimingEditSessionProbeAccess.hpp"
+#endif
 
 namespace python_interface {
 bool initStaConfigMapByJSON(const std::string& config, std::map<std::string, std::any>& config_map);
@@ -261,6 +268,90 @@ py::dict runIncrementalStaBaseline(ista::IncrementalStaSession& session)
 {
   return executionRecordToDict(ista::requireStaExecutionRecord(session.runFullBaseline(), session.request()));
 }
+py::dict runPhysicalStaBaseline(ista::IncrementalStaSession& session,
+    const std::string& bottom_layer, const std::string& top_layer,
+    const std::string& horizontal_layer, const std::string& vertical_layer,
+    const std::string& recovery_directory, const std::map<std::string, std::string>& checkpoint_files)
+{
+  ista::PhysicalStaConfig config{bottom_layer, top_layer, horizontal_layer, vertical_layer,
+      recovery_directory, checkpoint_files};
+  return executionRecordToDict(ista::requireStaExecutionRecord(session.runPhysicalBaseline(config), session.request()));
+}
+
+py::dict recoverPhysicalStaBaseline(ista::IncrementalStaSession& session,
+    const std::string& bottom_layer, const std::string& top_layer,
+    const std::string& horizontal_layer, const std::string& vertical_layer,
+    const std::string& recovery_directory, const std::map<std::string, std::string>& checkpoint_files)
+{
+  const auto result = session.recoverPhysicalBaseline({bottom_layer, top_layer, horizontal_layer, vertical_layer,
+      recovery_directory, checkpoint_files});
+  py::dict mapped;
+  mapped["generation"] = result.generation;
+  mapped["execution"] = executionRecordToDict(result.execution);
+  return mapped;
+}
+py::dict applyPhysicalStaBatch(ista::IncrementalStaSession& session, const std::string& batch_json)
+{
+  const auto parsed = [&] {
+    try { return ista::decodePhysicalStaBatchRequest(batch_json); }
+    catch (const std::exception& error) {
+      throw ista::StaSessionException(ista::StaStatus::failure(ista::StaSessionStatusCode::kRunFailed,
+          session.state(), error.what()), session.request());
+    }
+  }();
+  const auto result = session.applyPhysicalBatch(parsed.first, parsed.second);
+  py::dict mapped;
+  mapped["generation"] = result.generation;
+  mapped["execution"] = executionRecordToDict(result.execution);
+  return mapped;
+}
+
+std::uint64_t parsePhysicalGeneration(py::handle value)
+{
+  if (!PyLong_CheckExact(value.ptr()))
+    throw py::type_error("physical generation must be an exact uint64 integer");
+  return py::cast<std::uint64_t>(value);
+}
+py::dict readPhysicalStaPlacement(ista::IncrementalStaSession& session, py::handle expected_generation,
+                                  const std::vector<std::string>& cell_names)
+{
+  auto result = session.readPhysicalPlacement(parsePhysicalGeneration(expected_generation), cell_names);
+  py::dict mapped;
+  mapped["generation"] = result.generation;
+  mapped["dbu_per_um"] = result.dbu_per_um;
+  mapped["bounds"] = result.geometry.bounds;
+  mapped["site_width"] = result.geometry.site_width;
+  mapped["row_height"] = result.geometry.row_height;
+  mapped["rows"] = std::move(result.geometry.rows);
+  mapped["obstacles"] = std::move(result.geometry.obstacles);
+  mapped["cells"] = std::move(result.cells);
+  return mapped;
+}
+
+std::string selectPhysicalStaBuffers(ista::IncrementalStaSession& session, py::handle expected_generation,
+    const std::vector<std::string>& cell_names, py::handle top_k, py::handle max_buffers)
+{
+  const auto selected = session.selectPhysicalBuffers(parsePhysicalGeneration(expected_generation), cell_names,
+      parsePhysicalGeneration(top_k), parsePhysicalGeneration(max_buffers));
+  nlohmann::json candidates = nlohmann::json::array();
+  for (const auto& candidate : selected.candidates)
+    candidates.push_back({{"edit", ista::timing_edit::json_detail::toJson(candidate.edit)},
+        {"target_dbu", candidate.target_dbu}, {"predicted_gain_ns", candidate.predicted_gain_ns},
+        {"slack_ns", candidate.slack_ns}});
+  return nlohmann::json{{"generation", selected.generation}, {"candidates", std::move(candidates)}}.dump();
+}
+py::dict readPhysicalStaResult(ista::IncrementalStaSession& session, bool summary_only)
+{
+  auto result = session.readPhysicalResult(summary_only);
+  py::dict mapped;
+  mapped["generation"] = result.generation;
+  mapped["qor_json"] = std::move(result.qor_json);
+  if (!summary_only) {
+    mapped["timing"] = std::move(result.timing);
+    mapped["paths_json"] = std::move(result.paths_json);
+  }
+  return mapped;
+}
 
 void closeIncrementalStaSession(ista::IncrementalStaSession& session)
 {
@@ -328,3 +419,13 @@ py::object incrementalStaSnapshotObservation(ista::IncrementalStaSession& sessio
 }
 
 }  // namespace python_interface
+
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
+namespace python_interface {
+void registerPhysicalStaDiagnostic(pybind11::module_& module)
+{
+  module.def("read_physical_diagnostic", &ista::StaTimingEditSessionProbeAccess::physicalDiagnostic,
+             pybind11::arg("session"));
+}
+}
+#endif

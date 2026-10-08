@@ -85,13 +85,14 @@ void PowerReporter::buildInstancePowerFilePath(PRModel& pr_model)
 
 void PowerReporter::outputPowerReport(PRModel& pr_model)
 {
-  std::ofstream* power_report_file = STAUTIL.getOutputFileStream(pr_model.get_power_report_file_path());
+  auto power_report_file_owner = STAUTIL.openOutputFile(pr_model.get_power_report_file_path());
+  auto* power_report_file = &power_report_file_owner;
   outputPowerDesignInfo(power_report_file);
   outputPowerUnitInfo(power_report_file);
   outputPowerSummary(power_report_file);
   outputPowerGroupList(power_report_file);
   outputPowerAttribute(power_report_file);
-  STAUTIL.closeFileStream(power_report_file);
+  power_report_file_owner.close();
 }
 
 void PowerReporter::outputPowerDesignInfo(std::ofstream* power_report_file)
@@ -169,12 +170,13 @@ void PowerReporter::outputPowerAttribute(std::ofstream* power_report_file)
 void PowerReporter::outputInstancePower(PRModel& pr_model)
 {
   Database& database = STADM.getDatabase();
-  std::ofstream* instance_power_file = STAUTIL.getOutputFileStream(pr_model.get_instance_power_file_path());
+  auto instance_power_file_owner = STAUTIL.openOutputFile(pr_model.get_instance_power_file_path());
+  auto* instance_power_file = &instance_power_file_owner;
   outputInstancePowerHeader(instance_power_file);
   for (std::pair<const std::string, InstancePower>& instance_power_pair : database.get_instance_power_map()) {
     outputInstancePowerRecord(instance_power_file, instance_power_pair.second);
   }
-  STAUTIL.closeFileStream(instance_power_file);
+  instance_power_file_owner.close();
 }
 
 void PowerReporter::outputInstancePowerHeader(std::ofstream* instance_power_file)

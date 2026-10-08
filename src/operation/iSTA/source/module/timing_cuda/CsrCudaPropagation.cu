@@ -54,6 +54,7 @@ __device__ void dynamicNode(DeviceView view, Index sink)
     if (*view.status != Status::success)
       return;
   }
+  selectRcDriver(view, sink, false);
 }
 
 __device__ bool negativeInfinity(double value)
@@ -223,10 +224,37 @@ __global__ void initializeArcs(DeviceView view)
   local.status = &status;
   for (Index id = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; id < view.arc_count;
        id += static_cast<Index>(blockDim.x) * gridDim.x) {
-    if (view.arcs[id].active)
+    const auto& arc = view.arcs[id];
+    if (arc.active && !(arc.rc_binding != absent && !arc.net && arc.child_count))
       initializeArc(local, id);
     if (status != Status::success)
       break;
+  }
+  recordFailure(view.status, status);
+}
+// Different nets run in parallel. Within one driver, initialization preserves
+// native cell ordinal and cache miss order, including disabled cell arcs.
+__global__ void initializeRcDrivers(DeviceView view)
+{
+  if (readStatus(view.status) != Status::success) return;
+  Status status = Status::success;
+  auto local = view;
+  local.status = &status;
+  for (Index index = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; index < view.rc_net_count;
+       index += static_cast<Index>(blockDim.x) * gridDim.x) {
+    auto& net = view.rc_nets[index];
+    for (unsigned lane = 0; lane < 4; ++lane) {
+      net.drivers[lane] = {lane * net.child_count, net.child_count};
+      for (Index child = 0; child < net.child_count; ++child)
+        net.rows[lane * net.child_count + child].size = 0;
+    }
+    for (Index position = 0; position < net.initialize_count; ++position) {
+      const auto id = net.initialize_arcs[position];
+      if (id >= view.arc_count) { status = Status::invariant; break; }
+      if (view.arcs[id].active) initializeArc(local, id);
+      if (status != Status::success) break;
+    }
+    if (status != Status::success) break;
   }
   recordFailure(view.status, status);
 }
@@ -436,6 +464,10 @@ void CudaDualCsrSession::Impl::propagate()
   if (view.arc_count) {
     initializeArcs<<<kernelBlocks(view.arc_count, threads), threads, 0, memory.stream()>>>(view);
     launched("CUDA arc initialization launch");
+  }
+  if (view.rc_net_count) {
+    initializeRcDrivers<<<kernelBlocks(view.rc_net_count, threads), threads, 0, memory.stream()>>>(view);
+    launched("CUDA RC driver initialization launch");
   }
   // Only actual clock/domain nodes are visited, with no per-level host wait.
   for (unsigned pass = 0; pass < 2; ++pass)

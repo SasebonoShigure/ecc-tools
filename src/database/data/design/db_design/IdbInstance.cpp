@@ -33,6 +33,8 @@
 
 #include <algorithm>
 
+#include <memory>
+
 using namespace std;
 namespace idb {
 
@@ -46,12 +48,12 @@ IdbInstance::IdbInstance()
   _name = "";
   //   _master_name = "";
   _cell_master = nullptr;
-  _pin_list = new IdbPins();
+  auto pins = std::make_unique<IdbPins>();
 
   //   _type = IdbInstanceType::kNetlist;
   _type = IdbInstanceType::kNone;
   _status = IdbPlacementStatus::kNone;
-  _coordinate = new IdbCoordinate<int32_t>();
+  auto coordinate = std::make_unique<IdbCoordinate<int32_t>>();
   _orient = IdbOrient::kNone;
 
   _weight = -1;
@@ -59,11 +61,14 @@ IdbInstance::IdbInstance()
   _halo = nullptr;
   _route_halo = nullptr;
   _region = nullptr;
+  _pin_list = pins.release();
+  _coordinate = coordinate.release();
 }
 
 IdbInstance::~IdbInstance()
 {
   _pin_list->reset();
+  delete _pin_list;
 
   if (_coordinate) {
     delete _coordinate;
@@ -155,14 +160,15 @@ void IdbInstance::set_cell_master(IdbCellMaster* cell_master)
 void IdbInstance::set_pin_list()
 {
   for (IdbTerm* term : _cell_master->get_term_list()) {
-    IdbPin* pin = new IdbPin();
+    auto pin = std::make_unique<IdbPin>();
     pin->set_pin_name(term->get_name());
     pin->set_term(term);
     pin->set_instance(this);
     // pin->set_coordinate((_coordinate->get_x()+term->get_average_position().get_x()),
     //                     (_coordinate->get_y()+term->get_average_position().get_y())) ;
     // pin->set_bounding_box();
-    _pin_list->add_pin_list(pin);
+    _pin_list->add_pin_list(pin.get());
+    (void) pin.release();
   }
 }
 
@@ -379,7 +385,7 @@ void IdbInstance::set_obs_box_list()
   IdbOrientTransform db_transform(_orient, _coordinate, _cell_master->get_width(), _cell_master->get_height());
   for (IdbObs* obs : _cell_master->get_obs_list()) {
     for (IdbObsLayer* shape_layer : obs->get_obs_layer_list()) {
-      IdbLayerShape* new_shape = new IdbLayerShape();
+      auto new_shape = std::make_unique<IdbLayerShape>();
       new_shape->set_layer(shape_layer->get_shape()->get_layer());
       for (IdbRect* rect : shape_layer->get_shape()->get_rect_list()) {
         IdbRect rect_transform;
@@ -389,7 +395,8 @@ void IdbInstance::set_obs_box_list()
         new_shape->add_rect(rect_transform);
       }
 
-      _obs_box_list.emplace_back(new_shape);
+      _obs_box_list.emplace_back(new_shape.get());
+      (void) new_shape.release();
     }
   }
 }

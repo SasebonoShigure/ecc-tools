@@ -1,6 +1,8 @@
 #pragma once
 
 #include <optional>
+#include <functional>
+#include <map>
 #include <vector>
 
 #include "DualCsrDescriptors.hpp"
@@ -10,6 +12,12 @@ struct CudaAppendedBaseInRow
 {
   NodeId sink;
   std::vector<ArcId> arc_ids;
+};
+
+struct CudaRcBindingChange
+{
+  NodeId node;
+  CsrParasiticBinding expected, replacement;
 };
 
 // Only changed data crosses this boundary; no full CPU graph or timing shadow.
@@ -31,6 +39,11 @@ struct CudaDualCsrPatch
   // Production buffer insertion leaves these absent. Algorithm tests may append
   // source/end nodes, using existing clock tags and explicit initial seeds.
   std::optional<timing_dual_csr::ValueReplacement<std::vector<NodeId>>> roots, ends;
+  // Includes driver and every affected terminal, even deferred Q without arcs.
+  std::vector<CudaRcBindingChange> rc_bindings;
+  // Borrow immutable session models until stage() finishes its stream work.
+  // Only newly introduced RC load-cell types are needed.
+  std::map<std::string, std::reference_wrapper<const ReferencedLibraryCellModel>> rc_load_cells;
   std::vector<StartSeedModel> appended_start_seeds;
   std::vector<EndpointRequiredModel> appended_endpoints;
 };

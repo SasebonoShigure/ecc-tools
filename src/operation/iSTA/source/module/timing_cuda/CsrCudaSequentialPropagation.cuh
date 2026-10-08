@@ -38,21 +38,21 @@ __device__ inline DynamicValue clockToQ(DeviceView view, const SequentialSeed& s
   value.delay = seed.child_count == 0 ? (analysis == 0 ? seed.delay_max : seed.delay_min) : seed.delay;
   value.slew = clock_slew;
   bool delay_seen = false, slew_seen = false;
-  for (Index index = 0; index < seed.child_count; ++index) {
-    const auto& child = view.children[seed.child_begin + index];
-    if (!childSelected(child, seed.trigger, output))
-      continue;
-    if (child.delay[output].present) {
-      const auto candidate = lookupTable(view, child.delay[output], child, clock_slew, load);
-      if (!delay_seen || rawBetter(analysis, candidate, value.delay))
-        value.delay = candidate;
-      delay_seen = true;
-    }
-    if (child.slew[output].present) {
-      const auto candidate = lookupTable(view, child.slew[output], child, clock_slew, load);
-      if (!slew_seen || rawBetter(analysis, candidate, value.slew))
-        value.slew = candidate;
-      slew_seen = true;
+  // Match native DCTask cache order; a repeated lookup has no side effects.
+  for (unsigned pass = 0; pass < 2; ++pass) {
+    for (Index index = 0; index < seed.child_count; ++index) {
+      const auto& child = view.children[seed.child_begin + index];
+      if (!childSelected(child, seed.trigger, output))
+        continue;
+      const auto& table = pass == 0 ? child.delay[output] : child.slew[output];
+      if (!table.present)
+        continue;
+      const auto candidate = cellTiming(view, seed.rc_binding, seed.child_begin, index, analysis, output, clock_slew, load, pass != 0);
+      auto& result = pass == 0 ? value.delay : value.slew;
+      auto& seen = pass == 0 ? delay_seen : slew_seen;
+      if (!seen || rawBetter(analysis, candidate, result))
+        result = candidate;
+      seen = true;
     }
   }
   value.delay = finiteValue(view, value.delay);
@@ -75,7 +75,7 @@ __device__ inline void sequentialNode(DeviceView view, Index id)
     return;
   }
   double loads[4]{};
-  if (seed.kind == SeedKind::output) {
+  if (seed.kind == SeedKind::output && seed.rc_binding == absent) {
     Index index;
     for (auto edges = outgoing(view, id, 1); edges.next(index);) {
       const Arc& arc = view.arcs[index];
@@ -97,8 +97,8 @@ __device__ inline void sequentialNode(DeviceView view, Index id)
     if (seed.clock_node != absent && seed.kind != SeedKind::scalar) {
       const auto& clock = view.nodes[seed.clock_node];
       const auto lane = analysis * 2 + seed.trigger;
-      launch = clock.effective_arrival[lane].present ? clock.effective_arrival[lane].value : 0.0;
-      slew = clock.effective_slew[lane].present ? clock.effective_slew[lane].value : 0.0;
+      launch = clock.propagated_clock && clock.physical_clock[lane].arrival.present ? clock.physical_clock[lane].arrival.value : 0.0;
+      slew = clock.propagated_clock && clock.physical_clock[lane].slew.present ? clock.physical_clock[lane].slew.value : 0.0;
     }
     for (unsigned transition = 0; transition < 2; ++transition) {
       double arrival = launch, output_slew = slew;
@@ -132,6 +132,7 @@ __device__ inline void sequentialNode(DeviceView view, Index id)
       }
     }
   }
+  selectRcDriver(view, id, false);
 }
 
 __device__ inline void sequentialPass(DeviceView view)
@@ -184,8 +185,8 @@ __device__ inline void sequentialRequired(DeviceView view, const Endpoint& endpo
   if (endpoint.clock_node != absent && endpoint.clock_transition != 2) {
     const auto& clock = view.nodes[endpoint.clock_node];
     const auto lane = 2 + endpoint.clock_transition;  // Native max analysis uses the min capture clock.
-    clock_arrival = clock.effective_arrival[lane].present ? clock.effective_arrival[lane].value : 0.0;
-    clock_slew = clock.effective_slew[lane].present ? clock.effective_slew[lane].value : 0.0;
+    clock_arrival = clock.propagated_clock && clock.physical_clock[lane].arrival.present ? clock.physical_clock[lane].arrival.value : 0.0;
+    clock_slew = clock.propagated_clock && clock.physical_clock[lane].slew.present ? clock.physical_clock[lane].slew.value : 0.0;
   }
   const double data_slew = path == nullptr ? 0.0 : path->slew;
   double check_time = endpoint.check_time;
@@ -202,7 +203,7 @@ __device__ inline void sequentialRequired(DeviceView view, const Endpoint& endpo
   const double capture = finiteValue(view, endpoint.period + clock_arrival);
   const double required = finiteValue(view, capture - finiteValue(view, check_time));
   const double scaled = finiteValue(view, required * 1.0e15);
-  // Ideal clocks have no effective predecessor path and zero native CRPR.
+  // Native scalar RAT has no launch path; report analysis applies per-path CRPR.
   view.nodes[endpoint.node].required = finiteValue(view, round(scaled) / 1.0e15);
 }
 

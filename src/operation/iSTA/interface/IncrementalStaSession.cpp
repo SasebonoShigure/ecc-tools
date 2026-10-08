@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include "IncrementalStaSession.hpp"
+#include "StaSessionApiGuard.hpp"
 
 #include <exception>
 #include <utility>
@@ -29,8 +30,6 @@
 namespace ista {
 namespace {
 
-thread_local const IncrementalStaSession* current_session_api = nullptr;
-
 std::string exceptionMessage()
 {
   try {
@@ -41,39 +40,6 @@ std::string exceptionMessage()
     return "unknown native exception";
   }
 }
-
-class SessionApiGuard
-{
- public:
-  SessionApiGuard(const IncrementalStaSession* session, std::mutex& mutex) : _session(session), _lock(mutex, std::defer_lock)
-  {
-    if (current_session_api == session)
-      return;
-    _lock.lock();
-    _previous = current_session_api;
-    current_session_api = session;
-    _acquired = true;
-  }
-
-  SessionApiGuard(const SessionApiGuard&) = delete;
-  SessionApiGuard(SessionApiGuard&&) = delete;
-  SessionApiGuard& operator=(const SessionApiGuard&) = delete;
-  SessionApiGuard& operator=(SessionApiGuard&&) = delete;
-
-  ~SessionApiGuard()
-  {
-    if (_acquired)
-      current_session_api = _previous;
-  }
-
-  [[nodiscard]] explicit operator bool() const noexcept { return _acquired; }
-
- private:
-  const IncrementalStaSession* _session;
-  const IncrementalStaSession* _previous{nullptr};
-  std::unique_lock<std::mutex> _lock;
-  bool _acquired{false};
-};
 
 StaCsrReferenceAttempt invalidReferenceAttempt()
 {

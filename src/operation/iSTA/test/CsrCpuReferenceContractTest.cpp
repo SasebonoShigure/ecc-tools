@@ -107,6 +107,7 @@ CsrReferenceInput twoTagInput(bool different)
   LibraryPortModel port_b = library_cell.ports.front();
   port_b.name = "B";
   library_cell.ports.insert(library_cell.ports.begin() + 1, port_b);
+  input.arcs[3].native_cell_arc_ordinal = 1;
   library_cell.cell_arcs = {{"A", "Y", input.arcs[2].transfer}, {"B", "Y", input.arcs[3].transfer}};
   input.cell_pin_capacitances = {{NodeId{2}, 0.1, {}}, {NodeId{3}, 0.1, {}}, {NodeId{4}, 0.1, {}}};
   refreshCpuReferenceIdentity(input);

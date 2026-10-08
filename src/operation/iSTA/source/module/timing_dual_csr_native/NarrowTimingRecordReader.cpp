@@ -1,4 +1,5 @@
 #include "NarrowTimingRecordReader.hpp"
+#include "NativeTargetedEditPreparer.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -70,7 +71,7 @@ bool validHighWater(const AffectedCapturePlan& plan)
          && plan.slot_plan.after == plan.after;
 }
 
-bool targetedNoParasitic(const AffectedCapturePlan& plan)
+bool targetedPolicy(const AffectedCapturePlan& plan)
 {
   if (plan.policy_receipt.disposition
           != timing_edit::EditDisposition::kSupported
@@ -79,8 +80,9 @@ bool targetedNoParasitic(const AffectedCapturePlan& plan)
     return false;
   return std::ranges::all_of(
       plan.normalized_edits, [](const auto& edit) {
-        return std::holds_alternative<timing_edit::NoParasiticRcInputs>(
-            edit.rc_inputs);
+        const auto* rc = std::get_if<timing_edit::ParasiticRcInputs>(&edit.rc_inputs);
+        return std::holds_alternative<timing_edit::NoParasiticRcInputs>(edit.rc_inputs)
+               || (rc && rc->parasitic_policy == timing_edit::ParasiticEditPolicy::kPreRouteTree);
       });
 }
 
@@ -508,8 +510,16 @@ CandidateBoundCapture NarrowTimingRecordReader::read(
     return bound(reject(plan, NarrowCaptureError::kBatchBindingMismatch));
   if (!exactResolverBinding(staged_resolver, plan))
     return bound(reject(plan, NarrowCaptureError::kBatchBindingMismatch));
-  if (!targetedNoParasitic(plan))
+  if (!targetedPolicy(plan))
     return bound(reject(plan, NarrowCaptureError::kUnsupportedPolicy));
+  if (_native && (!_native->transaction.active() || &_native->transaction.database() != &database
+      || _native->staged.models != &_models || _native->staged.session_token != plan.session_token
+      || _native->staged.generation != plan.target_generation
+      || _native->patch.session_token != plan.session_token
+      || _native->patch.expected_generation != plan.expected_generation
+      || _native->patch.target_generation != plan.target_generation
+      || _native->patch.before != plan.before || _native->patch.after != plan.after))
+    return bound(reject(plan, NarrowCaptureError::kBatchBindingMismatch));
   if (const auto error = validateNodeRequests(plan))
     return bound(reject(plan, *error));
   if (const auto error = validateNetRequests(plan))
@@ -521,7 +531,7 @@ CandidateBoundCapture NarrowTimingRecordReader::read(
           committed, index, staged_resolver, plan))
     return bound(reject(plan, *error));
   return bound(detail::captureNativeDualCsrPayload(
-      database, _models, committed, index, staged_resolver, plan));
+      database, _models, committed, index, staged_resolver, plan, _native));
 }
 
 }  // namespace ista::timing_dual_csr

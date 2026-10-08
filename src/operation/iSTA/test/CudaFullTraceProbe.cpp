@@ -120,7 +120,7 @@ int main(int argc, char** argv)
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
     const bool replay_only = options.contains("--replay");
     const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
-    Json output{{"schema_version", "ista-cuda-full-trace/4.0.0"},
+    Json output{{"schema_version", "ista-cuda-full-trace/5.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
                 {"requested_backend", (mode == "fresh" || mode == "native-transactions") ? "cpu" : "cuda"},

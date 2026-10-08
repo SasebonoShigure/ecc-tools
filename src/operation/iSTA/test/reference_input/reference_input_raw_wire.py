@@ -6,6 +6,7 @@ from reference_input_canonical import CanonicalError, CanonicalReader, Canonical
 from reference_input_model import (
     ArcKind,
     Direction,
+    InputPortRcThresholds,
     RawArc,
     RawCaseConstraint,
     RawClockConstraint,
@@ -33,11 +34,10 @@ from reference_input_model import (
     Transition,
 )
 
-RAW_DOMAIN = "ista-csr-reference-input-raw/2.0.0"
+RAW_DOMAIN = "ista-csr-reference-input-raw/3.0.0"
 EMPTY_RAW_HEX = (
-    "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f322e30"
-    "2e300000000000000000000000000000000000000000000000000000000000000000000000000000"
-    "0000000000000000000000000000000000000000000000000000000000000000000000"
+        "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f332e302e3000000000000000000000000000000000000000000000000000000000"
+    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 )
 
 
@@ -170,6 +170,7 @@ def _write_arc(writer: CanonicalWriter, arc: RawArc) -> None:
     writer.boolean(arc.is_clock_arc)
     writer.boolean(arc.disabled)
     writer.boolean(arc.loop_disabled)
+    writer.optional(arc.native_cell_arc_ordinal, writer.u64)
 
 
 def _read_arc(reader: CanonicalReader) -> RawArc:
@@ -184,6 +185,7 @@ def _read_arc(reader: CanonicalReader) -> RawArc:
         reader.boolean(),
         reader.boolean(),
         reader.boolean(),
+        reader.optional(reader.u64),
     )
 
 
@@ -510,16 +512,19 @@ def _write_parasitics(writer: CanonicalWriter, parasitics: RawParasitics) -> Non
     writer.string(parasitics.source_path)
     writer.string(parasitics.capacitance_unit)
     writer.string(parasitics.resistance_unit)
+    writer.finite_double(parasitics.input_port_thresholds.slew_derate)
+    _write_fixed_pair(writer, parasitics.input_port_thresholds.lower)
+    _write_fixed_pair(writer, parasitics.input_port_thresholds.upper)
     writer.vector(parasitics.nets, lambda value: _write_parasitic_net(writer, value))
 
 
 def _read_parasitics(reader: CanonicalReader) -> RawParasitics:
-    return RawParasitics(
-        reader.string(),
-        reader.string(),
-        reader.string(),
-        reader.vector(lambda _index: _read_parasitic_net(reader), "parasitics.nets"),
+    source, capacitance, resistance = reader.string(), reader.string(), reader.string()
+    thresholds = InputPortRcThresholds(
+        reader.finite_double(), _read_fixed_pair(reader), _read_fixed_pair(reader)
     )
+    nets = reader.vector(lambda _index: _read_parasitic_net(reader), "parasitics.nets")
+    return RawParasitics(source, capacitance, resistance, nets, thresholds)
 
 
 def encode_raw_wire(raw: RawReferenceInput) -> bytes:

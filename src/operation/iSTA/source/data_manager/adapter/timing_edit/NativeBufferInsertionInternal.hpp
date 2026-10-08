@@ -29,6 +29,10 @@ struct PreparedNativeBufferInsertions
   std::map<std::string, std::vector<std::string>> memberships;
   std::map<std::string, std::string> connections;
   std::vector<std::string> instance_keys, pin_keys, net_keys;
+  std::map<std::string, ParasiticNet> parasitics;
+  // Before apply: preallocated slots. Afterwards: actual old map nodes.
+  std::vector<std::pair<std::string, decltype(parasitics)::node_type>> previous_parasitics;
+  void prepareParasitics(std::map<std::string, ParasiticNet> replacements);
 
   void apply() noexcept;
   void undo() noexcept;
@@ -58,6 +62,7 @@ struct PreparedNativeGraphPatch
 };
 [[nodiscard]] PreparedNativeBufferInsertions prepareNativeBufferInsertions(
     Database& database, std::span<const BufferInsertionMutation> edits,
-    TimingEditResolverView resolver, std::uint64_t first_instance_id);
+    TimingEditResolverView resolver, std::uint64_t first_instance_id,
+    std::map<std::string, ParasiticNet> prepared_rc = {});
 void applyNativeBufferInsertion(Database& database, const BufferInsertionMutation& edit, TimingEditResolverView resolver, std::uint64_t instance_id);
 }  // namespace ista::timing_edit::detail

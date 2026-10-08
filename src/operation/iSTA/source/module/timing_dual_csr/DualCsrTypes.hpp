@@ -17,7 +17,7 @@
 
 namespace ista::timing_dual_csr {
 
-inline constexpr auto kDualCsrDescriptorSchema = "ista-dual-csr-update/2.0.0";
+inline constexpr auto kDualCsrDescriptorSchema = "ista-dual-csr-update/3.0.0";
 
 enum class DualCsrViolationCode : std::uint8_t
 {
@@ -96,6 +96,40 @@ struct RecordAppend
   friend bool operator==(const RecordAppend&, const RecordAppend&) = default;
 };
 
+struct ParasiticNetChange
+{
+  std::uint64_t slot{0};
+  csr::ParasiticNetModel expected;
+  csr::ParasiticNetModel replacement;
+  friend bool operator==(const ParasiticNetChange&, const ParasiticNetChange&) = default;
+};
+
+// Units belong to the session's pre-route baseline. Edits only replace affected
+// nets and append newly split nets; existing slots remain stable.
+struct ParasiticNetDelta
+{
+  std::uint64_t expected_size{0};
+  std::vector<ParasiticNetChange> changes;
+  std::vector<csr::ParasiticNetModel> appends;
+  friend bool operator==(const ParasiticNetDelta&, const ParasiticNetDelta&) = default;
+};
+
+struct StartSeedChange
+{
+  std::uint64_t slot{0};
+  csr::StartSeedModel expected;
+  csr::StartSeedModel replacement;
+  friend bool operator==(const StartSeedChange&, const StartSeedChange&) = default;
+};
+
+struct StartSeedDelta
+{
+  std::uint64_t expected_size{0};
+  std::vector<StartSeedChange> changes;
+  std::vector<csr::StartSeedModel> appends;
+  friend bool operator==(const StartSeedDelta&, const StartSeedDelta&) = default;
+};
+
 struct DualCsrReferencePayloadDelta
 {
   std::optional<ValueReplacement<std::string>> schema_version;
@@ -123,8 +157,8 @@ struct DualCsrReferencePayloadDelta
       timing_check_endpoints;
   std::optional<RecordAppend<csr::ReferencedLibraryCellModel>>
       referenced_library_cells;
-  std::optional<ValueReplacement<csr::ParasiticModel>> parasitics;
-  std::optional<ValueReplacement<std::vector<csr::StartSeedModel>>> start_seeds;
+  std::optional<ParasiticNetDelta> parasitics;
+  std::optional<StartSeedDelta> start_seeds;
   std::optional<ValueReplacement<std::vector<csr::EndpointRequiredModel>>>
       endpoint_required;
   std::optional<RecordAppend<csr::CellPinCapacitanceModel>>

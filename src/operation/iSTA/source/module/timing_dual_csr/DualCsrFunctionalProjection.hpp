@@ -46,6 +46,7 @@ struct DualCsrProjectedArc
   csr::ArcEligibility eligibility;
   csr::CellTransferModel transfer;
   std::optional<csr::ArcOutputLoadMatrix> output_load;
+  std::optional<std::uint64_t> native_cell_arc_ordinal{std::nullopt};
 
   friend bool operator==(const DualCsrProjectedArc&,
                          const DualCsrProjectedArc&) = default;

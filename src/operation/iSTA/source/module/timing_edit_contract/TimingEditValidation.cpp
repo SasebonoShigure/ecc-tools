@@ -183,6 +183,11 @@ void validateBuffer(const BufferInsertionMutation& value, std::string_view field
   validateLibraryCell(value.library_cell, prefix + ".library_cell", errors);
   validatePlacement(value.placement_inputs, prefix + ".placement_inputs", errors);
   validateRc(value.rc_inputs, prefix + ".rc_inputs", errors);
+  if (const auto* rc = std::get_if<ParasiticRcInputs>(&value.rc_inputs);
+      rc && rc->parasitic_policy == ParasiticEditPolicy::kPreRouteTree
+      && !std::holds_alternative<PlacedInputs>(value.placement_inputs))
+    reject(errors, TimingEditContractCode::kInvalidValue, prefix + ".placement_inputs",
+           "pre-route tree edits require legalized placement coordinates");
 }
 
 template <typename Ref>
@@ -343,6 +348,8 @@ std::string_view token(ParasiticEditPolicy value)
       return "error";
     case ParasiticEditPolicy::kFullWithRecord:
       return "full_with_record";
+    case ParasiticEditPolicy::kPreRouteTree:
+      return "pre_route_tree";
   }
   throw std::invalid_argument("unknown ParasiticEditPolicy");
 }

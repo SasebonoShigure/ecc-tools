@@ -197,6 +197,12 @@ def _library_cell(writer: CanonicalWriter, cell: model.CandidateReferencedLibrar
     writer.string(cell.clock_pin_name)
     writer.string(cell.data_pin_name)
     writer.string(cell.output_pin_name)
+    _double(writer, cell.slew_derate)
+    for values in (
+        cell.slew_lower_threshold_pct, cell.slew_upper_threshold_pct, cell.input_threshold_pct
+    ):
+        for value in values:
+            _double(writer, value)
     writer.u64(len(cell.ports))
     for port in cell.ports:
         writer.string(port.name)
@@ -223,6 +229,9 @@ def _library_cell(writer: CanonicalWriter, cell: model.CandidateReferencedLibrar
 def _parasitics(writer: CanonicalWriter, parasitics: model.CandidateParasitics) -> None:
     writer.string(parasitics.capacitance_unit)
     writer.string(parasitics.resistance_unit)
+    thresholds = parasitics.input_port_thresholds
+    for value in (thresholds.slew_derate, *thresholds.lower, *thresholds.upper):
+        _double(writer, value)
     writer.u64(len(parasitics.nets))
     for net in parasitics.nets:
         writer.string(net.map_key)
@@ -398,6 +407,7 @@ def _timing_input(input_value: model.CandidateInput) -> bytes:
         writer.boolean(arc.eligibility.data_arrival)
         writer.boolean(arc.eligibility.data_slew)
         writer.boolean(arc.eligibility.clock)
+        writer.optional(arc.native_cell_arc_ordinal, writer.u64)
         _transfer(writer, arc.transfer)
         writer.boolean(arc.output_load is not None)
         if arc.output_load is not None:

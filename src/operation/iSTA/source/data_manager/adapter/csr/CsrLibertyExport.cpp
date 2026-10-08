@@ -121,7 +121,7 @@ void exportGraphTransfers(ReferenceBuildState& state)
 {
   for (auto& arc : state.input.arcs) {
     const ista::Arc& native_arc = requireNativeArc(state, arc);
-    arc.transfer = projectCanonicalArcTransfer(state.database, state.models, arc, native_arc);
+    projectCanonicalArcTransfer(state.database, state.models, arc, native_arc);
 
     if (arc.kind == ArcKind::kNet)
       continue;

@@ -44,6 +44,9 @@ set(ISTA_STEP6_COMMON_SOURCES
 set(ISTA_STEP6_NATIVE_ORACLE_SOURCES
     ${ISTA_STEP6_COMMON_SOURCES}
     CsrNativeTimingOracleContractTest.cpp
+    real_differential/CsrRealDifferentialArcIdentityTest.cpp
+    real_differential/CsrRealDifferentialOracleEncoding.cpp
+    real_differential/CsrRealDifferentialWire.cpp
     CsrNativeGraphRawProjector.cpp
 )
 ista_add_step6_target(

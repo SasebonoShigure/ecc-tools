@@ -7,6 +7,7 @@ import reference_input_model as model
 import reference_input_recompute_graph as graph_oracle
 import reference_input_recompute_transfer as transfer_oracle
 from reference_input_canonical import CanonicalError
+from reference_input_recompute_parasitics import supports_pre_route_trees
 
 
 @dataclass(frozen=True)
@@ -243,11 +244,8 @@ def _unsupported(
             _fail("start seed has a one-sided CRPR pair")
 
     conditions = (
-        (model.UnsupportedReason.PARASITIC_NET, bool(candidate.parasitics.nets)),
-        (
-            model.UnsupportedReason.PROPAGATED_CLOCK,
-            any(clock.propagated for clock in candidate.clocks),
-        ),
+        (model.UnsupportedReason.PARASITIC_NET,
+         bool(candidate.parasitics.nets) and not supports_pre_route_trees(candidate)),
         (
             model.UnsupportedReason.CLOCK_GATING_OR_DIVIDER,
             divider or any(instance.is_clock_gating for instance in candidate.instances),

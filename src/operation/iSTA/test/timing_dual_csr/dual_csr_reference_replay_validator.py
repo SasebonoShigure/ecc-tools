@@ -4,10 +4,14 @@
 import copy
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from dual_csr_baseline_reference_validator import validate_baseline_reference_input
-from dual_csr_typed_json_validator import REFERENCE_APPEND_KEYS
+from dual_csr_typed_json_validator import (
+    REFERENCE_APPEND_KEYS,
+    validate_parasitic_delta,
+    validate_start_seed_delta,
+)
 
 Require = Callable[[bool, str], None]
 
@@ -198,7 +202,7 @@ def _anchor_final_reference(descriptors: list[dict[str, Any]],
                             shadow: dict[str, object], label: str,
                             require: Require) -> None:
     for field in shadow:
-        if field in REFERENCE_APPEND_KEYS:
+        if field in REFERENCE_APPEND_KEYS or field in {"parasitics", "start_seeds"}:
             continue
         replacement = None
         replacement_index = -1
@@ -222,10 +226,30 @@ def _reverse_reference(descriptors: list[dict[str, Any]],
     for descriptor_index in range(len(descriptors) - 1, -1, -1):
         delta = descriptors[descriptor_index]["reference_payload"]
         for field, record in delta.items():
-            if record is None:
+            if record is None or field == "parasitics":
                 continue
             field_label = (f"{label}.descriptor_trace[{descriptor_index}]"
                            f".reference_payload.{field}")
+            if field == "start_seeds":
+                current = shadow[field]
+                require(isinstance(current, list), f"{field_label} seed shadow is not a list")
+                if not isinstance(current, list):
+                    return
+                size = record["expected_size"]
+                require(len(current) == size + len(record["appends"]),
+                        f"{field_label} seed extent differs from published shadow")
+                require(current[size:] == record["appends"],
+                        f"{field_label} appended seeds differ from published shadow")
+                for change in record["changes"]:
+                    slot = change["slot"]
+                    require(slot < min(size, len(current)), f"{field_label} seed slot is invalid")
+                    if slot >= min(size, len(current)):
+                        continue
+                    require(current[slot] == change["replacement"],
+                            f"{field_label} seed replacement differs from published shadow")
+                    current[slot] = copy.deepcopy(change["expected"])
+                shadow[field] = current[:size]
+                continue
             if field in REFERENCE_APPEND_KEYS:
                 values = record["values"]
                 current = shadow[field]
@@ -283,6 +307,25 @@ def _referenced_node_ids(reference: dict[str, object]) -> list[int]:
     return result
 
 
+def _validate_parasitic_replay(descriptors: list[dict[str, Any]],
+                               baseline: dict[str, Any], final: dict[str, Any],
+                               label: str, require: Require) -> None:
+    chain: dict[str, Any] = {"size": len(baseline["nets"]),
+             "nets": dict(enumerate(copy.deepcopy(baseline["nets"])))}
+    for index, descriptor in enumerate(descriptors):
+        delta = descriptor["reference_payload"].get("parasitics")
+        if delta is not None:
+            validate_parasitic_delta(delta, f"{label}.parasitics[{index}]", require, chain)
+    expected = dict(baseline)
+    expected["nets"] = sorted(copy.deepcopy(list(chain["nets"].values())),
+                              key=lambda net: net["map_key"])
+    for net in expected["nets"]:
+        net["nodes"].sort(key=lambda node: node["map_key"])
+        net["resistors"].sort(key=lambda resistor: (
+            resistor["source"], resistor["sink"], resistor["resistance"]["value"]))
+    require(expected == final, f"{label} local RC edits differ from the published parasitics")
+
+
 def validate_reference_replay(descriptors: list[dict[str, Any]],
                               functional: dict[str, Any],
                               identity: dict[str, Any],
@@ -300,6 +343,10 @@ def validate_reference_replay(descriptors: list[dict[str, Any]],
     anchor = validate_baseline_reference_input(
         baseline_reference_input, baseline, session,
         f"{label}.baseline_reference_input", require)
+    _validate_parasitic_replay(
+        descriptors, cast(dict[str, Any], anchor["parasitics"]),
+        cast(dict[str, Any], shadow["parasitics"]), label, require)
+    shadow["parasitics"] = anchor["parasitics"]
     require(shadow.keys() == anchor.keys()
             and all(_field_equal(field, value, anchor[field])
                     for field, value in shadow.items()),
@@ -369,7 +416,7 @@ def run_reference_replay_self_test(require: Require) -> None:
     _reverse_reference([tampered], {"instances": copy.deepcopy(replacement)},
                        "reference-replay-tamper",
                        collect_error)
-    require(errors, "same-size reference append tamper was accepted")
+    require(bool(errors), "same-size reference append tamper was accepted")
 
     before = {"liberty_corner": "c0", "temperature": "25",
               "rc_corner": "r0"}
@@ -392,6 +439,41 @@ def run_reference_replay_self_test(require: Require) -> None:
         collect_error)
     require(not errors and context_shadow["analysis_context"] == before,
             f"valid analysis-context wire replay was rejected: {errors}")
+
+    zero: dict[str, Any] = {"kind": "finite", "value": 0.0, "negative_zero": False}
+    old_net: dict[str, Any] = {"map_key": "n0", "embedded_name": "n0", "lumped_capacitance": zero,
+               "nodes": [], "resistors": []}
+    new_net = {**old_net, "map_key": "new", "embedded_name": "new"}
+    changed_net: dict[str, Any] = {**old_net, "lumped_capacitance": {**zero, "value": 0.5},
+                   "resistors": [{"source": source, "sink": "p",
+                                  "resistance": {**zero, "value": resistance}}
+                                 for source, resistance in (("z", 2.0), ("a", 3.0), ("a", 1.0))]}
+    rc_before: dict[str, Any] = {
+        "capacitance_unit": "PF", "resistance_unit": "OHM", "nets": [old_net]}
+    rc_after = copy.deepcopy({**rc_before, "nets": [changed_net, new_net]})
+    rc_after["nets"][0]["resistors"] = list(reversed(changed_net["resistors"]))
+    rc_descriptors: list[dict[str, Any]] = [{"reference_payload": {"parasitics": {
+        "expected_size": 1, "changes": [{"slot": 0, "expected": old_net,
+        "replacement": changed_net}], "appends": [new_net]}}}]
+    errors = []
+    _validate_parasitic_replay(rc_descriptors, rc_before, rc_after, "rc-replay", collect_error)
+    require(not errors, f"valid RC replay rejected: {errors}")
+    for field in ("slot", "expected", "published", "resistor"):
+        bad_descriptors = copy.deepcopy(rc_descriptors)
+        bad_after = copy.deepcopy(rc_after)
+        change = bad_descriptors[0]["reference_payload"]["parasitics"]["changes"][0]
+        if field == "slot":
+            change["slot"] = 4
+        elif field == "expected":
+            change["expected"]["lumped_capacitance"]["value"] = 8.0
+        elif field == "published":
+            bad_after["nets"][0]["lumped_capacitance"]["value"] = 8.0
+        else:
+            bad_after["nets"][0]["resistors"][0]["resistance"]["value"] = 9.0
+        errors = []
+        _validate_parasitic_replay(
+            bad_descriptors, rc_before, bad_after, "rc-tamper", collect_error)
+        require(bool(errors), f"RC {field} tamper accepted")
 
     def node(name: str) -> dict[str, str]:
         return {"kind": "port", "full_name": name, "instance_name": "",
@@ -420,7 +502,7 @@ def run_reference_replay_self_test(require: Require) -> None:
         _ordered_node_records(
             candidate, [first, second], "seed_node", f"seed-{label}-canary",
             collect_error)
-        require(errors, f"{label} projected start-seed tamper was accepted")
+        require(bool(errors), f"{label} projected start-seed tamper was accepted")
 
 
     required_first = {"node": first, "clock_period": 10.0}
@@ -437,3 +519,40 @@ def run_reference_replay_self_test(require: Require) -> None:
             candidate, [first, second], "node", "required-cover-canary",
             collect_error)
         require(bool(errors), "endpoint order reconstruction accepted missing/duplicate records")
+
+
+    seed_before = {"seed_node": 0, "path_start_node": 0, "availability": "materialized",
+                   "path_source": "input", "clock_tag": "clk",
+                   "arrival": [[zero, zero], [zero, zero]],
+                   "slew": [[zero, zero], [zero, zero]],
+                   "crpr_node": None, "crpr_transition": None}
+    seed_after = {**seed_before, "clock_tag": "next"}
+    appended_seed = {**seed_before, "seed_node": 1, "path_start_node": 1}
+    seed_delta: dict[str, Any] = {"expected_size": 1, "changes": [
+        {"slot": 0, "expected": seed_before, "replacement": seed_after}],
+        "appends": [appended_seed]}
+    errors = []
+    seed_chain = {"size": 1, "seeds": {0: seed_before}}
+    validate_start_seed_delta(seed_delta, "seed-delta", collect_error, seed_chain)
+    seed_shadow: dict[str, object] = {"start_seeds": copy.deepcopy([seed_after, appended_seed])}
+    seed_descriptors = [{"reference_payload": {"start_seeds": seed_delta}}]
+    _reverse_reference(seed_descriptors, seed_shadow, "seed-rewind", collect_error)
+    require(not errors and seed_shadow["start_seeds"] == [seed_before],
+            f"valid local seed update rejected: {errors}")
+    for fault in ("slot", "duplicate", "expected", "published", "appended"):
+        bad = copy.deepcopy(seed_delta)
+        published = copy.deepcopy([seed_after, appended_seed])
+        if fault == "slot":
+            bad["changes"][0]["slot"] = 1
+        elif fault == "duplicate":
+            bad["changes"].append(copy.deepcopy(bad["changes"][0]))
+        elif fault == "expected":
+            bad["changes"][0]["expected"]["clock_tag"] = "stale"
+        else:
+            published[0 if fault == "published" else 1]["clock_tag"] = "stale"
+        errors = []
+        validate_start_seed_delta(bad, "seed-tamper", collect_error,
+                                  {"size": 1, "seeds": {0: seed_before}})
+        _reverse_reference([{"reference_payload": {"start_seeds": bad}}],
+                           {"start_seeds": published}, "seed-tamper", collect_error)
+        require(bool(errors), f"local seed {fault} tamper accepted")

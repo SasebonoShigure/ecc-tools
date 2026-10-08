@@ -40,12 +40,15 @@ void unpackNodes(DownloadData& data, const ResultLayout& layout, CsrTimingValues
     for (std::size_t lane = 0; lane < 4; ++lane) {
       result.data_slews.presence[i * 4 + lane] = node.slew[lane].present ? 1 : 0;
       result.data_slews.values[i * 4 + lane] = node.slew[lane].present ? node.slew[lane].value : 0.0;
-      append(result.effective_clock.arrivals, node.effective_arrival[lane].value, node.effective_arrival[lane].present);
-      append(result.effective_clock.slews, node.effective_slew[lane].value, node.effective_slew[lane].present);
-      append(result.effective_clock.predecessor_nodes, NodeId{}, false);
-      append(result.effective_clock.predecessor_arc_delays, 0.0, false);
-      appendTransition(result.effective_clock.predecessor_transitions, 2, false);
       const auto& clock = node.physical_clock[lane];
+      append(result.effective_clock.arrivals, node.propagated_clock ? clock.arrival.value : 0.0,
+             node.propagated_clock ? clock.arrival.present : node.clock_point);
+      append(result.effective_clock.slews, node.propagated_clock ? clock.slew.value : 0.0,
+             node.propagated_clock ? clock.slew.present : node.clock_point);
+      const bool effective_predecessor = node.propagated_clock && clock.predecessor != absent;
+      append(result.effective_clock.predecessor_nodes, NodeId{effective_predecessor ? clock.predecessor : 0}, effective_predecessor);
+      append(result.effective_clock.predecessor_arc_delays, clock.predecessor_delay, effective_predecessor);
+      appendTransition(result.effective_clock.predecessor_transitions, clock.predecessor_transition, effective_predecessor);
       append(result.physical_clock.arrivals, clock.arrival.value, clock.arrival.present);
       append(result.physical_clock.slews, clock.slew.value, clock.slew.present);
       const bool predecessor = clock.predecessor != absent;

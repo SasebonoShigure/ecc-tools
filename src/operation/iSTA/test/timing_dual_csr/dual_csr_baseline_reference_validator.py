@@ -3,7 +3,9 @@
 
 import copy
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
+
 from dual_csr_reference_model_validator import validate_reference_value
 from dual_csr_typed_json_validator import validate_arc_payload, validate_node_record
 
@@ -33,11 +35,13 @@ def _count(value: object, label: str, require: Require) -> int:
 
 def _offsets(value: object, rows: int, entries: int, label: str,
              require: Require) -> list[int]:
-    require(isinstance(value, list) and len(value) == rows + 1,
-            f"{label} row extent differs")
+    if not isinstance(value, list) or len(value) != rows + 1:
+        require(isinstance(value, list) and len(value) == rows + 1,
+                f"{label} row extent differs")
+        return []
     require(value[0] == 0 and value[-1] == entries
             and all(type(item) is int and item >= 0 for item in value)
-            and all(left <= right for left, right in zip(value, value[1:])),
+            and all(left <= right for left, right in zip(value, value[1:], strict=False)),
             f"{label} is not a valid CSR offset vector")
     return value
 
@@ -103,7 +107,8 @@ def validate_baseline_reference_input(value: object,
         require(isinstance(arc, dict)
                 and set(arc) == {"id", "native_traversal_rank", "key",
                     "source", "sink", "kind", "is_clock_arc", "is_disabled",
-                    "is_loop_disabled", "eligibility", "transfer", "output_load"},
+                    "is_loop_disabled", "eligibility", "transfer", "output_load",
+                    "native_cell_arc_ordinal"},
                 f"{label}.arcs[{index}] fields differ")
         require(arc["id"] == index,
                 f"{label}.arcs[{index}] is not append-only")

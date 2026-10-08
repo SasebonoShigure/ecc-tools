@@ -10,6 +10,7 @@
 
 import math
 from dataclasses import dataclass
+from typing import NoReturn
 
 import reference_input_model as model
 import reference_input_recompute_graph as graph_oracle
@@ -23,7 +24,7 @@ class TransferFacts:
     loads: tuple[tuple[tuple[float, float], tuple[float, float]] | None, ...]
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     raise CanonicalError(f"reference-input transfer recomputation: {message}")
 
 
@@ -219,7 +220,8 @@ def _library_port(raw: model.RawLibraryPort, field: str) -> model.CandidateLibra
         raw.clock,
         raw.output,
         raw.default_capacitance,
-        raw.transition_capacitance,
+        ((raw.transition_capacitance[0][0], raw.transition_capacitance[0][1]),
+         (raw.transition_capacitance[1][0], raw.transition_capacitance[1][1])),
     )
 
 
@@ -240,6 +242,10 @@ def _library_cell(
             clock_pin_name="",
             data_pin_name="",
             output_pin_name="",
+            slew_derate=1.0,
+            slew_lower_threshold_pct=(0.3, 0.3),
+            slew_upper_threshold_pct=(0.7, 0.7),
+            input_threshold_pct=(0.5, 0.5),
             ports=(),
             cell_arcs=(),
             timing_checks=(),
@@ -247,15 +253,18 @@ def _library_cell(
     if not raw.library_name or not payload.capacitance_unit or not payload.time_unit:
         _fail(f"{field} present cell lacks library/unit identity")
     _finite(payload.slew_derate, f"{field}.slew_derate")
-    if payload.slew_derate <= 0.0:
-        _fail(f"{field}.slew_derate is not positive")
-    _thresholds(
-        payload.slew_lower_thresholds,
-        payload.slew_upper_thresholds,
-        payload.input_thresholds,
-        payload.output_thresholds,
-        f"{field}.thresholds",
-    )
+    # Native load-threshold adjustment normalizes percentages and skips
+    # degenerate spans/derates. This differs from a driver's table model.
+    def load_thresholds(values: tuple[float, float]) -> tuple[float, float]:
+        normalized = tuple(value * 0.01 if value > 1.0 else value for value in values)
+        for value in normalized:
+            _finite(value, f"{field}.load_threshold")
+            if not 0.0 <= value <= 1.0:
+                _fail(f"{field}.load_threshold is outside [0, 1]")
+        return normalized[0], normalized[1]
+    lower = load_thresholds(payload.slew_lower_thresholds)
+    upper = load_thresholds(payload.slew_upper_thresholds)
+    inputs = load_thresholds(payload.input_thresholds)
     if tuple(port.name for port in payload.ports) != tuple(
         sorted((port.name for port in payload.ports), key=_byte_key)
     ) or len({port.name for port in payload.ports}) != len(payload.ports):
@@ -325,6 +334,10 @@ def _library_cell(
         clock_pin_name=payload.clock_pin_name,
         data_pin_name=payload.data_pin_name,
         output_pin_name=payload.output_pin_name,
+        slew_derate=payload.slew_derate,
+        slew_lower_threshold_pct=lower,
+        slew_upper_threshold_pct=upper,
+        input_threshold_pct=inputs,
         ports=ports,
         cell_arcs=cell_arcs,
         timing_checks=tuple(checks),
@@ -495,32 +508,28 @@ def _graph_transfers(
                     children=(),
                 )
             else:
-                matches = tuple(
-                    closure
-                    for closure in payload.cell_arcs
-                    if closure.source_port == raw_arc.library_source_port
-                    and closure.sink_port == raw_arc.library_sink_port
-                )
-                semantic_matches = []
-                for index, closure in enumerate(matches):
-                    transfer = _transfer(
-                        closure,
-                        f"graph_transfer_by_rank[{raw_arc.native_rank}].closure[{index}]",
+                ordinal = raw_arc.native_cell_arc_ordinal
+                if ordinal is None or not 0 <= ordinal < len(payload.cell_arcs):
+                    _fail(f"raw cell arc {raw_arc.native_rank} lacks a valid Liberty ordinal")
+                closure = payload.cell_arcs[ordinal]
+                if (closure.source_port != raw_arc.library_source_port
+                        or closure.sink_port != raw_arc.library_sink_port):
+                    _fail(f"raw cell arc {raw_arc.native_rank} ordinal has wrong endpoints")
+                expected = _transfer(closure, f"graph_transfer_by_rank[{raw_arc.native_rank}]")
+                if (tuple(child.signature for child in expected.children)
+                        != candidate.arcs[arc_id].key.library_arcs):
+                    _fail(
+                        f"candidate graph transfer {raw_arc.native_rank} "
+                        "signature differs from its ordinal"
                     )
-                    if (
-                        tuple(child.signature for child in transfer.children)
-                        == candidate.arcs[arc_id].key.library_arcs
-                    ):
-                        semantic_matches.append(transfer)
-                if not semantic_matches:
-                    _fail(f"raw cell arc {raw_arc.native_rank} lacks a semantic closure match")
-                if len(semantic_matches) != 1:
-                    _fail(f"raw cell arc {raw_arc.native_rank} has an ambiguous semantic closure")
-                expected = semantic_matches[0]
                 if candidate.arcs[arc_id].transfer != expected:
                     _fail(
                         f"candidate graph transfer {raw_arc.native_rank} is not its matched closure"
                     )
+        if candidate.arcs[arc_id].native_cell_arc_ordinal != raw_arc.native_cell_arc_ordinal:
+            _fail(f"candidate cell arc {raw_arc.native_rank} identity differs from raw")
+        if raw_arc.kind == model.ArcKind.NET and raw_arc.native_cell_arc_ordinal is not None:
+            _fail("raw net arc has a Liberty identity")
         result[arc_id] = expected
     if any(item is None for item in result):
         _fail("raw graph transfers do not cover every candidate arc")
@@ -581,52 +590,54 @@ def _loads(
     facts: graph_oracle.GraphFacts,
     capacitances: tuple[model.CandidatePinCapacitance, ...],
 ) -> tuple[tuple[tuple[float, float], tuple[float, float]] | None, ...]:
-    if candidate.parasitics.nets:
-        expected = tuple(None for _arc in candidate.arcs)
-    else:
-        constraints = index_port_constraints(candidate)
-        caps = {item.node: item for item in capacitances}
-        net_loads: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {}
-        for net in raw.nets:
-            matrix = [[0.0, 0.0], [0.0, 0.0]]
-            for name in net.ordered_loads:
-                node_id = facts.node_by_name.get(name)
-                if node_id is None:
-                    _fail(f"raw net {net.map_key!r} has unresolved load {name!r}")
-                node = candidate.nodes[node_id]
-                if node.is_port:
-                    if node.direction not in (model.Direction.OUTPUT, model.Direction.INOUT):
-                        continue
-                    constraint = constraints.get(node_id)
-                    value = (
-                        0.0
-                        if constraint is None or constraint.output_load is None
-                        else constraint.output_load
-                    )
-                    for row in matrix:
-                        for transition in range(2):
-                            row[transition] += value
-                else:
-                    cap = caps.get(node_id)
-                    if cap is None:
-                        _fail(f"raw load {name!r} lacks a pin capacitance")
-                    for analysis in range(2):
-                        for transition in range(2):
-                            value = cap.transition_capacitance[analysis][transition]
-                            matrix[analysis][transition] += (
-                                cap.default_capacitance if value is None else value
-                            )
-            for row in matrix:
-                for value in row:
-                    _nonnegative(value, f"raw net {net.map_key!r} load")
-            net_loads[net.map_key] = (
-                (matrix[0][0], matrix[0][1]),
-                (matrix[1][0], matrix[1][1]),
-            )
-        zero = ((0.0, 0.0), (0.0, 0.0))
-        expected = tuple(
-            net_loads.get(candidate.nodes[arc.sink].net_name, zero) for arc in candidate.arcs
+    constraints = index_port_constraints(candidate)
+    caps = {item.node: item for item in capacitances}
+    net_loads: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {}
+    rc_nets = {net.map_key for net in raw.parasitics.nets} if raw.parasitics else set()
+    for net in raw.nets:
+        if net.map_key in rc_nets:
+            continue
+        matrix = [[0.0, 0.0], [0.0, 0.0]]
+        for name in net.ordered_loads:
+            node_id = facts.node_by_name.get(name)
+            if node_id is None:
+                _fail(f"raw net {net.map_key!r} has unresolved load {name!r}")
+            node = candidate.nodes[node_id]
+            if node.is_port:
+                if node.direction not in (model.Direction.OUTPUT, model.Direction.INOUT):
+                    continue
+                constraint = constraints.get(node_id)
+                value = (
+                    0.0
+                    if constraint is None or constraint.output_load is None
+                    else constraint.output_load
+                )
+                for row in matrix:
+                    for transition in range(2):
+                        row[transition] += value
+            else:
+                cap = caps.get(node_id)
+                if cap is None:
+                    _fail(f"raw load {name!r} lacks a pin capacitance")
+                for analysis in range(2):
+                    for transition in range(2):
+                        transition_cap = cap.transition_capacitance[analysis][transition]
+                        matrix[analysis][transition] += (
+                            cap.default_capacitance if transition_cap is None else transition_cap
+                        )
+        for row in matrix:
+            for value in row:
+                _nonnegative(value, f"raw net {net.map_key!r} load")
+        net_loads[net.map_key] = (
+            (matrix[0][0], matrix[0][1]),
+            (matrix[1][0], matrix[1][1]),
         )
+    zero = ((0.0, 0.0), (0.0, 0.0))
+    expected = tuple(
+        None if candidate.nodes[arc.sink].net_name in rc_nets
+        else net_loads.get(candidate.nodes[arc.sink].net_name, zero)
+        for arc in candidate.arcs
+    )
     if tuple(arc.output_load for arc in candidate.arcs) != expected:
         _fail("candidate output loads differ from raw ordered net loads")
     return expected
@@ -666,7 +677,10 @@ def _parasitics(candidate: model.CandidateInput, raw: model.RawReferenceInput) -
                 )
             )
         expected = model.CandidateParasitics(
-            source.capacitance_unit, source.resistance_unit, tuple(nets)
+            source.capacitance_unit,
+            source.resistance_unit,
+            tuple(nets),
+            source.input_port_thresholds,
         )
     if candidate.parasitics != expected:
         _fail("candidate parasitic semantic differs from normalized raw projection")

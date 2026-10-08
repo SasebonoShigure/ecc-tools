@@ -336,6 +336,7 @@ CsrReferenceInput makeCpuReferencePropertyFixture(std::uint64_t seed)
     arc.id = ArcId{index + 1};
     arc.key.parallel_ordinal = index;
     arc.native_traversal_rank = index + 1;
+    arc.native_cell_arc_ordinal = index;
     const double bias = 0.03125 * static_cast<double>(1 + (seed % 13)) + 0.5 * static_cast<double>(index);
     ista::csr::test::mutateChildren(arc.transfer, [&](auto& children) {
     for (auto& child : children)

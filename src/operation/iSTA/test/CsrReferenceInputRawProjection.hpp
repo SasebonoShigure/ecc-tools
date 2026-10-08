@@ -117,6 +117,7 @@ struct RawArc
   bool is_clock_arc{false};
   bool disabled{false};
   bool loop_disabled{false};
+  std::optional<std::uint64_t> native_cell_arc_ordinal{std::nullopt};
 
   friend bool operator==(const RawArc&, const RawArc&) = default;
 };
@@ -323,6 +324,9 @@ struct RawParasitics
   std::string capacitance_unit;
   std::string resistance_unit;
   std::vector<RawParasiticNet> nets;
+  double input_port_slew_derate{1.0};
+  std::array<double, 2> input_port_lower{0.3, 0.3};
+  std::array<double, 2> input_port_upper{0.7, 0.7};
 
   friend bool operator==(const RawParasitics&, const RawParasitics&) = default;
 };

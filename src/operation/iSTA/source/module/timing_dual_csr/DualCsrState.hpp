@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -66,6 +67,8 @@ struct DualCsrState
   BaseCsrState base_in;
   AuxOutCsrState aux_out;
   DualCsrReferencePayload reference_payload;
+  // Stable raw-RC slots; built once and extended with each committed net.
+  std::map<std::string, std::size_t, std::less<>> parasitic_net_slots;
   DualCsrTelemetry telemetry;
 
   friend bool operator==(const DualCsrState&, const DualCsrState&) = default;

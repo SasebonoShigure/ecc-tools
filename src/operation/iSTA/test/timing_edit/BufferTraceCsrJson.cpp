@@ -212,7 +212,8 @@ Json arcRecord(const csr::ArcRecord& value)
                            {"data_slew", value.eligibility.data_slew},
                            {"clock", value.eligibility.clock}}},
           {"transfer", transfer(value.transfer)},
-          {"output_load", optionalValue(value.output_load, loadMatrix)}};
+          {"output_load", optionalValue(value.output_load, loadMatrix)},
+          {"native_cell_arc_ordinal", optionalValue(value.native_cell_arc_ordinal, [](auto ordinal) { return Json(ordinal); })}};
 }
 
 Json rawNode(const csr::RawNodeReference& value)
@@ -300,6 +301,10 @@ Json libraryCell(const csr::ReferencedLibraryCellModel& value)
           {"clock_pin_name", value.clock_pin_name},
           {"data_pin_name", value.data_pin_name},
           {"output_pin_name", value.output_pin_name},
+          {"slew_derate", number(value.slew_derate)},
+          {"slew_lower_threshold_pct", arrayOf(value.slew_lower_threshold_pct, number)},
+          {"slew_upper_threshold_pct", arrayOf(value.slew_upper_threshold_pct, number)},
+          {"input_threshold_pct", arrayOf(value.input_threshold_pct, number)},
           {"ports", arrayOf(value.ports, libraryPort)},
           {"cell_arcs", arrayOf(value.cell_arcs, cell_arc)},
           {"timing_checks", arrayOf(value.timing_checks, check)}};

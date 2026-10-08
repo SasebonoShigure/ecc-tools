@@ -138,7 +138,7 @@ void fresh(const Options& options)
   const std::uint64_t prefix = parseU64(options.at("--prefix"), "prefix");
   auto receipt = timing_dual_csr::test::runProductionFreshSemanticPrefix(
       program, static_cast<std::size_t>(prefix));
-  Json envelope{{"schema_version", "ista-stage6-trace-process/5.0.0"},
+  Json envelope{{"schema_version", "ista-stage6-trace-process/6.0.0"},
                 {"role", "fresh-oracle"},
                 {"prefix_batches", prefix},
                 {"functional", timing_dual_csr::test::functionalSemanticReceiptToJson(receipt.functional)},
@@ -178,7 +178,7 @@ void targeted(const Options& options)
           timing_dual_csr::test::structuralReceiptToJson(
               observation.structural)}});
   }
-  Json envelope{{"schema_version", "ista-stage6-trace-process/5.0.0"},
+  Json envelope{{"schema_version", "ista-stage6-trace-process/6.0.0"},
                 {"role", "targeted-under-test"},
                 {"prefix_batches", prefix},
                 {"receipt_validated", true},

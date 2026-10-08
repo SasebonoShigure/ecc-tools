@@ -173,6 +173,14 @@ class Utility
 
   static std::ifstream* getInputFileStream(const std::string_view file_path) { return getFileStream<std::ifstream>(std::string{file_path}); }
 
+  static std::ofstream openOutputFile(const std::string_view path)
+  {
+    std::ofstream file;
+    file.exceptions(std::ios::failbit | std::ios::badbit);
+    file.open(std::string(path));
+    return file;
+  }
+
   static std::ofstream* getOutputFileStream(const std::string_view file_path) { return getFileStream<std::ofstream>(std::string{file_path}); }
 
   template <typename T>

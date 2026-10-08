@@ -34,6 +34,11 @@ const std::vector<csr::ReferencedLibraryCellModel>& DualCsrTimingPayloadViewImpl
   return _state->reference_payload.referenced_library_cells;
 }
 
+const csr::InputPortRcThresholds& DualCsrTimingPayloadViewImpl::inputPortRcThresholds() const noexcept
+{
+  return _state->reference_payload.parasitics.input_port_thresholds;
+}
+
 const std::vector<csr::NodeId>&
 DualCsrTimingPayloadViewImpl::orderedRootIds() const noexcept
 {

@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openecos.org/schemas/reference_input_controller_v1.schema.json",
-  "title": "Detached complete CSR reference-input controller summary, version 1",
+  "$id": "https://openecos.org/schemas/reference_input_controller_v2.schema.json",
+  "title": "Detached complete CSR reference-input controller summary, version 2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "requested_repeats", "case_results", "complete"],
   "properties": {
-    "schema": {"const": "ista-csr-reference-input-controller/1"},
+    "schema": {"const": "ista-csr-reference-input-controller/2"},
     "requested_repeats": {"type": "integer", "minimum": 3, "maximum": 18446744073709551615},
     "case_results": {
       "type": "array",

@@ -15,11 +15,12 @@ import reference_input_contract as contract
 import reference_input_controller as controller
 import reference_input_controller_negative_cases as negative_cases
 import reference_input_recompute_graph as graph_oracle
+import reference_input_recompute_parasitics as parasitic_oracle
 import reference_input_recompute_transfer as transfer_oracle
 import reference_input_wire_fixture as fixture
 
-_DEEP_CANDIDATE_BYTE_COUNT = 3409
-_DEEP_RAW_BYTE_COUNT = 1226
+_DEEP_CANDIDATE_BYTE_COUNT = 3528
+_DEEP_RAW_BYTE_COUNT = 1237
 
 
 def _known_answer_bytes(
@@ -392,7 +393,28 @@ def _test_parallel_closure_reuse() -> None:
     ambiguous[cell_name] = replace(
         raw_cell, payload=replace(payload, cell_arcs=(payload.cell_arcs[0], payload.cell_arcs[0]))
     )
-    reject("parallel-closure-ambiguous", changed_cells=ambiguous)
+    # Equal models remain distinguishable through the native Liberty ordinal.
+    transfer_oracle._graph_transfers(candidate, ambiguous, facts)
+    reject(
+        "parallel-closure-wrong-identity",
+        replace(candidate, arcs=(*candidate.arcs[:3], replace(clone, native_cell_arc_ordinal=1))),
+        ambiguous,
+    )
+    rebound = replace(
+        candidate, arcs=(*candidate.arcs[:3], replace(clone, native_cell_arc_ordinal=1))
+    )
+    rebound_facts = replace(
+        facts,
+        raw_arc_by_rank=(*facts.raw_arc_by_rank[:3],
+                         replace(facts.raw_arc_by_rank[3], native_cell_arc_ordinal=1)),
+    )
+    transfer_oracle._graph_transfers(rebound, ambiguous, rebound_facts)
+    reject(
+        "parallel-closure-missing-identity",
+        replace(candidate, arcs=(
+            *candidate.arcs[:3], replace(clone, native_cell_arc_ordinal=None),
+        )),
+    )
 
 
 def _test_deep_child(descriptor: contract.CaseDescriptor, root: Path) -> None:
@@ -676,6 +698,7 @@ def run_self_test(controller_path: Path, manifest: Path) -> None:
     _test_adjacency_slot_order(descriptors)
     _test_probe_contract(descriptors[0])
     _test_parallel_closure_reuse()
+    parasitic_oracle.self_test()
     _test_model_negatives(descriptors[0])
     _test_summary(descriptors)
     negative_cases.run_negative_matrix(manifest)

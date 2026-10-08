@@ -119,35 +119,37 @@ Json libraryCell(const csr::ReferencedLibraryCellModel& value)
           {"clock_pin_name", value.clock_pin_name},
           {"data_pin_name", value.data_pin_name},
           {"output_pin_name", value.output_pin_name},
+          {"slew_derate", number(value.slew_derate)},
+          {"slew_lower_threshold_pct", arrayOf(value.slew_lower_threshold_pct, number)},
+          {"slew_upper_threshold_pct", arrayOf(value.slew_upper_threshold_pct, number)},
+          {"input_threshold_pct", arrayOf(value.input_threshold_pct, number)},
           {"ports", arrayOf(value.ports, libraryPort)},
           {"cell_arcs", arrayOf(value.cell_arcs, cell_arc)},
           {"timing_checks", arrayOf(value.timing_checks, check)}};
 }
 
-Json parasitics(const csr::ParasiticModel& value)
+Json parasiticNet(const csr::ParasiticNetModel& value)
 {
   const auto node = [](const csr::ParasiticNodeModel& item) {
-    return Json{{"map_key", item.map_key},
-                {"embedded_name", item.embedded_name},
-                {"capacitance", number(item.capacitance)},
-                {"x", number(item.x)},
-                {"y", number(item.y)}};
+    return Json{{"map_key", item.map_key}, {"embedded_name", item.embedded_name},
+                {"capacitance", number(item.capacitance)}, {"x", number(item.x)}, {"y", number(item.y)}};
   };
   const auto resistor = [](const csr::ParasiticResistorModel& item) {
-    return Json{{"source", item.source},
-                {"sink", item.sink},
-                {"resistance", number(item.resistance)}};
+    return Json{{"source", item.source}, {"sink", item.sink}, {"resistance", number(item.resistance)}};
   };
-  const auto net = [&](const csr::ParasiticNetModel& item) {
-    return Json{{"map_key", item.map_key},
-                {"embedded_name", item.embedded_name},
-                {"lumped_capacitance", number(item.lumped_capacitance)},
-                {"nodes", arrayOf(item.nodes, node)},
-                {"resistors", arrayOf(item.resistors, resistor)}};
-  };
+  return {{"map_key", value.map_key}, {"embedded_name", value.embedded_name},
+          {"lumped_capacitance", number(value.lumped_capacitance)},
+          {"nodes", arrayOf(value.nodes, node)}, {"resistors", arrayOf(value.resistors, resistor)}};
+}
+
+Json parasitics(const csr::ParasiticModel& value)
+{
   return {{"capacitance_unit", value.capacitance_unit},
           {"resistance_unit", value.resistance_unit},
-          {"nets", arrayOf(value.nets, net)}};
+          {"input_port_thresholds", {{"slew_derate", number(value.input_port_thresholds.slew_derate)},
+              {"lower", arrayOf(value.input_port_thresholds.lower, number)},
+              {"upper", arrayOf(value.input_port_thresholds.upper, number)}}},
+          {"nets", arrayOf(value.nets, parasiticNet)}};
 }
 
 }  // namespace ista::timing_dual_csr::test::json_detail

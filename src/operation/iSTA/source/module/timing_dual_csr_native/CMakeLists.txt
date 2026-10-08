@@ -16,6 +16,7 @@ add_library(ista_timing_dual_csr_native
     ${ISTA_SOURCE}/data_manager/adapter/csr/TimingEditDualCsrDescriptorStructure.cpp
     ${ISTA_SOURCE}/data_manager/adapter/csr/NativeDualCsrPayloadCapture.cpp
     ${ISTA_SOURCE}/data_manager/adapter/csr/NativeDualCsrReferenceCapture.cpp
+    ${ISTA_SOURCE}/data_manager/adapter/csr/NativeDualCsrParasiticCapture.cpp
 )
 
 target_include_directories(ista_timing_dual_csr_native

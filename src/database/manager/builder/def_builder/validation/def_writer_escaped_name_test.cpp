@@ -60,6 +60,7 @@ void testEscapedNamesAreSerializedAsLiteralDefIdentifiers()
   design->get_bus_list()->addBusObject(std::move(bus));
 
   idb::DefWrite writer(&service, idb::DefWriteType::kSynthesis);
+  require(!writer.writeDb("/dev/full"), "full output device was incorrectly accepted");
   require(writer.writeDb(output_path.c_str()), "failed to write test DEF");
 
   const std::string output = readFile(output_path);

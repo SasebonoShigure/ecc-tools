@@ -22,6 +22,8 @@
 
 namespace ista::csr::detail {
 
+bool validateReferenceParasitics(const CsrReferenceInput& input, std::vector<CsrContractViolation>& errors);
+
 void validateReferenceConstraints(const CsrReferenceInput& input, std::vector<CsrContractViolation>& errors);
 
 }  // namespace ista::csr::detail

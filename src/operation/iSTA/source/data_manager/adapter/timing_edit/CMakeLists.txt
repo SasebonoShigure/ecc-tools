@@ -6,10 +6,12 @@ add_library(ista_timing_edit_native
     NativeCandidateExecutor.cpp
     TimingEditResolver.cpp
     NativeBufferInsertion.cpp
+    NativeBufferInsertionParasitics.cpp
     NativeDesignEditTranslator.cpp
     NativeTimingEditPreparer.cpp
     NativeTargetedEditPreparer.cpp
     NativeTargetedEditProjection.cpp
+    NativeTargetedParasitics.cpp
     NativeTimingEditTraceClosure.cpp
 )
 

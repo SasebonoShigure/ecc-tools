@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <string_view>
 #include <span>
 #include <map>
 #include <unordered_map>
@@ -8,6 +10,7 @@
 #include "CsrCudaDeviceTypes.hpp"
 #include "CsrReferenceTypes.hpp"
 #include "ActiveCsrEdgeView.hpp"
+#include "CsrRcDriverCache.hpp"
 
 namespace ista::csr::cuda_detail {
 struct ArcLayout
@@ -22,6 +25,7 @@ struct ArcBinding
   bool levelization{false};
   EdgeStorageKind storage_kind{EdgeStorageKind::kBaseOut};
   std::uint8_t path_transitions{0};
+  Index rc_binding{absent};
 };
 struct PathDomain
 {
@@ -57,6 +61,9 @@ struct ModelStorage
 {
   std::vector<Child> children;
   std::vector<double> tables;
+  std::vector<RcLoadCell> rc_load_cells;
+  [[nodiscard]] Index libraryIndex(std::string_view name);
+  [[nodiscard]] Index internLoadCell(const ReferencedLibraryCellModel& cell);
   [[nodiscard]] Index intern(const std::shared_ptr<const std::vector<ChildTimingArcModel>>& owner);
 
  private:
@@ -65,13 +72,54 @@ struct ModelStorage
     std::shared_ptr<const std::vector<ChildTimingArcModel>> source;
     Index begin;
   };
+  std::map<std::string, Index, std::less<>> _libraries;
+  std::map<std::pair<std::string, std::string>, Index> _load_cells;
   std::vector<Entry> _entries;
   std::map<std::shared_ptr<const std::vector<ChildTimingArcModel>>, Index, std::owner_less<>> _owners;
   std::unordered_multimap<std::size_t, Index> _lookup;
 };
+struct PackedRcTree
+{
+  std::array<Index, 4> lanes{};
+  std::vector<RcModel> models;
+  std::vector<RcTerminal> terminals;
+};
+// Caller keeps this staging alive through its upload. Reuse capacity for changed
+// nets; do not append old revisions to the immutable Liberty table pool.
+void packRcTree(const CsrParasiticTree& source, PackedRcTree& target);
+
+struct RcChildGroup { Index begin, count, model; };
+struct HostRcNode
+{
+  CsrParasiticBinding binding;
+  bool port{false};
+  Index load_cell{absent};
+};
+struct HostRcNet
+{
+  std::shared_ptr<const CsrParasiticTree> owner;
+  PackedRcTree tree;
+  std::vector<Index> initialize_arcs;
+  std::vector<CsrRcTimingRow> rows;
+  Index child_count{0}, record_count{0};
+  std::map<std::pair<bool, Index>, RcChildGroup> groups;
+};
+[[nodiscard]] RcBinding packRcBinding(HostRcNet& net, Index net_index, Index terminal,
+                                      bool instance, Index ordinal, Index child_begin, Index child_count);
+void finishRcNet(HostRcNet& net);
+
+struct RcHostState
+{
+  std::map<Index, HostRcNode> nodes;
+  std::vector<RcBinding> bindings;
+  std::vector<Index> net_by_node;
+};
+
 struct HostData
 {
   std::vector<Arc> arcs;
+  std::vector<HostRcNet> rc_nets;
+  RcHostState rc;
   std::vector<PathSeed> path_seeds;
   std::vector<NodeSeed> node_seeds;
   Index node_count{};
@@ -88,6 +136,8 @@ struct HostData
   Index tag_count{0};
   Index clock_count{0};
 };
+
+void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& models);
 
 [[nodiscard]] Arc packArc(const ArcSemanticPayload& source, ModelStorage& models);
 [[nodiscard]] HostData pack(const CsrReferenceInput& input, ModelStorage& models);

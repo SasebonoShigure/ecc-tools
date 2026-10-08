@@ -69,7 +69,8 @@ enum class CreatedNetRole : std::uint8_t
 enum class ParasiticEditPolicy : std::uint8_t
 {
   kError,
-  kFullWithRecord
+  kFullWithRecord,
+  kPreRouteTree
 };
 
 enum class EditDisposition : std::uint8_t

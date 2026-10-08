@@ -273,15 +273,19 @@ void verifiedCapabilityAndPublishContracts()
     require(!concurrent.success() && concurrent.failure_origin == DualCsrStageFailureOrigin::kCapability,
             "owner accepted a second pending transaction");
     DualCsrTransactionCoordinator other(initial);
+    require(coordinator.canPublish(pending) && !other.canPublish(pending),
+            "publication precheck lost the owning coordinator");
     require(other.publish(std::move(pending)).code == DualCsrTransactionCode::kTraceMismatch
                 && sameCommittedValues(other.committed(), initial)
                 && sameCommittedValues(coordinator.committed(), initial),
             "foreign publish changed either owner's logical state");
     auto committed_stage = verifiedStage(session, fixture, coordinator);
     ista_test_allocation::armFailure(1);
+    const bool ready = coordinator.canPublish(committed_stage);
     const auto published = coordinator.publish(std::move(committed_stage));
+    const bool consumed = !coordinator.canPublish(committed_stage);
     const auto commit_allocations = ista_test_allocation::disable();
-    require(published.ok() && commit_allocations == 0, "prepared commit allocated");
+    require(ready && consumed && published.ok() && commit_allocations == 0, "prepared precheck/commit allocated or reused a stage");
     const auto committed = coordinator.committed();
     auto stale = makeStagedDualCsrAnalysisState(coordinator, std::move(stale_batch));
     require(!stale.success() && sameCommittedValues(coordinator.committed(), committed),

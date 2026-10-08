@@ -6,6 +6,7 @@
 
 namespace ista::csr::test {
 void runCpuReferenceClockContracts();
+void runCpuReferenceRcInitializationContract();
 void runCpuReferenceSequentialContracts();
 void runCpuReferenceCheckContracts();
 CsrComputationResult computeContractTiming(const CsrReferenceInput& input)
@@ -21,6 +22,7 @@ int main()
     ista::csr::test::runCpuReferenceOutcomeContracts();
     ista::csr::test::runWholeResultLiteralContract();
     ista::csr::test::runCpuReferenceArcContracts();
+    ista::csr::test::runCpuReferenceRcInitializationContract();
     ista::csr::test::runCpuReferencePropagationContracts();
     ista::csr::test::runCpuReferenceClockContracts();
     ista::csr::test::runCpuReferenceSequentialContracts();

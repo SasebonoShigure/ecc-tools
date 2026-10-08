@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -417,12 +418,35 @@ MixedDualCsrStageAttempt makeMixedLevelizedDualCsrAnalysisState(
   return DualCsrStageFactoryAccess::makeVerified(std::move(ready));
 }
 
+DualCsrTransactionCode DualCsrTransactionCoordinator::publicationError(const DualCsrVerifiedStage& verified) const noexcept
+{
+  if (_poisoned)
+    return DualCsrTransactionCode::kPoisoned;
+  const auto& stage = verified._data;
+  if (!stage || stage->owner != _committed || _pending.lock() != stage || !stage->expected.matches(*_committed))
+    return DualCsrTransactionCode::kTraceMismatch;
+  const auto& current = *_committed;
+  if (!stage->batch || current.graph.generation.value() != current.generation.value() + 1
+      || (stage->identity && stage->identity->generation != current.graph.generation)
+      || (incregpusta_debug_checks_enabled && !stage->identity))
+    return DualCsrTransactionCode::kStaleGeneration;
+  const auto& batch = *stage->batch;
+  if (batch.semantic.expected_generation != current.generation || batch.execution.generation() != current.graph.generation
+      || !current.baseline)
+    return DualCsrTransactionCode::kTraceMismatch;
+  return DualCsrTransactionCode::kOk;
+}
+
+bool DualCsrTransactionCoordinator::canPublish(const DualCsrVerifiedStage& staged) const noexcept
+{
+  return publicationError(staged) == DualCsrTransactionCode::kOk;
+}
+
 DualCsrTransactionStatus DualCsrTransactionCoordinator::publish(
-    DualCsrVerifiedStage verified, DualCsrPublishFailpoint failpoint)
+    DualCsrVerifiedStage verified, DualCsrPublishFailpoint failpoint) noexcept
 {
   const auto cancel = [&](DualCsrTransactionCode code) {
-    // A by-value parameter may outlive this call until the caller's full
-    // expression ends. Undo and release pending before reporting rejection.
+    // Undo and release pending before reporting rejection to a caller.
     verified._data.reset();
     return reject(code);
   };
@@ -432,22 +456,19 @@ DualCsrTransactionStatus DualCsrTransactionCoordinator::publish(
       && (!incregpusta_debug_checks_enabled
           || (failpoint != DualCsrPublishFailpoint::kBeforeSwap && failpoint != DualCsrPublishFailpoint::kAfterSwap)))
     return cancel(DualCsrTransactionCode::kUnknownFailpoint);
+  if (const auto error = publicationError(verified); error != DualCsrTransactionCode::kOk)
+    return cancel(error);
   const auto& stage = verified._data;
-  if (!stage || stage->owner != _committed || _pending.lock() != stage || !stage->expected.matches(*_committed))
-    return cancel(DualCsrTransactionCode::kTraceMismatch);
   auto& current = *_committed;
-  if (!stage->batch || current.graph.generation.value() != current.generation.value() + 1
-      || (stage->identity && stage->identity->generation != current.graph.generation)
-      || (incregpusta_debug_checks_enabled && !stage->identity))
-    return cancel(DualCsrTransactionCode::kStaleGeneration);
   auto& batch = *stage->batch;
-  if (batch.semantic.expected_generation != current.generation || batch.execution.generation() != current.graph.generation
-      || !current.baseline)
-    return cancel(DualCsrTransactionCode::kTraceMismatch);
   if (failpoint == DualCsrPublishFailpoint::kBeforeSwap)
     return cancel(DualCsrTransactionCode::kPreSwapFault);
 
   // History, values and undo were fully prepared before apply.
+  static_assert(std::is_nothrow_swappable_v<decltype(current.timing)>);
+  static_assert(std::is_nothrow_swappable_v<decltype(current.identity)>);
+  static_assert(std::is_nothrow_move_constructible_v<decltype(batch.semantic)>);
+  static_assert(std::is_nothrow_move_constructible_v<decltype(batch.execution)>);
   using std::swap;
   swap(current.timing, stage->timing);
   swap(current.identity, stage->identity);

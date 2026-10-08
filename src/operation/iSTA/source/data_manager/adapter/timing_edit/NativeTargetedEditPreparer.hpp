@@ -36,6 +36,8 @@ struct NativeTargetedEditState
   std::vector<csr::ArcId> native_arc_ids;
   std::vector<std::optional<std::size_t>> arc_native_ranks;
   std::vector<std::uint64_t> base_out_offsets, base_in_offsets;
+  // Functional owner/terminal binding; no native timing or graph shadow.
+  std::map<csr::NodeId, csr::CsrParasiticBinding> parasitics;
 };
 struct NativeTargetedEditBatch
 {
@@ -48,6 +50,7 @@ class NativeTargetedEditPreparer final
  public:
   [[nodiscard]] static NativeTargetedEditState bindBaseline(const Database& database, const csr::CsrReferenceInput& input,
                                                             const BaselineSemanticIdentity& baseline, csr::detail::NativeLibraryModels& models);
-  [[nodiscard]] static NativeTargetedEditBatch prepare(Database& database, const NativeExecutionAuthority& authority, EditBatch plan, NativeTargetedEditState& current);
+  [[nodiscard]] static NativeTargetedEditBatch prepare(Database& database, const NativeExecutionAuthority& authority, EditBatch plan, NativeTargetedEditState& current,
+      std::map<std::string, ParasiticNet> prepared_rc = {});
 };
 }  // namespace ista::timing_edit

@@ -497,6 +497,7 @@ void testFrozenPathDetails()
   arc.source = NodeId{2};
   arc.sink = NodeId{3};
   arc.native_traversal_rank = 3;
+  arc.native_cell_arc_ordinal = library.cell_arcs.size();
   arc.key.base.source = downstream.nodes[2].key;
   arc.key.base.sink = output.key;
   arc.key.base.library_source_port = "Y";

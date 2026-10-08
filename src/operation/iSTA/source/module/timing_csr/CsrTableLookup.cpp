@@ -243,6 +243,23 @@ std::optional<double> lookupCsrTimingTable(const TimingTableModel& table, double
   return std::isfinite(result) ? std::optional<double>{result} : std::nullopt;
 }
 
+std::optional<double> lookupCsrTimingTableRawLoad(const TimingTableModel& table, double input_slew, double raw_output_load,
+                                                  double time_unit_scale, double capacitance_unit_scale)
+{
+  if (!table.present || !std::isfinite(input_slew) || input_slew < 0.0
+      || !std::isfinite(raw_output_load) || raw_output_load < 0.0
+      || !std::isfinite(time_unit_scale) || time_unit_scale <= 0.0
+      || !std::isfinite(capacitance_unit_scale) || capacitance_unit_scale <= 0.0)
+    return std::nullopt;
+  const double slew = input_slew * time_unit_scale;
+  const double load = raw_output_load * capacitance_unit_scale;
+  if (!std::isfinite(slew) || !std::isfinite(load)) return std::nullopt;
+  const auto value = evaluateTable(table, slew, load);
+  if (!value) return std::nullopt;
+  const double result = *value / time_unit_scale;
+  return std::isfinite(result) ? std::optional<double>{result} : std::nullopt;
+}
+
 std::optional<double> lookupCsrTimingCheckTable(const TimingTableModel& table, double clock_slew, double data_slew, double time_unit_scale)
 {
   if (!table.present || !std::isfinite(clock_slew) || clock_slew < 0.0 || !std::isfinite(data_slew) || data_slew < 0.0

@@ -11,7 +11,7 @@
 import reference_input_model as model
 from reference_input_canonical import CanonicalError, CanonicalReader, CanonicalWriter
 
-CANDIDATE_DOMAIN = "ista-csr-reference-input-test-wire/1.0.0"
+CANDIDATE_DOMAIN = "ista-csr-reference-input-test-wire/2.0.0"
 _DoublePair = tuple[float, float]
 _OptionalDoublePair = tuple[float | None, float | None]
 _DoubleMatrix = tuple[_DoublePair, _DoublePair]
@@ -182,19 +182,21 @@ def _eligibility(reader: CanonicalReader) -> model.ArcEligibility:
 
 
 def _arc(reader: CanonicalReader) -> model.CandidateArc:
+    arc_id = reader.u64()
+    key = _arc_key(reader)
+    source, sink = reader.u64(), reader.u64()
+    kind = reader.enum(model.ArcKind, "arc.kind")
+    rank = reader.u64()
+    ordinal = reader.optional(reader.u64)
     return model.CandidateArc(
-        reader.u64(),
-        _arc_key(reader),
-        reader.u64(),
-        reader.u64(),
-        reader.enum(model.ArcKind, "arc.kind"),
-        reader.u64(),
+        arc_id, key, source, sink, kind, rank,
         reader.boolean(),
         reader.boolean(),
         reader.boolean(),
         _eligibility(reader),
         _transfer(reader),
         reader.optional(lambda: _load_matrix(reader)),
+        ordinal,
     )
 
 
@@ -287,6 +289,10 @@ def _library_cell(reader: CanonicalReader) -> model.CandidateReferencedLibraryCe
         reader.string(),
         reader.string(),
         reader.string(),
+        reader.finite_double(),
+        (reader.finite_double(), reader.finite_double()),
+        (reader.finite_double(), reader.finite_double()),
+        (reader.finite_double(), reader.finite_double()),
         reader.vector(lambda _index: _library_port(reader), "library_cell.ports"),
         reader.vector(lambda _index: _library_cell_arc(reader), "library_cell.cell_arcs"),
         reader.vector(lambda _index: _library_check(reader), "library_cell.timing_checks"),
@@ -318,11 +324,14 @@ def _parasitic_net(reader: CanonicalReader) -> model.CandidateParasiticNet:
 
 
 def _parasitics(reader: CanonicalReader) -> model.CandidateParasitics:
-    return model.CandidateParasitics(
-        reader.string(),
-        reader.string(),
-        reader.vector(lambda _index: _parasitic_net(reader), "parasitics.nets"),
+    capacitance, resistance = reader.string(), reader.string()
+    thresholds = model.InputPortRcThresholds(
+        reader.finite_double(),
+        (reader.finite_double(), reader.finite_double()),
+        (reader.finite_double(), reader.finite_double()),
     )
+    nets = reader.vector(lambda _index: _parasitic_net(reader), "parasitics.nets")
+    return model.CandidateParasitics(capacitance, resistance, nets, thresholds)
 
 
 def _start_seed(reader: CanonicalReader) -> model.CandidateStartSeed:
@@ -466,6 +475,7 @@ class _FullCandidateEncoder:
         self.w.u64(arc.sink)
         self.w.enum(arc.kind)
         self.w.u64(arc.native_traversal_rank)
+        self.w.optional(arc.native_cell_arc_ordinal, self.w.u64)
         self._booleans(arc.is_clock_arc, arc.is_disabled, arc.is_loop_disabled)
         self._booleans(
             arc.eligibility.levelization,
@@ -534,6 +544,8 @@ class _FullCandidateEncoder:
         self.w.string(cell.library_name)
         self._booleans(cell.is_sequential, cell.is_clock_gating, cell.is_macro)
         self._strings(cell.clock_pin_name, cell.data_pin_name, cell.output_pin_name)
+        self._finite(cell.slew_derate, *cell.slew_lower_threshold_pct,
+                     *cell.slew_upper_threshold_pct, *cell.input_threshold_pct)
         self.w.vector(cell.ports, self._library_port)
         self.w.vector(cell.cell_arcs, self._library_cell_arc)
         self.w.vector(cell.timing_checks, self._library_check)
@@ -631,6 +643,8 @@ class _FullCandidateEncoder:
         self.w.vector(candidate.referenced_library_cells, self._library_cell)
         self.w.string(candidate.parasitics.capacitance_unit)
         self.w.string(candidate.parasitics.resistance_unit)
+        thresholds = candidate.parasitics.input_port_thresholds
+        self._finite(thresholds.slew_derate, *thresholds.lower, *thresholds.upper)
         self.w.vector(candidate.parasitics.nets, self._parasitic_net)
         self.w.vector(candidate.start_seeds, self._start_seed)
         self.w.vector(candidate.endpoint_required, self._endpoint)

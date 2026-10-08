@@ -388,8 +388,16 @@ void validatePathDomainsAndCausality(const DualCsrState& state,
         rejectSemantic(violations, "result.paths.predecessor",
                        "root path must resolve to exactly one start seed");
       } else if (match->availability == csr::StartSeedAvailability::kDeferredSequential) {
-        if (source != csr::PathSource::kRegister || paths.launches.values[entry] != 0.0)
-          rejectSemantic(violations, "result.paths.launches", "deferred register root requires zero ideal-clock launch");
+        if (source != csr::PathSource::kRegister)
+          rejectSemantic(violations, "result.paths.launches", "deferred root must use register path source");
+        if (match->crpr_node && match->crpr_transition) {
+          const auto clock_lane = (match->crpr_node->value() * csr::kAnalysisCount + lane.analysis) * csr::kTransitionCount
+                                  + static_cast<std::size_t>(*match->crpr_transition);
+          const auto& arrivals = result.effective_clock.arrivals;
+          if (clock_lane < arrivals.presence.size() && clock_lane < arrivals.values.size()
+              && paths.launches.values[entry] != (arrivals.presence[clock_lane] ? arrivals.values[clock_lane] : 0.0))
+            rejectSemantic(violations, "result.paths.launches", "register root launch differs from its effective clock lane");
+        }
         if (!match->crpr_node || !match->crpr_transition || paths.crpr_nodes.presence[entry] != 1
             || paths.crpr_transitions.presence[entry] != 1 || paths.crpr_nodes.values[entry] != *match->crpr_node
             || paths.crpr_transitions.values[entry] != *match->crpr_transition)

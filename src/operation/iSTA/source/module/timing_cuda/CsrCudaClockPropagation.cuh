@@ -79,6 +79,7 @@ __device__ inline void clockNode(DeviceView view, Index id, Index clock, bool sl
     if (*view.status != Status::success)
       return;
   }
+  if (slew_pass) selectRcDriver(view, id, true);
 }
 
 __device__ inline void clockPass(DeviceView view)

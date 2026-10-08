@@ -35,6 +35,7 @@
 #include <limits.h>
 
 #include <algorithm>
+#include <memory>
 #include <cstdio>
 
 #include "../db_layout/IdbLayer.h"
@@ -78,13 +79,13 @@ IdbViaMaster* IdbVia::get_instance()
 
 IdbVia* IdbVia::clone()
 {
-  IdbVia* via_new = new IdbVia();
+  auto via_new = std::make_unique<IdbVia>();
   via_new->_name = _name;
   via_new->_master_instance = _master_instance;  //_via_instance->clone();
   via_new->_b_master_clone = true;
   via_new->_coordinate->set_xy(_coordinate->get_x(), _coordinate->get_y());
 
-  return via_new;
+  return via_new.release();
 }
 
 void IdbVia::set_instance(IdbViaMaster* instance)

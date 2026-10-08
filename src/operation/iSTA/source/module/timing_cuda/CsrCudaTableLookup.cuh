@@ -131,6 +131,18 @@ __device__ inline double lookupTable(DeviceView view, const Table& table, const 
   return finiteValue(view, evaluateTable(view, table, slew, load) / child.time_scale);
 }
 
+// RC solvers use native raw load conversion; ordinary NLDM keeps its ceil.
+__device__ inline double lookupTableRawLoad(DeviceView view, const Table& table, const Child& child, double slew, double load)
+{
+  if (!table.present || !isfinite(slew) || slew < 0.0 || !isfinite(load) || load < 0.0
+      || !isfinite(child.time_scale) || child.time_scale <= 0.0
+      || !isfinite(child.capacitance_scale) || child.capacitance_scale <= 0.0)
+    return numeric(view);
+  slew = finiteValue(view, slew * child.time_scale);
+  load = finiteValue(view, load * child.capacitance_scale);
+  return finiteValue(view, evaluateTable(view, table, slew, load) / child.time_scale);
+}
+
 __device__ inline double lookupCheckTable(DeviceView view, const Table& table, const Child& child, double clock_slew, double data_slew)
 {
   if (!table.present || !isfinite(clock_slew) || clock_slew < 0.0 || !isfinite(data_slew) || data_slew < 0.0

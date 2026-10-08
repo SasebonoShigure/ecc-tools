@@ -16,6 +16,7 @@
 #pragma once
 
 #include "DCTask.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "Database.hpp"
 #include "ParasiticArnoldiModel.hpp"
 #include "ParasiticDmpModel.hpp"
@@ -38,6 +39,9 @@ class DelayCalculator
   double getPowerOutputLoad(std::string& output_pin, AnalysisType analysis_type, TransType output_trans_type);
 
  private:
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
+  friend class CsrParasiticNativeTestAccess;
+#endif
   // self
   static DelayCalculator* _dc_instance;
   std::map<std::string, std::map<std::string, std::vector<std::pair<std::string, double>>>> _parasitic_resistor_map_cache;

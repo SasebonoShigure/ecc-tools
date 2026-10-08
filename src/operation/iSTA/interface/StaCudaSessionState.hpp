@@ -21,6 +21,7 @@ class StaCudaSessionState final
 
  private:
   friend class STAInterface;
+  friend class PhysicalStaSessionState;
   StaCudaSessionState(Database& database, const csr::CsrReferenceInput& input);
   friend class StaCsrSessionContext;
   void materialize(Database& database);

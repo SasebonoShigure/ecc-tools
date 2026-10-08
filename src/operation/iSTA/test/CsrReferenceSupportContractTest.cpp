@@ -193,6 +193,7 @@ CsrReferenceInput cellInput()
   arc.kind = ArcKind::kCell;
   arc.eligibility = {true, true, true, false};
   arc.transfer.setChildren({child});
+  arc.native_cell_arc_ordinal = 0;
   arc.output_load = outputLoad(0.0);
   input.arcs = {arc};
   input.arc_ids_by_key = {{arc.key, arc.id}};
@@ -307,7 +308,7 @@ CsrReferenceInput propagatedInput()
 {
   CsrReferenceInput input = clockInput();
   input.clocks[0].propagated = true;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
+  input.unsupported_reasons.clear();
   refreshIdentity(input);
   return input;
 }
@@ -496,7 +497,9 @@ CsrReferenceInput exportFixture(CsrReferenceInputNativeFixture& fixture, std::ui
 void testExactReasonMatrix()
 {
   verifyReason(CsrReferenceUnsupportedReason::kParasiticNet, referenceInput, parasiticInput, "parasitic");
-  verifyReason(CsrReferenceUnsupportedReason::kPropagatedClock, clockInput, propagatedInput, "propagated clock");
+  const auto propagated = propagatedInput();
+  must(propagated.unsupported_reasons.empty() && validateReferenceInput(propagated).empty(),
+       "ordinary propagated clock must be supported");
   verifyReason(CsrReferenceUnsupportedReason::kClockGatingOrDivider, cellInput, gatingInput, "clock gating");
   verifyReason(CsrReferenceUnsupportedReason::kCaseAnalysis, referenceInput, caseInput, "case analysis");
 }
@@ -585,7 +588,7 @@ void testRemainingReasonOverlap()
   auto result = exportCsrReferenceInputCandidate(fixture.database(), context, 110);
   must(std::holds_alternative<CsrReferenceInput>(result), "remaining-reason overlap export failed");
   const CsrReferenceInput& input = std::get<CsrReferenceInput>(result);
-  const std::vector<CsrReferenceUnsupportedReason> all{CsrReferenceUnsupportedReason::kParasiticNet, CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kCaseAnalysis};
+  const std::vector<CsrReferenceUnsupportedReason> all{CsrReferenceUnsupportedReason::kParasiticNet, CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kCaseAnalysis};
   must(input.unsupported_reasons == all, "remaining-reason overlap is not exact stable enum order");
   must(validateReferenceInputForSession(input, 110).empty(), "remaining-reason overlap is not strict-valid");
 }

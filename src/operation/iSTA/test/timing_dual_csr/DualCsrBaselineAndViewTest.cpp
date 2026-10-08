@@ -47,6 +47,7 @@ void baselineFactoryContracts()
   auto canonical_first = native_first;
   canonical_first.id = csr::ArcId{0};
   canonical_first.native_traversal_rank = 1;
+  canonical_first.native_cell_arc_ordinal = fifo_input.referenced_library_cells[0].cell_arcs.size();
   canonical_first.key.base.library_arcs[0].arc_index = 0;
   ista::csr::test::mutateChildren(canonical_first.transfer, [&](auto& children) { children[0].signature.arc_index = 0; });
   fifo_input.arcs = {canonical_first, native_first};
@@ -460,11 +461,20 @@ void payloadSemanticContracts()
   require(hasCode(validateDualCsrState(missing_load),
                   DualCsrViolationCode::kExpectedValue),
           "OutputLoadPresenceFollowsParasiticDomain empty-domain canary was accepted");
-  auto parasitic_domain = baselineState();
-  parasitic_domain.reference_payload.parasitics.nets.emplace_back();
-  require(hasCode(validateDualCsrState(parasitic_domain),
-                  DualCsrViolationCode::kExpectedValue),
-          "OutputLoadPresenceFollowsParasiticDomain populated-domain canary was accepted");
+  auto mixed_input = csr::test::mixedParasiticInput();
+  csr::test::refreshIdentity(mixed_input, kSessionValue);
+  auto mixed = DualCsrBaselineFactory::create(mixed_input,
+      timing_edit::TimingEditSessionToken{kSessionValue},
+      timing_edit::AppendOnlyHighWater{mixed_input.nodes.size(), 0, mixed_input.arcs.size()});
+  require(mixed.success() && validateDualCsrState(*mixed.state).empty(),
+          "valid mixed RC/no-RC state was rejected");
+  mixed.state->arc_slots[0].payload.output_load.reset();
+  require(hasCode(validateDualCsrState(*mixed.state), DualCsrViolationCode::kExpectedValue),
+          "unrelated RC net disabled required no-RC load presence");
+  mixed.state->arc_slots[0].payload.output_load = csr::test::outputLoad(0.5);
+  mixed.state->arc_slots[1].payload.output_load = csr::test::outputLoad(0.5);
+  require(hasCode(validateDualCsrState(*mixed.state), DualCsrViolationCode::kExpectedValue),
+          "RC arc accepted a no-RC output load");
 
   auto inactive = baselineState();
   auto inactive_payload = inactive.arc_slots[0].payload;

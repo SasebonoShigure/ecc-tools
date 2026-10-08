@@ -191,6 +191,10 @@ void appendLibraryCell(Writer& writer, const ReferencedLibraryCellModel& cell)
   writer.appendString(cell.clock_pin_name);
   writer.appendString(cell.data_pin_name);
   writer.appendString(cell.output_pin_name);
+  writer.appendFiniteDouble(cell.slew_derate);
+  for (double value : cell.slew_lower_threshold_pct) writer.appendFiniteDouble(value);
+  for (double value : cell.slew_upper_threshold_pct) writer.appendFiniteDouble(value);
+  for (double value : cell.input_threshold_pct) writer.appendFiniteDouble(value);
   writer.appendVector(cell.ports, appendLibraryPort);
   writer.appendVector(cell.cell_arcs, appendLibraryCellArc);
   writer.appendVector(cell.timing_checks, appendLibraryCheck);
@@ -200,6 +204,9 @@ void appendParasitics(Writer& writer, const ParasiticModel& parasitics)
 {
   writer.appendString(parasitics.capacitance_unit);
   writer.appendString(parasitics.resistance_unit);
+  writer.appendFiniteDouble(parasitics.input_port_thresholds.slew_derate);
+  for (double value : parasitics.input_port_thresholds.lower) writer.appendFiniteDouble(value);
+  for (double value : parasitics.input_port_thresholds.upper) writer.appendFiniteDouble(value);
   writer.appendVector(parasitics.nets, appendParasiticNet);
 }
 

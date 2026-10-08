@@ -100,7 +100,9 @@ struct HostGraphState
   ResultLayout layout;
   std::vector<NodeSeed> node_seeds;
   std::vector<PathSeed> path_seeds;
+  RcHostState rc;
 };
+struct RcBindingUpdate { Index index; RcBinding value; };
 struct HostGraphUndo
 {
   std::shared_ptr<HostGraphState> target;
@@ -111,6 +113,11 @@ struct HostGraphUndo
   struct RowSize { Index node, incoming, outgoing; };
   std::vector<RowSize> adjacency;
   std::optional<std::vector<Index>> roots, ends;
+  bool rc_applied{false};
+  Index rc_binding_count{}, rc_node_count{};
+  std::map<Index, HostRcNode> rc_nodes;
+  std::vector<Index> new_rc_nodes;
+  std::vector<RcBindingUpdate> rc_bindings;
 
   void clear() noexcept
   {
@@ -121,11 +128,23 @@ struct HostGraphUndo
     adjacency.clear();
     roots.reset();
     ends.reset();
+    rc_applied = false;
+    rc_nodes.clear();
+    new_rc_nodes.clear();
+    rc_bindings.clear();
   }
   void restore() noexcept
   {
     if (!target)
       return;
+    if (rc_applied) {
+      for (const auto& [id, value] : rc_nodes) target->rc.nodes.at(id) = value;
+      for (const auto id : new_rc_nodes) target->rc.nodes.erase(id);
+      for (const auto& [id, value] : rc_bindings) target->rc.bindings[id] = value;
+      target->rc.bindings.resize(rc_binding_count);
+      target->rc.net_by_node.resize(rc_node_count);
+      rc_applied = false;
+    }
     for (const auto& [id, value] : bindings)
       target->bindings[id] = value;
     for (const auto& [id, value] : layouts)
@@ -167,6 +186,35 @@ struct ResultBuffers
   DeviceBuffer<ChildState> children;
   DeviceBuffer<Status> status;
 };
+struct RcNetBuffers
+{
+  std::shared_ptr<const CsrParasiticTree> owner;
+  DeviceBuffer<RcModel> models;
+  DeviceBuffer<RcTerminal> terminals;
+  DeviceBuffer<CsrRcTimingRow> rows;
+  DeviceBuffer<CsrRcTimingRecord> records;
+  DeviceBuffer<CsrRcDriverLane> drivers;
+  DeviceBuffer<Index> initialize_arcs;
+};
+struct RcNetUpdate { Index index; RcNet value; };
+struct RcPatchStorage
+{
+  std::map<Index, HostRcNet> nets;
+  std::vector<RcBindingUpdate> bindings;
+  std::vector<RcNetUpdate> views, undo_views;
+  DeviceBuffer<RcBindingUpdate> binding_upload;
+  DeviceBuffer<RcNetUpdate> view_upload;
+  bool buffers_swapped{false}, uploaded{false};
+  Index old_net_count{0};
+  void clear() noexcept
+  {
+    nets.clear();
+    bindings.clear();
+    views.clear();
+    undo_views.clear();
+    buffers_swapped = uploaded = false;
+  }
+};
 struct FullGraphBuffers
 {
   DeviceBuffer<Index> out_offsets, in_offsets, roots, ends;
@@ -177,6 +225,11 @@ struct FullGraphBuffers
   std::vector<AuxStorageRow> aux_storage;
   DeviceBuffer<Arc> arcs;
   DeviceBuffer<Endpoint> endpoints;
+  std::vector<RcNetBuffers> rc_nets;
+  std::vector<RcNet> rc_upload;
+  DeviceBuffer<RcNet> rc_views;
+  DeviceBuffer<RcBinding> rc_bindings;
+  DeviceBuffer<Index> rc_net_by_node;
 };
 struct ClockWorkItem { Index node, owner, level; };
 struct DeviceStorage
@@ -185,10 +238,11 @@ struct DeviceStorage
   Runtime memory;
   unsigned kernel_threads{256};  // Test friend may vary launch shape; no runtime mode.
   ModelStorage models;
-  Index uploaded_children{}, uploaded_tables{};
+  Index uploaded_children{}, uploaded_tables{}, uploaded_rc_load_cells{};
   FullGraphBuffers graph, full_work;
   HostGraphUndo host_undo;
   PackedPatch patch_uploads;
+  RcPatchStorage rc_patch;
   bool full_graph_pending{false};
   DeviceBuffer<Index> indegrees, frontier_offsets, frontier_candidates, wake_keys;
   DeviceBuffer<int> frontier_count;
@@ -199,6 +253,7 @@ struct DeviceStorage
   std::vector<AuxBinding> aux_bindings;
   DeviceBuffer<AuxBinding> aux_binding_upload;
   DeviceBuffer<Child> children;
+  DeviceBuffer<RcLoadCell> rc_load_cells;
   DeviceBuffer<double> tables;
   ResultBuffers results[2];
   PathDomainBuffers domains[2];
@@ -244,10 +299,16 @@ struct CudaDualCsrSession::Impl
   Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before = {});
   Impl(std::shared_ptr<Impl> before, const CudaDualCsrPatch& patch, CudaLevelizationMode mode);
   static void validatePatch(const Impl& before, const CudaDualCsrPatch& patch);
+  static void validateRcPatch(const Impl& before, const CudaDualCsrPatch& patch);
+  void prepareRcPatch(const Impl& before, const CudaDualCsrPatch& patch, cuda_detail::PackedPatch& packed);
+  void transferRcPatch(const Impl& before);
+  void restoreRcPatch(CsrCudaTelemetry& cleanup);
+  void clearRcPatch() noexcept;
   cuda_detail::PackedPatch& prepare(const Impl& before, const CudaDualCsrPatch& patch);
   ~Impl();
   void allocate();
   void bindGraph() noexcept;
+  void transferRc(cuda_detail::HostData& packed);
   std::uint64_t bindAuxRows();
   std::vector<std::vector<cuda_detail::Index>> readAuxRows();
   void cancel() noexcept;

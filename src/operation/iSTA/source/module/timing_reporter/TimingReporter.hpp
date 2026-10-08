@@ -60,6 +60,7 @@ class TimingReporter
   std::vector<TimingPath*> getEndpointWorstTimingPathList(std::vector<TimingPath*>& timing_path_list);
   bool isMatchReportSlack(TimingPath& timing_path);
   friend class TimingReporterProbeAccess;
+  friend class PhysicalStaSessionState;
   void outputQorSummaryReport(std::ostream* json_output = nullptr);
   std::string getQorSummaryReportFilePath();
   std::string getQorSummaryJsonFilePath();

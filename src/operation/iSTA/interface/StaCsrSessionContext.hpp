@@ -28,6 +28,7 @@ namespace ista {
 
 class Database;
 class StaCudaSessionState;
+class PhysicalStaSessionState;
 namespace timing_edit { class NativeExecutionAuthority; }
 class STAInterface;
 class StaCsrSessionContextTestAccess;
@@ -100,6 +101,8 @@ class StaCsrSessionContext final
 
  private:
   friend class STAInterface;
+  friend class PhysicalStaSessionState;
+  friend class IncrementalStaSession;
   friend class StaCsrSessionContextTestAccess;
   friend class StaTimingEditSessionProbeAccess;
 
@@ -116,6 +119,7 @@ class StaCsrSessionContext final
   StaCsrSessionSubstate _substate{StaCsrSessionSubstate::kAwaitingCapture};
   std::unique_ptr<csr::CsrCommittedSessionSnapshot> _snapshot;
   std::unique_ptr<csr::detail::NativeLibraryModels> _library_models;
+  std::unique_ptr<PhysicalStaSessionState> _physical;
 #if ISTA_ENABLE_CUDA
   std::unique_ptr<StaCudaSessionState> _cuda;
 #endif

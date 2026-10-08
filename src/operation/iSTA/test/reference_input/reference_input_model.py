@@ -185,6 +185,7 @@ class RawArc:
     is_clock_arc: bool
     disabled: bool
     loop_disabled: bool
+    native_cell_arc_ordinal: int | None = None
 
 
 @dataclass(frozen=True)
@@ -355,11 +356,19 @@ class RawParasiticNet:
 
 
 @dataclass(frozen=True)
+class InputPortRcThresholds:
+    slew_derate: float = 1.0
+    lower: tuple[float, float] = (0.3, 0.3)
+    upper: tuple[float, float] = (0.7, 0.7)
+
+
+@dataclass(frozen=True)
 class RawParasitics:
     source_path: str
     capacitance_unit: str
     resistance_unit: str
     nets: tuple[RawParasiticNet, ...]
+    input_port_thresholds: InputPortRcThresholds = InputPortRcThresholds()
 
 
 @dataclass(frozen=True)
@@ -505,6 +514,7 @@ class CandidateArc:
     eligibility: ArcEligibility
     transfer: CellTransfer
     output_load: tuple[tuple[float, float], tuple[float, float]] | None
+    native_cell_arc_ordinal: int | None = None
 
 
 @dataclass(frozen=True)
@@ -631,6 +641,10 @@ class CandidateReferencedLibraryCell:
     clock_pin_name: str
     data_pin_name: str
     output_pin_name: str
+    slew_derate: float
+    slew_lower_threshold_pct: tuple[float, float]
+    slew_upper_threshold_pct: tuple[float, float]
+    input_threshold_pct: tuple[float, float]
     ports: tuple[CandidateLibraryPort, ...]
     cell_arcs: tuple[CandidateLibraryCellArc, ...]
     timing_checks: tuple[CandidateLibraryTimingCheck, ...]
@@ -650,6 +664,7 @@ class CandidateParasitics:
     capacitance_unit: str
     resistance_unit: str
     nets: tuple[CandidateParasiticNet, ...]
+    input_port_thresholds: InputPortRcThresholds = InputPortRcThresholds()
 
 
 @dataclass(frozen=True)

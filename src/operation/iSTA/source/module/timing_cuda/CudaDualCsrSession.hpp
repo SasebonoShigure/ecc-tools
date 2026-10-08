@@ -1,5 +1,4 @@
 #pragma once
-#include <functional>
 
 #include <memory>
 #include <optional>
@@ -14,11 +13,14 @@ namespace ista {
 class Database;
 class StaCsrSessionContext;
 class StaCudaSessionState;
-namespace timing_edit { class NativeExecutionAuthority; }
-namespace buffer_trace { struct ReplayProgram; }
+namespace timing_edit { class NativeFullEditBatch; }
 }
 namespace ista::csr {
-struct CudaFullTraceResult;
+class CudaDualCsrSession;
+namespace detail {
+struct CudaFullStage;
+CudaFullStage stageCudaFullBatch(StaCsrSessionContext&, timing_edit::NativeFullEditBatch&, CudaDualCsrSession&);
+}
 
 
 enum class CudaLevelizationMode
@@ -53,6 +55,7 @@ class CudaDualCsrSession final
 
   [[nodiscard]] CudaDualCsrSession stage(const CudaDualCsrPatch& patch, CudaLevelizationMode mode = CudaLevelizationMode::kFull);
   [[nodiscard]] CudaDualCsrSession stageFull(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);
+  [[nodiscard]] bool canPublish(const CudaDualCsrSession& candidate) const noexcept;
   [[nodiscard]] bool publish(CudaDualCsrSession&& candidate) noexcept;
   [[nodiscard]] bool close() noexcept;
   void requireCommitted() const;
@@ -69,9 +72,8 @@ class CudaDualCsrSession final
   friend class CudaDualCsrTestReader;
   friend class CsrCudaBackend;
   friend class ista::StaCudaSessionState;
-  friend CudaFullTraceResult replayCudaFullTracePrefix(
-      StaCsrSessionContext&, Database&, const CsrReferenceInput&,
-      const timing_edit::NativeExecutionAuthority&, const buffer_trace::ReplayProgram&, std::size_t, const std::function<void()>&);
+  friend detail::CudaFullStage detail::stageCudaFullBatch(
+      StaCsrSessionContext&, timing_edit::NativeFullEditBatch&, CudaDualCsrSession&);
   // Only the direct, validated native-export paths can use these cores.
   [[nodiscard]] static CudaDualCsrSession fromNativeExport(
       const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);

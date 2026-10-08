@@ -278,12 +278,12 @@ void validateArcPayload(const DualCsrState& state,
           reject(violations, DualCsrViolationCode::kExpectedValue,
                  field + ".output_load",
                  "load must be finite and nonnegative");
-  const bool loads_present
-      = state.reference_payload.parasitics.nets.empty();
-  if (active && payload.output_load.has_value() != loads_present)
-    reject(violations, DualCsrViolationCode::kExpectedValue,
-           field + ".output_load",
-           "load presence must follow the global parasitic-domain state");
+  if (active && endpoints_valid) {
+    const bool loads_present = !state.parasitic_net_slots.contains(state.nodes[payload.sink.value()].net_name);
+    if (payload.output_load.has_value() != loads_present)
+      reject(violations, DualCsrViolationCode::kExpectedValue,
+             field + ".output_load", "load presence must follow its output net's parasitic state");
+  }
 }
 
 void validateBaseShape(const BaseCsrState& base, std::size_t node_count,
@@ -540,6 +540,16 @@ DualCsrViolations validateDualCsrState(const DualCsrState& state)
            "reference_payload.source_identity.graph_generation",
            "source identity must match state generation");
   validateReferenceNodeIds(state, violations);
+  const auto& parasitic_nets = state.reference_payload.parasitics.nets;
+  if (state.parasitic_net_slots.size() != parasitic_nets.size())
+    reject(violations, DualCsrViolationCode::kShape, "parasitic_net_slots",
+           "RC name index must cover every raw net");
+  for (std::size_t slot = 0; slot < parasitic_nets.size(); ++slot) {
+    const auto found = state.parasitic_net_slots.find(parasitic_nets[slot].map_key);
+    if (found == state.parasitic_net_slots.end() || found->second != slot)
+      reject(violations, DualCsrViolationCode::kExpectedValue, "parasitic_net_slots",
+             "RC name index differs from the stable raw net slot");
+  }
   detail::validateReferencePayload(state, violations);
   return violations;
 }

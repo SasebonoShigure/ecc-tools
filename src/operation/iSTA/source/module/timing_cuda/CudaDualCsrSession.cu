@@ -44,6 +44,12 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
   view.tag_count = packed.tag_count;
   view.path_count = paths.tags.size();
   view.clock_count = packed.clock_count;
+  view.rc_net_count = packed.rc_nets.size();
+  view.rc_port_derate = input.parasitics.input_port_thresholds.slew_derate;
+  for (unsigned output = 0; output < 2; ++output) {
+    view.rc_port_lower[output] = input.parasitics.input_port_thresholds.lower[output];
+    view.rc_port_upper[output] = input.parasitics.input_port_thresholds.upper[output];
+  }
   view.root_count = host->roots.size();
   view.end_count = host->ends.size();
   view.endpoint_count = packed.endpoints.size();
@@ -57,6 +63,7 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
   allocate();
   try {
     memory.record(0);
+    transferRc(packed);
     memory.upload(host->out_offsets, view.out_offsets);
     memory.upload(packed.out_arcs, view.out_arcs);
     memory.upload(host->in_offsets, view.in_offsets);
@@ -78,6 +85,10 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
     execute();
     storage->uploaded_children = view.child_count;
     storage->uploaded_tables = table_count;
+    storage->uploaded_rc_load_cells = storage->models.rc_load_cells.size();
+    for (std::size_t index = 0; index < packed.rc_nets.size(); ++index)
+      storage->graph.rc_nets[index].owner = packed.rc_nets[index].owner;
+    host->rc = std::move(packed.rc);
     if (code && origin)
       cancel();
   } catch (...) {
@@ -101,6 +112,7 @@ CudaDualCsrSession::Impl::Impl(std::shared_ptr<Impl> before, const CudaDualCsrPa
   telemetry.cuda.driver_version = prior.telemetry.cuda.driver_version;
   telemetry.cuda.runtime_version = prior.telemetry.cuda.runtime_version;
   auto& packed = prepare(prior, patch);
+  prepareRcPatch(prior, patch, packed);
   memory.bindTelemetry(telemetry.cuda);
   telemetry.cuda.encode_ms = elapsed(start);
   allocate();
@@ -120,6 +132,7 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
   storage->host_undo.restore();
   if (storage->closed) {
     storage->host_undo.clear();
+    clearRcPatch();
     storage->pending = false;
     storage->undo_captured = false;
     storage->slot_undo_count = storage->arc_undo_count = 0;
@@ -134,6 +147,7 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
   }
   bindGraph();
   try {
+    restoreRcPatch(cleanup);
     if (storage->host_undo.roots)
       memory.upload(host->roots, view.roots);
     if (storage->host_undo.ends)
@@ -159,6 +173,7 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
   storage->slot_undo_count = storage->arc_undo_count = 0;
   storage->aux_bindings.clear();
   storage->host_undo.clear();
+  clearRcPatch();
   memory.bindTelemetry(telemetry.cuda);
   return cleanup;
 }
@@ -428,16 +443,22 @@ CudaDualCsrSession CudaDualCsrSession::stageFullNativeExport(const CsrReferenceI
     throw;
   }
 }
-bool CudaDualCsrSession::publish(CudaDualCsrSession&& candidate) noexcept
+bool CudaDualCsrSession::canPublish(const CudaDualCsrSession& candidate) const noexcept
 {
   if (!_impl || !candidate._impl || _impl->poisoned || _impl->storage->poisoned || !_impl->storage->pending || _impl->origin || candidate._impl->poisoned || candidate._impl->origin.get() != _impl.get()
       || candidate._impl->token != _impl->token || _impl->generation.value() == absent || candidate._impl->generation.value() != _impl->generation.value() + 1
       || candidate._impl->code || !candidate._impl->levels.complete)
     return false;
+  return true;
+}
+bool CudaDualCsrSession::publish(CudaDualCsrSession&& candidate) noexcept
+{
+  if (!canPublish(candidate)) return false;
   for (const auto& binding : _impl->storage->aux_bindings)
     _impl->storage->graph.aux_storage[binding.source].count = binding.replacement_count;
   _impl->storage->aux_bindings.clear();
   _impl->storage->host_undo.clear();
+  candidate._impl->clearRcPatch();
   _impl->storage->pending = false;
   _impl->storage->full_graph_pending = false;
   _impl->storage->undo_captured = false;

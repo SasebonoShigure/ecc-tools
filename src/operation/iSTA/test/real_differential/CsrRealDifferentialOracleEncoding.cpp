@@ -24,6 +24,7 @@
 #include <utility>
 
 #include "CsrNativeTimingOracleTestSupport.hpp"
+#include "CsrNativeSemanticKeyTestSupport.hpp"
 #include "Database.hpp"
 
 namespace ista::csr::real_diff {
@@ -107,41 +108,6 @@ NeutralArc convertArc(const CsrNativeTimingArc& source)
   return result;
 }
 
-bool visibleMatch(const Arc& native, const ArcKey& key)
-{
-  const ArcKind kind = native.get_type() == ArcType::kCell ? ArcKind::kCell : ArcKind::kNet;
-  return native.get_type() != ArcType::kNone && key.base.source.full_name == native.get_source_pin() && key.base.sink.full_name == native.get_sink_pin()
-         && key.base.kind == kind && key.base.owner_name == native.get_owner_name() && key.base.library_source_port == native.get_library_source_port()
-         && key.base.library_sink_port == native.get_library_sink_port();
-}
-
-std::vector<ArcKey> bindNativeArcRanks(const Database& database, const CsrNativeTimingOracle& oracle)
-{
-  std::vector<ArcKey> result;
-  std::vector<bool> used(oracle.arcs.size());
-  result.reserve(database.get_arc_list().size());
-  for (const Arc& native : database.get_arc_list()) {
-    std::size_t selected = oracle.arcs.size();
-    std::uint64_t ordinal = std::numeric_limits<std::uint64_t>::max();
-    for (std::size_t index = 0; index < oracle.arcs.size(); ++index) {
-      const ArcKey& candidate = oracle.arcs[index].key;
-      if (!used[index] && visibleMatch(native, candidate) && candidate.parallel_ordinal < ordinal) {
-        selected = index;
-        ordinal = candidate.parallel_ordinal;
-      }
-    }
-    if (selected == oracle.arcs.size()) {
-      throw std::runtime_error("opaque oracle: native Arc rank has no unique visible semantic key");
-    }
-    used[selected] = true;
-    result.push_back(oracle.arcs[selected].key);
-  }
-  if (std::find(used.begin(), used.end(), false) != used.end()) {
-    throw std::runtime_error("opaque oracle: an oracle Arc did not bind to native rank");
-  }
-  return result;
-}
-
 NeutralAdjacencyRow makeRow(const Database& database, const NodeKey& node, const std::vector<ArcKey>& keys, bool outgoing)
 {
   NeutralAdjacencyRow row;
@@ -180,12 +146,11 @@ NeutralWire readAndEncodeNativeTiming(const Database& database)
   for (const CsrNativeTimingArc& arc : oracle.arcs) {
     result.arcs.push_back(convertArc(arc));
   }
-  const std::vector<ArcKey> rank_keys = bindNativeArcRanks(database, oracle);
+  const std::vector<ArcKey> rank_keys = test::nativeSemanticArcKeys(database);
   for (const NeutralNode& node : result.nodes) {
     result.out_rows.push_back(makeRow(database, node.key, rank_keys, true));
     result.in_rows.push_back(makeRow(database, node.key, rank_keys, false));
   }
-  (void) neutralWireToJson(result);
   return result;
 }
 

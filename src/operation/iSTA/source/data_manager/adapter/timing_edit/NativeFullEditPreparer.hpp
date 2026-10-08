@@ -3,6 +3,7 @@
 #pragma once
 #include <set>
 #include "NativeEditTransaction.hpp"
+#include "ParasiticNet.hpp"
 #include "TimingEditResolver.hpp"
 
 namespace ista::csr { struct CsrReferenceInput; }
@@ -17,6 +18,7 @@ class NativeFullEditState final
   NativeFullEditState(NativeFullEditState&&) = delete;
   NativeFullEditState(const NativeFullEditState&) = delete;
   TransactionGeneration generation() const noexcept { return _generation; }
+  const TimingEditResolverState& resolver() const noexcept { return _resolver; }
 
  private:
   NativeFullEditState(Database& database, TimingEditSessionToken session, std::uint64_t next_instance,
@@ -38,6 +40,7 @@ class NativeFullEditBatch final
   NativeFullEditBatch(const NativeFullEditBatch&) = delete;
   NativeEditTransaction& transaction() noexcept { return _transaction; }
   TransactionGeneration targetGeneration() const noexcept { return _target; }
+  [[nodiscard]] bool canCommit() const noexcept;
   [[nodiscard]] bool commit() noexcept;
 
  private:
@@ -58,6 +61,7 @@ class NativeFullEditPreparer final
   static NativeFullEditState bindBaseline(Database& database, const csr::CsrReferenceInput& input,
                                           const BaselineSemanticIdentity& baseline);
   static NativeFullEditBatch prepare(Database& database, const NativeExecutionAuthority& authority,
-                                      EditBatch edits, NativeFullEditState& state);
+                                      EditBatch edits, NativeFullEditState& state,
+                                      std::map<std::string, ParasiticNet> prepared_rc = {});
 };
 }  // namespace ista::timing_edit

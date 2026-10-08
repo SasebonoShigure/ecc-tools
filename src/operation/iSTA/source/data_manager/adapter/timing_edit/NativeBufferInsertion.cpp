@@ -195,7 +195,6 @@ void requireDataNetCondition(bool value, const char* message)
 void requireDataOnlyNet(const Database& database, const std::string& name)
 {
   const auto& net = database.get_net_map().at(name);
-  requireDataNetCondition(!database.get_parasitic_library().get_net_map().contains(name), "targeted buffer requires NoParasitic source net");
   requireDataNetCondition(net.get_driver_pin_list().size() == 1 && !net.get_driver_pin().empty(), "targeted source requires one driver");
   for (const auto& [clock_name, clock] : database.get_timing_constraint().get_clock_map()) {
     static_cast<void>(clock_name);
@@ -219,7 +218,8 @@ std::uint64_t nextNativeInstanceId(const Database& database)
 
 PreparedNativeBufferInsertions prepareNativeBufferInsertions(
     Database& database, std::span<const BufferInsertionMutation> edits,
-    TimingEditResolverView resolver, std::uint64_t instance_id)
+    TimingEditResolverView resolver, std::uint64_t instance_id,
+    std::map<std::string, ParasiticNet> prepared_rc)
 {
   PreparedNativeBufferInsertions prepared;
   prepared.database = &database;
@@ -247,8 +247,18 @@ PreparedNativeBufferInsertions prepareNativeBufferInsertions(
     const auto original_net = database.get_net_map().find(source_name);
     if (added_net == prepared.nets.end() && original_net == database.get_net_map().end())
       invalid("source net does not exist: " + source_name);
-    if (database.get_parasitic_library().get_net_map().contains(source_name))
+    const auto* rc = std::get_if<ParasiticRcInputs>(&edit.rc_inputs);
+    if (rc) {
+      if (rc->parasitic_policy != ParasiticEditPolicy::kPreRouteTree
+          || !std::holds_alternative<PlacedInputs>(edit.placement_inputs))
+        invalid("raw RC edits require prepared pre-route trees and placed inputs");
+      if (!database.get_parasitic_library().get_net_map().contains(source_name)
+          || !prepared_rc.contains(source_name) || !prepared_rc.contains(names.output_net_name))
+        invalid("pre-route edit is missing its old or replacement RC nets");
+    } else if (database.get_parasitic_library().get_net_map().contains(source_name)
+               || prepared_rc.contains(source_name) || prepared_rc.contains(names.output_net_name)) {
       invalid("NoParasitic input disagrees with the candidate parasitic library");
+    }
     const Net& source_net = added_net != prepared.nets.end() ? added_net->second : original_net->second;
     const std::string driver = requireSingleDriver(source_net, pin_for);
     if (edit.moved_sinks.empty())
@@ -305,6 +315,7 @@ PreparedNativeBufferInsertions prepareNativeBufferInsertions(
       invalid("native instance ID capacity is exhausted within the batch");
     ++instance_id;
   }
+  prepared.prepareParasitics(std::move(prepared_rc));
   return prepared;
 }
 
@@ -317,10 +328,21 @@ void PreparedNativeBufferInsertions::apply() noexcept
   database->get_instance_map().merge(instances);
   database->get_pin_map().merge(pins);
   database->get_net_map().merge(nets);
+  auto& rc_nets = database->get_parasitic_library().get_net_map();
+  for (auto& [name, previous] : previous_parasitics) {
+    previous = rc_nets.extract(name);
+    rc_nets.insert(parasitics.extract(name));
+  }
 }
 
 void PreparedNativeBufferInsertions::undo() noexcept
 {
+  auto& rc_nets = database->get_parasitic_library().get_net_map();
+  for (auto& [name, previous] : previous_parasitics) {
+    parasitics.insert(rc_nets.extract(name));
+    if (!previous.empty())
+      rc_nets.insert(std::move(previous));
+  }
   for (auto& [name, members] : memberships)
     database->get_net_map().at(name).get_pin_name_list().swap(members);
   for (auto& [name, net] : connections)

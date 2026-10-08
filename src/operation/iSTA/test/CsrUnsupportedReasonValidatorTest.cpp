@@ -216,15 +216,6 @@ CsrReferenceInput caseInput()
   return input;
 }
 
-CsrReferenceInput propagatedInput()
-{
-  CsrReferenceInput input = clockInput();
-  input.clocks[0].propagated = true;
-  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
-  refreshIdentity(input);
-  return input;
-}
-
 void verifyExactReason(const CsrReferenceInput& input, CsrReferenceUnsupportedReason reason, const std::string&, const std::string& name)
 {
   requireValid(validateReferenceInput(input), name + " baseline");
@@ -249,7 +240,6 @@ void testAllDetectors()
   verifyExactReason(gatingInput(), CsrReferenceUnsupportedReason::kClockGatingOrDivider, "instances.is_clock_gating", "clock gating");
   verifyExactReason(dividerInput(), CsrReferenceUnsupportedReason::kClockGatingOrDivider, "instances.is_clock_gating", "clock divider");
   verifyExactReason(caseInput(), CsrReferenceUnsupportedReason::kCaseAnalysis, "case_analysis_constraints", "case analysis");
-  verifyExactReason(propagatedInput(), CsrReferenceUnsupportedReason::kPropagatedClock, "clocks.propagated", "propagated clock");
 }
 
 void testMultiReasonOverlap()

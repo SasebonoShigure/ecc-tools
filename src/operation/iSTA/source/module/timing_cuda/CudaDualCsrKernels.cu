@@ -20,7 +20,7 @@ __device__ bool payloadEqual(const Arc& actual, const Arc& expected)
 {
   if (!actual.active || actual.source != expected.source || actual.sink != expected.sink || actual.child_count != expected.child_count || actual.child_begin != expected.child_begin
       || actual.delay != expected.delay || actual.delay_min != expected.delay_min || actual.delay_max != expected.delay_max || actual.net != expected.net
-      || actual.clock != expected.clock || actual.has_load != expected.has_load || actual.levelization != expected.levelization
+      || actual.rc_binding != expected.rc_binding || actual.clock != expected.clock || actual.has_load != expected.has_load || actual.levelization != expected.levelization
       || actual.data_arrival != expected.data_arrival || actual.data_slew != expected.data_slew || actual.clock_eligible != expected.clock_eligible)
     return false;
   for (unsigned i = 0; i < 4; ++i)

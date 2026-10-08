@@ -158,7 +158,7 @@ class PerformanceModeTest(unittest.TestCase):
             trace.write_text(json.dumps({"workload": {"batches": [{}, {}]}}))
             build = {"debug_checks_enabled": False, "build_config": "Release"}
             result = {
-                "schema_version": "ista-cuda-full-trace/4.0.0", "build": build,
+                "schema_version": "ista-cuda-full-trace/5.0.0", "build": build,
                 "debug_checks_enabled": False, "correctness_comparison": "not_run",
                 "requested_backend": "cuda", "executed_backend": "cuda",
                 "requested_strategy": "full", "executed_strategy": "full",

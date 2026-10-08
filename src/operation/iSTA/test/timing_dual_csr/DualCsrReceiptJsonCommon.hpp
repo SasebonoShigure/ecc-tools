@@ -48,6 +48,7 @@ Json optionalSoa(const csr::OptionalSoa<T>& value, Convert convert)
 [[nodiscard]] Json transfer(const csr::CellTransferModel& value);
 [[nodiscard]] Json libraryCell(
     const csr::ReferencedLibraryCellModel& value);
+[[nodiscard]] Json parasiticNet(const csr::ParasiticNetModel& value);
 [[nodiscard]] Json parasitics(const csr::ParasiticModel& value);
 
 inline Json optionalNumber(const std::optional<double>& value)

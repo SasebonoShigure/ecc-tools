@@ -113,6 +113,7 @@ std::optional<csr::ArcId> committedId(
       || payload.value().is_clock_arc != fact.is_clock_arc
       || payload.value().is_disabled != fact.is_disabled
       || payload.value().is_loop_disabled != fact.is_loop_disabled
+      || payload.value().native_cell_arc_ordinal != fact.native_cell_arc_ordinal
       || payload.value().transfer != fact.transfer)
     return std::nullopt;
   return result;

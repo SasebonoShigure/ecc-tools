@@ -18,7 +18,7 @@
 namespace ista::timing_dual_csr {
 
 inline constexpr auto kDualCsrExactReceiptSchema
-    = "ista-dual-csr-exact-receipt/1.4.0";
+    = "ista-dual-csr-exact-receipt/2.0.0";
 
 enum class DualCsrReceiptPhase : std::uint8_t
 {

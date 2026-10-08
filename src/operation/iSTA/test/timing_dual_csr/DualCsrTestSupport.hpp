@@ -93,6 +93,7 @@ inline csr::ArcRecord arcRecord(std::uint64_t id,
   result.eligibility = payload.eligibility;
   result.transfer = payload.transfer;
   result.output_load = payload.output_load;
+  result.native_cell_arc_ordinal = payload.native_cell_arc_ordinal;
   return result;
 }
 
@@ -375,9 +376,16 @@ inline void completeReferencePayload(
         transition = 0.0;
     seeds.push_back(std::move(seed));
   }
-  replaceReference(descriptor.reference_payload.start_seeds,
-                   state.reference_payload.start_seeds,
-                   std::move(seeds));
+  const auto& old_seeds = state.reference_payload.start_seeds;
+  require(seeds.size() >= old_seeds.size(), "test descriptor cannot remove startpoints");
+  StartSeedDelta seed_delta{old_seeds.size(), {}, {}};
+  for (std::size_t slot = 0; slot < old_seeds.size(); ++slot)
+    if (old_seeds[slot] != seeds[slot])
+      seed_delta.changes.push_back({slot, old_seeds[slot], std::move(seeds[slot])});
+  for (std::size_t slot = old_seeds.size(); slot < seeds.size(); ++slot)
+    seed_delta.appends.push_back(std::move(seeds[slot]));
+  if (!seed_delta.changes.empty() || !seed_delta.appends.empty())
+    descriptor.reference_payload.start_seeds = std::move(seed_delta);
 
   std::vector<csr::EndpointRequiredModel> required;
   for (const auto id : ends) {

@@ -45,6 +45,7 @@ set(ISTA_STEP7_LIFECYCLE_LINKS
 )
 set(ISTA_STEP7_BINDING_LINKS
     py_ista
+    ista_timing_csr_snapshot_contract
     pybind11::embed
     ista_timing_database_headers
 )
@@ -73,12 +74,6 @@ ista_add_step7_target(
     StaCsrSnapshotBindingContractTest.cpp
     ISTA_STEP7_BINDING_LINKS
     120
-)
-target_include_directories(
-    ista_csr_snapshot_binding_contract_test
-    PRIVATE
-    "${HOME_ISTA}/source/data_manager/adapter/csr"
-    "${HOME_ISTA}/source/module/timing_csr_snapshot"
 )
 
 add_test(

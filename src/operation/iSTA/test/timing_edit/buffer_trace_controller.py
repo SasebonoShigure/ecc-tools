@@ -20,7 +20,7 @@ from buffer_trace_functional_check import (
     workload_kind,
 )
 
-WIRE_SCHEMA = "buffer-replay-probe/3.0.0"
+WIRE_SCHEMA = "buffer-replay-probe/4.0.0"
 SUMMARY_SCHEMA = "buffer-replay-controller/1.0.0"
 
 

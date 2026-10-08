@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "Arc.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "CsrReferenceFingerprintPayload.hpp"
 #include "CsrReferenceInputRawProjection.hpp"
 #include "CsrReferenceInputTestSupport.hpp"
@@ -41,6 +42,8 @@
 #include "TimingPoint.hpp"
 #include "TimingPortConstraint.hpp"
 #include "TimingTable.hpp"
+
+void testSharedParasiticBindings();
 
 namespace {
 
@@ -136,25 +139,31 @@ CsrReferenceInputRawProjection complexRawKatProjection()
                       "OHM",
                       {{"z_net", "z_emb", 1.5, {{"z2", "z_two", 0.25, 2.0, -2.0}, {"z1", "z_one", 0.125, 1.0, -1.0}}, {{"z2", "z1", 8.0}, {"z1", "z2", 4.0}}},
                        {"a_net", "a_emb", 0.0, {{"a2", "a_two", 0.0, 4.0, -4.0}, {"a1", "a_one", 0.0, 3.0, -3.0}}, {{"a2", "a1", 2.0}, {"a1", "a2", 1.0}}}}};
+  projection.parasitics->input_port_slew_derate = 0.5;
+  projection.parasitics->input_port_lower = {0.125, 0.25};
+  projection.parasitics->input_port_upper = {0.75, 0.875};
   return projection;
 }
 
 constexpr std::string_view kComplexRawKatHex
-    = "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f322e302e3000000000000000000000000000000001000000000000000175000000000000000443"
-      "454c4c010000000000000000000000000000000000000000000000000003753a5100000000000000010000000000000003753a58000000000000000000000000000000000000000000000000"
-      "010000000000000001630000000000000001650000000000000002000000000000000567686f7374000000000000000567686f737400c00000000000000000000000000000000000bff00000"
-      "000000000000000000000000000000000000000000000000000000000000000000000000010000000000000004736c6f77000000000000000443454c4c010100000000000000000000000000"
-      "00000000000000000000000001590000000000000002504600000000000000024e53003fe0000000000000003fc0000000000000003fd0000000000000003fe8000000000000003fec000000"
-      "000000003fd0000000000000003fe0000000000000003fe0000000000000003fe800000000000000000000000000000000000000000001000000000000000141000000000000000159003fd0"
-      "000000000000003fc0000000000000003fe000000000000000000000000000000000010000000000000004736c6f77000000070201000000000000000002454e004000000000000000004010"
-      "000000000000003fe0000000000000003fc0000000000000003fd0000000000000003fe8000000000000003fec000000000000003fd0000000000000003fe0000000000000003fe000000000"
-      "0000003fe80000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000c666978747572652e7370656600000000"
-      "00000002504600000000000000034f484d000000000000000200000000000000057a5f6e657400000000000000057a5f656d62003ff800000000000000000000000000020000000000000002"
-      "7a3200000000000000057a5f74776f003fd000000000000000400000000000000000c00000000000000000000000000000027a3100000000000000057a5f6f6e65003fc0000000000000003f"
-      "f000000000000000bff0000000000000000000000000000200000000000000027a3200000000000000027a3100402000000000000000000000000000027a3100000000000000027a32004010"
-      "0000000000000000000000000005615f6e65740000000000000005615f656d620000000000000000000000000000000002000000000000000261320000000000000005615f74776f00000000"
-      "000000000000401000000000000000c010000000000000000000000000000261310000000000000005615f6f6e6500000000000000000000400800000000000000c008000000000000000000"
-      "000000000200000000000000026132000000000000000261310040000000000000000000000000000002613100000000000000026132003ff0000000000000";
+    =         "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f332e302e3000000000000000000000000000000001000000000000000175"
+    "000000000000000443454c4c010000000000000000000000000000000000000000000000000003753a5100000000000000010000000000000003753a58000000000000"
+    "000000000000000000000000000000000000010000000000000001630000000000000001650000000000000002000000000000000567686f7374000000000000000567"
+    "686f737400c00000000000000000000000000000000000bff0000000000000000000000000000000000000000000000000000000000000000000000000000001000000"
+    "0000000004736c6f77000000000000000443454c4c01010000000000000000000000000000000000000000000000000001590000000000000002504600000000000000"
+    "024e53003fe0000000000000003fc0000000000000003fd0000000000000003fe8000000000000003fec000000000000003fd0000000000000003fe000000000000000"
+    "3fe0000000000000003fe800000000000000000000000000000000000000000001000000000000000141000000000000000159003fd0000000000000003fc000000000"
+    "0000003fe000000000000000000000000000000000010000000000000004736c6f77000000070201000000000000000002454e00400000000000000000401000000000"
+    "0000003fe0000000000000003fc0000000000000003fd0000000000000003fe8000000000000003fec000000000000003fd0000000000000003fe0000000000000003f"
+    "e0000000000000003fe80000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000c6669"
+    "78747572652e737065660000000000000002504600000000000000034f484d003fe0000000000000003fc0000000000000003fd0000000000000003fe8000000000000"
+    "003fec000000000000000000000000000200000000000000057a5f6e657400000000000000057a5f656d62003ff8000000000000000000000000000200000000000000"
+    "027a3200000000000000057a5f74776f003fd000000000000000400000000000000000c00000000000000000000000000000027a3100000000000000057a5f6f6e6500"
+    "3fc0000000000000003ff000000000000000bff0000000000000000000000000000200000000000000027a3200000000000000027a3100402000000000000000000000"
+    "000000027a3100000000000000027a320040100000000000000000000000000005615f6e65740000000000000005615f656d6200000000000000000000000000000000"
+    "02000000000000000261320000000000000005615f74776f00000000000000000000401000000000000000c01000000000000000000000000000026131000000000000"
+    "0005615f6f6e6500000000000000000000400800000000000000c008000000000000000000000000000200000000000000026132000000000000000261310040000000"
+    "000000000000000000000002613100000000000000026132003ff0000000000000";
 class Reader
 {
  public:
@@ -202,7 +211,7 @@ void decodeComplexRawLiteral(const std::vector<std::uint8_t>& bytes)
 {
   Reader reader(bytes);
   const auto count = [&](std::uint64_t expected, const char* field) { require(reader.u64() == expected, std::string{"raw KAT count: "} + field); };
-  require(reader.string() == "ista-csr-reference-input-raw/2.0.0", "raw KAT domain");
+  require(reader.string() == "ista-csr-reference-input-raw/3.0.0", "raw KAT domain");
   count(0, "nodes");
   count(1, "instances");
   require(reader.string() == "u" && reader.string() == "CELL", "raw KAT instance names");
@@ -248,6 +257,8 @@ void decodeComplexRawLiteral(const std::vector<std::uint8_t>& bytes)
   count(0, "library checks");
   require(reader.u8() == 1, "raw KAT parasitic presence");
   require(reader.string() == "fixture.spef" && reader.string() == "PF" && reader.string() == "OHM", "raw KAT parasitic header");
+  for (double expected : {0.5, 0.125, 0.25, 0.75, 0.875})
+    require(reader.finite() == expected, "raw KAT input-port threshold");
   count(2, "parasitic nets");
   const auto net = [&](std::string_view key, std::string_view embedded, double total, std::array<std::string_view, 2> node_keys,
                        std::array<std::string_view, 2> node_names, std::array<double, 6> node_values, std::array<std::string_view, 4> resistor_ends,
@@ -274,14 +285,13 @@ void testRawKatsAndMutations()
   const CsrReferenceInputRawProjection empty;
   const auto empty_bytes = canonicalIndependentReferenceInputRawBytes(empty);
   constexpr std::string_view kEmptyHex
-      = "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f322e30"
-        "2e300000000000000000000000000000000000000000000000000000000000000000000000000000"
-        "0000000000000000000000000000000000000000000000000000000000000000000000";
+      =     "0000000000000022697374612d6373722d7265666572656e63652d696e7075742d7261772f332e302e3000000000000000000000000000000000000000000000000000000000"
+    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
   require(empty_bytes.size() == 115 && hex(empty_bytes) == kEmptyHex, "empty raw KAT");
 
   const auto literal = hexBytes(kComplexRawKatHex);
   const auto complex = complexRawKatProjection();
-  require(literal.size() == 1127, "complex raw KAT byte count");
+  require(literal.size() == 1172, "complex raw KAT byte count");
   require(canonicalIndependentReferenceInputRawBytes(complex) == literal, "complex raw KAT literal mismatch");
   decodeComplexRawLiteral(literal);
 
@@ -354,6 +364,11 @@ void testRawKatsAndMutations()
     table.values = {0.3};
   });
   changed("parasitic header units", [](auto& value) { value.parasitics->resistance_unit = "KOHM"; });
+  changed("input-port derate", [](auto& value) { value.parasitics->input_port_slew_derate = 0.75; });
+  for (std::size_t transition = 0; transition < 2; ++transition) {
+    changed("input-port lower", [&](auto& value) { value.parasitics->input_port_lower[transition] += 0.01; });
+    changed("input-port upper", [&](auto& value) { value.parasitics->input_port_upper[transition] += 0.01; });
+  }
   changed("parasitic net identity/cap", [](auto& value) { value.parasitics->nets[0].total_capacitance = 2.0; });
   changed("parasitic net order", [](auto& value) { std::ranges::reverse(value.parasitics->nets); });
   changed("parasitic node fields", [](auto& value) {
@@ -471,6 +486,13 @@ void testTransfersTablesAndChangedSets()
     });
     }
   });
+  verify(4 | 32, "load-cell thresholds", [](auto& input) {
+    auto& cell = input.referenced_library_cells[0];
+    cell.slew_derate = 0.6;
+    cell.slew_lower_threshold_pct[0] = 0.2;
+    cell.slew_upper_threshold_pct[1] = 0.8;
+    cell.input_threshold_pct[0] = 0.4;
+  });
   verify(4 | 32, "table axes/values", [](auto& input) {
     for (CellTransferModel* transfer : {&c2qGraphTransfer(input), &c2qLibraryTransfer(input)}) {
       ista::csr::test::mutateChildren(*transfer, [&](auto& children) {
@@ -506,8 +528,48 @@ void testTransfersTablesAndChangedSets()
     value.clock_transition = Transition::kFall;
     ista::csr::test::mutateChildren(value, [&](auto& children) { children[0].check_tables[0].values[0] = 0.25; });
   });
+  verify(32, "native Liberty arc identity", [](auto& input) {
+    for (auto& arc : input.arcs)
+      if (arc.native_cell_arc_ordinal) { ++*arc.native_cell_arc_ordinal; break; }
+  });
   verify(8 | 32, "corner", [](auto& input) { input.analysis_context.liberty_corner += "x"; });
 
+  auto owner_fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
+  auto& native_cells = owner_fixture.database().get_timing_library().get_cell_map();
+  auto other = native_cells.at("DFF_X1");
+  other.set_cell_name("OTHER_DFF");
+  native_cells.emplace("OTHER_DFF", std::move(other));
+  detail::NativeLibraryModels model_store(owner_fixture.database());
+  static_cast<void>(model_store.cell("OTHER_DFF"));
+  const auto& native_arc = native_cells.at("DFF_X1").get_cell_arc_list().front();
+  require(model_store.arcOrdinal("DFF_X1", native_arc) == 0, "native Liberty ordinal lost");
+  bool wrong_owner_rejected = false;
+  try {
+    static_cast<void>(model_store.arcOrdinal("OTHER_DFF", native_arc));
+  } catch (const std::exception&) {
+    wrong_owner_rejected = true;
+  }
+  require(wrong_owner_rejected, "equal model in another cell stole native arc ownership");
+
+  auto threshold_fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
+  auto& native_load = threshold_fixture.database().get_timing_library().get_cell_map().at("DFF_X1");
+  native_load.set_input_threshold_pct_rise(35.0);
+  native_load.set_slew_lower_threshold_pct_fall(0.1);
+  native_load.set_slew_upper_threshold_pct_fall(90.0);
+  native_load.set_slew_derate_from_library(0.6);
+  const auto threshold_input = exportInput(threshold_fixture, 23);
+  const auto& load_cell = threshold_input.referenced_library_cells[0];
+  require(load_cell.input_threshold_pct[0] == 35.0 * 0.01 && load_cell.slew_lower_threshold_pct[1] == 0.1
+              && load_cell.slew_upper_threshold_pct[1] == 0.9 && load_cell.slew_derate == 0.6,
+          "load-cell threshold export differs from native normalized values");
+  for (int fault = 0; fault < 3; ++fault) {
+    auto bad = threshold_input;
+    auto& cell = bad.referenced_library_cells[0];
+    if (fault == 0) cell.input_threshold_pct[0] = std::numeric_limits<double>::quiet_NaN();
+    if (fault == 1) cell.slew_lower_threshold_pct[1] = -0.1;
+    if (fault == 2) cell.slew_derate = std::numeric_limits<double>::infinity();
+    require(!validateReferenceInputIntrinsic(bad).empty(), "invalid load-cell threshold accepted");
+  }
   auto empty_child_fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
   empty_child_fixture.database().get_timing_library().get_cell_map().at("DFF_X1").get_cell_arc_list()[0].get_timing_arc_list().clear();
   const CsrReferenceInput empty_child = exportInput(empty_child_fixture, 22);
@@ -628,7 +690,7 @@ void testFallbackParasiticsAndLoads()
   StaAnalysisContext context = referenceInputTestContext();
   context.rc_corner = "rc";
   CsrReferenceInput with_net = exportInput(parasitic, 34, context);
-  require(allLoads(with_net, false), "nonempty parasitics are not all-absent");
+  require(allLoads(with_net, true), "unrelated RC net removed no-RC loads");
   require(with_net.parasitics.nets[0].nodes[0].map_key == "z1" && with_net.parasitics.nets[0].nodes[1].map_key == "z2"
               && with_net.parasitics.nets[0].resistors[0].source == "z2" && with_net.parasitics.nets[0].resistors[1].source == "z1",
           "ordered parasitic nodes/resistors changed");
@@ -649,7 +711,33 @@ void testFallbackParasiticsAndLoads()
       for (double value : row)
         require(value == 0.0, "true-zero load value");
   addParasitic(diamond.database(), true);
-  require(allLoads(exportInput(diamond, 36, context), false), "true-zero versus absent boundary");
+  require(allLoads(exportInput(diamond, 36, context), true), "unrelated RC removed true-zero loads");
+  const std::string output_net = "out_net";
+  auto rc = parasitic.database().get_parasitic_library().get_net_map().extract("z_net");
+  rc.key() = output_net;
+  rc.mapped().set_net_name(output_net);
+  parasitic.database().get_parasitic_library().get_net_map().insert(std::move(rc));
+  const auto mixed = exportInput(parasitic, 37, context);
+  bool rc_seen = false, plain_seen = false;
+  for (const auto& arc : mixed.arcs) {
+    const bool has_rc = mixed.nodes[arc.sink.value()].net_name == output_net;
+    require(arc.output_load.has_value() != has_rc, "load presence did not follow its net");
+    rc_seen |= has_rc;
+    plain_seen |= !has_rc;
+  }
+  require(rc_seen && plain_seen, "mixed RC fixture did not exercise both paths");
+  auto wrong_value = mixed;
+  const auto with_load = std::ranges::find_if(wrong_value.arcs, [](const ArcRecord& arc) { return arc.output_load.has_value(); });
+  (*with_load->output_load)[0][0] += 1.0;
+  const auto value_errors = validateReferenceInputIntrinsic(wrong_value);
+  require(std::ranges::any_of(value_errors, [](const CsrContractViolation& error) { return error.field == "arcs.output_load"; }),
+          "unrelated incorrect load accepted in a mixed RC design");
+  auto wrong = mixed;
+  const auto plain_arc = std::ranges::find_if(wrong.arcs, [](const ArcRecord& arc) { return arc.output_load.has_value(); });
+  plain_arc->output_load.reset();
+  const auto errors = validateReferenceInputIntrinsic(wrong);
+  require(std::ranges::any_of(errors, [](const CsrContractViolation& error) { return error.field == "arcs.output_load"; }),
+          "unrelated absent load accepted");
 }
 
 void setScaleAndLoad(CsrReferenceInputNativeFixture& fixture, double scale, double load)
@@ -699,6 +787,7 @@ int main()
   testRawKatsAndMutations();
   testTransfersTablesAndChangedSets();
   testFallbackParasiticsAndLoads();
+  testSharedParasiticBindings();
   testScaleBoundaries();
   return 0;
 }

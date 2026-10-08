@@ -63,6 +63,9 @@ inline void registerStaSessionException(py::module& m)
 void register_ista(py::module& m)
 {
   registerStaSessionException(m);
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
+  registerPhysicalStaDiagnostic(m);
+#endif
   auto builtins = py::module_::import("builtins");
   py::dict attributes;
   attributes["incregpusta_debug_checks_enabled"]
@@ -79,6 +82,24 @@ void register_ista(py::module& m)
       .def("initialize", initializeIncrementalStaSession, py::arg("analysis_context"), py::arg("config") = "",
            py::arg("config_dict") = std::map<std::string, std::string>{})
       .def("run_full_baseline", runIncrementalStaBaseline)
+      .def("run_physical_baseline", runPhysicalStaBaseline,
+           py::arg("bottom_layer"), py::arg("top_layer"), py::arg("horizontal_layer"),
+           py::arg("vertical_layer"), py::arg("recovery_directory"),
+           py::arg("checkpoint_files"))
+      .def("recover_physical_baseline", recoverPhysicalStaBaseline,
+           py::arg("bottom_layer"), py::arg("top_layer"), py::arg("horizontal_layer"),
+           py::arg("vertical_layer"), py::arg("recovery_directory"), py::arg("checkpoint_files"))
+      .def("apply_physical_batch", applyPhysicalStaBatch, py::arg("batch_json").noconvert())
+      .def("read_physical_result", readPhysicalStaResult, py::kw_only(), py::arg("summary_only") = false)
+      .def("select_physical_buffers", selectPhysicalStaBuffers, py::arg("expected_generation"),
+          py::arg("cell_names"), py::arg("top_k"), py::arg("max_buffers"))
+      .def("publish_physical_artifacts", [](ista::IncrementalStaSession& session, py::handle generation) {
+        return session.publishPhysicalArtifacts(parsePhysicalGeneration(generation));
+      }, py::arg("expected_generation"))
+      .def("read_physical_artifacts", [](ista::IncrementalStaSession& session, py::handle generation) {
+        return session.readPhysicalArtifacts(parsePhysicalGeneration(generation));
+      }, py::arg("expected_generation"))
+      .def("read_physical_placement", readPhysicalStaPlacement, py::arg("expected_generation").noconvert(), py::arg("cell_names"))
       .def("close", closeIncrementalStaSession)
       .def_property_readonly("state", [](const ista::IncrementalStaSession& session) { return ista::toString(session.state()); })
       .def_property_readonly("session_token", incrementalStaSessionToken)

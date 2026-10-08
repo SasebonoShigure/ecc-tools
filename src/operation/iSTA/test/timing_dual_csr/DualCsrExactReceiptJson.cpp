@@ -170,7 +170,8 @@ Json payload(const csr::ArcSemanticPayload& value)
                             {"data_slew", value.eligibility.data_slew},
                             {"clock", value.eligibility.clock}}},
           {"transfer", transfer(value.transfer)},
-          {"output_load", optionalValue(value.output_load, loadMatrix)}};
+          {"output_load", optionalValue(value.output_load, loadMatrix)},
+          {"native_cell_arc_ordinal", optionalValue(value.native_cell_arc_ordinal, [](auto ordinal) { return Json(ordinal); })}};
 }
 
 Json arcGroupIndex(const DualCsrArcGroupIndex& value)

@@ -119,7 +119,7 @@ def run_structural_semantics_self_test(require: Require) -> None:
         "transfer": {"delay": number, "delay_min": number,
                      "delay_max": number, "is_clock_arc": False,
                      "is_disabled": False, "is_clear_or_preset": False,
-                     "children": []}, "output_load": None}
+                     "children": []}, "output_load": None, "native_cell_arc_ordinal": None}
     structural = {"high_water": {"node_slots": 2},
         "arc_group_index": {"slots": [
             {"arc_id": 0, "current_active_key": key},

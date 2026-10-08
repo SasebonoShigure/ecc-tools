@@ -29,7 +29,7 @@ void appendU64s(wire::Writer& writer, const std::vector<std::uint64_t>& values)
 std::vector<std::uint8_t> canonicalIndependentReferenceInputBytes(const CsrReferenceInput& input)
 {
   wire::Writer writer;
-  writer.appendString("ista-csr-reference-input-test-wire/1.0.0");
+  writer.appendString("ista-csr-reference-input-test-wire/2.0.0");
   writer.appendString(input.schema_version);
   wire::appendSnapshotIdentity(writer, input.source_identity);
   writer.appendString(input.analysis_context.liberty_corner);

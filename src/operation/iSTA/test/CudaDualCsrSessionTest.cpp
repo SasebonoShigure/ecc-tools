@@ -16,7 +16,8 @@
 #include "CudaDualCsrSession.hpp"
 #include "CudaDualCsrTestReader.hpp"
 #include "CudaDualCsrTestSupport.hpp"
-#include "CudaTargetedExecutionInternal.hpp"
+#include "CudaTargetedExecution.hpp"
+#include "CudaTargetedTraceReplayer.hpp"
 #include "NativeTargetedEditPreparer.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "PublicTimingJson.hpp"
@@ -455,7 +456,7 @@ void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mo
             }
             require(pending_rejected, "native pending transaction served cached timing");
             CudaTargetedTraceBatch batch;
-            auto candidate = csr::detail::stageCudaTargetedBatch(owner, prepared.patch, strategy, StaFallbackPolicy::kError, batch);
+            auto candidate = csr::detail::stageCudaTargetedBatch(owner, prepared.patch, strategy, StaFallbackPolicy::kError, batch.execution, batch.rejected_mixed_attempt);
             require(!candidate.computationCode() && !candidate.poisoned()
                         && batch.execution.executed_update_strategy == strategy && !batch.execution.fallback_to_full,
                     "cross-build replay did not execute the requested CUDA mode");
@@ -621,6 +622,7 @@ int main(int argc, char** argv)
     csr::test::runCudaDualCsrStorageContracts(mode);
     runCudaClockContracts();
     runCudaSequentialContracts();
+    runCudaRcPropagationContracts();
     emptyGraph(mode);
     auxSequence(snapshots ? &*snapshots : nullptr, mode);
     removeChangeAndCycle(mode);

@@ -30,7 +30,7 @@ struct Inputs
 {
   std::vector<Case> cases;
   std::vector<double> data;
-  std::vector<std::optional<double>> expected;
+  std::vector<std::optional<double>> expected, expected_raw;
 
   void add(const ista::csr::TimingTableModel& table, double slew, double load, double time_scale = 1.0, double capacitance_scale = 1.0)
   {
@@ -51,6 +51,7 @@ struct Inputs
     value.slew = slew;
     value.load = load;
     expected.push_back(ista::csr::lookupCsrTimingTable(table, slew, load, time_scale, capacitance_scale));
+    expected_raw.push_back(ista::csr::lookupCsrTimingTableRawLoad(table, slew, load, time_scale, capacitance_scale));
     cases.push_back(value);
   }
 };
@@ -129,7 +130,7 @@ std::unique_ptr<T, DeviceDelete> allocate(std::size_t count)
   return std::unique_ptr<T, DeviceDelete>(pointer);
 }
 
-__global__ void evaluate(const Case* cases, const double* data, double* results, Status* statuses, std::size_t count)
+__global__ void evaluate(const Case* cases, const double* data, double* results, Status* statuses, std::size_t count, bool raw)
 {
   const std::size_t index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= count)
@@ -138,20 +139,22 @@ __global__ void evaluate(const Case* cases, const double* data, double* results,
   view.table_data = data;
   view.status = statuses + index;
   const Case& value = cases[index];
-  results[index] = lookupTable(view, value.table, value.child, value.slew, value.load);
+  results[index] = raw ? lookupTableRawLoad(view, value.table, value.child, value.slew, value.load)
+                       : lookupTable(view, value.table, value.child, value.slew, value.load);
 }
 
-void compare(const Inputs& inputs, const double* results, const Status* statuses)
+void compare(const Inputs& inputs, const double* results, const Status* statuses, bool raw)
 {
+  const auto& expected_values = raw ? inputs.expected_raw : inputs.expected;
   double max_absolute_error = 0.0;
   double max_scaled_error = 0.0;
   for (std::size_t index = 0; index < inputs.cases.size(); ++index) {
     const bool present = statuses[index] == Status::success;
-    if (present != inputs.expected[index].has_value() || (!present && statuses[index] != Status::numeric))
+    if (present != expected_values[index].has_value() || (!present && statuses[index] != Status::numeric))
       throw std::runtime_error("CUDA/CPU table result presence or failure category differs at case " + std::to_string(index));
     if (!present)
       continue;
-    const double expected = *inputs.expected[index];
+    const double expected = *expected_values[index];
     const double error = std::abs(results[index] - expected);
     const double scaled = error / std::max(1.0, std::abs(expected));
     max_absolute_error = std::max(max_absolute_error, error);
@@ -178,11 +181,13 @@ int main()
     auto statuses = allocate<Status>(inputs.cases.size());
     std::copy(inputs.cases.begin(), inputs.cases.end(), cases.get());
     std::copy(inputs.data.begin(), inputs.data.end(), data.get());
-    std::fill_n(statuses.get(), inputs.cases.size(), Status::success);
-    evaluate<<<(inputs.cases.size() + 127) / 128, 128>>>(cases.get(), data.get(), results.get(), statuses.get(), inputs.cases.size());
-    check(cudaGetLastError());
-    check(cudaDeviceSynchronize());
-    compare(inputs, results.get(), statuses.get());
+    for (bool raw : {false, true}) {
+      std::fill_n(statuses.get(), inputs.cases.size(), Status::success);
+      evaluate<<<(inputs.cases.size() + 127) / 128, 128>>>(cases.get(), data.get(), results.get(), statuses.get(), inputs.cases.size(), raw);
+      check(cudaGetLastError());
+      check(cudaDeviceSynchronize());
+      compare(inputs, results.get(), statuses.get(), raw);
+    }
     return 0;
   } catch (const std::exception& error) {
     std::fprintf(stderr, "%s\n", error.what());

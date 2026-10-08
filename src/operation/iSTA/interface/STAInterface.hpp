@@ -63,6 +63,8 @@ struct ResCap;
 struct LibertyExpr;
 
 namespace ista {
+struct PhysicalStaConfig;
+namespace timing_edit { struct NativeExecutionScopeViolationSignal; }
 class Database;
 class DataManager;
 class StaCsrSessionContext;
@@ -165,7 +167,6 @@ class STAInterface
   void wrapInstancePinList(idb::IdbInstance* idb_instance);
   void wrapInstancePin(idb::IdbInstance* idb_instance, idb::IdbPin* idb_pin);
   bool wrapSignalConnectType(idb::IdbConnectType connect_type);
-  std::string wrapInstancePinName(idb::IdbInstance* idb_instance, idb::IdbPin* idb_pin);
   PinDirection wrapPinDirection(idb::IdbConnectDirection idb_direction);
   void wrapPinCoordinate(Pin& pin, idb::IdbPin* idb_pin);
   void wrapPortList();
@@ -176,8 +177,6 @@ class STAInterface
   void wrapNetPinList(idb::IdbNet* idb_net, Net& net);
   void wrapNetPinList(idb::IdbPins* io_pin_list, idb::IdbPins* instance_pin_list, Net& net);
   void wrapNetPin(idb::IdbPin* idb_pin, Net& net);
-  std::string wrapNetIOPinName(idb::IdbPin* idb_pin);
-  std::string wrapNetInstancePinName(idb::IdbPin* idb_pin);
   void wrapNetPinNameList(Net& net, std::string& pin_name);
   void wrapNetToDatabase(Net& net);
   void wrapTimingLibrary();
@@ -252,10 +251,16 @@ class STAInterface
 #endif
 
  private:
+  friend class IncrementalStaSession;
+  StaStatus runSessionPhysicalBaseline(uint64_t token, StaCsrSessionContext* context,
+      const StaExecutionRequest& request, const PhysicalStaConfig& config, bool recovery, StaExecutionRecord& execution,
+      timing_edit::NativeExecutionScopeViolationSignal violation_signal);
   friend class DataManager;
   friend class TimingCharacterizer;
   friend class StaCsrSessionProbeAccess;
   friend class StaTimingEditSessionProbeAccess;
+  friend class StaEditOperation;
+  friend class SessionApiGuard;
   friend class StaInterfaceLifecycleTestAccess;
 
   class OperationGuard

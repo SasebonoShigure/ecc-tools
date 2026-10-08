@@ -16,27 +16,25 @@
 #include "DualCsrArcGroupResolverValidation.hpp"
 #include "DualCsrBaselineFactory.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
-#include "DualCsrReplayTypes.hpp"
+#include <stdexcept>
 #include "DualCsrSemanticIdentity.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
-#include "DualCsrTraceBaselineInternal.hpp"
+#include "CpuDualCsrBaseline.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "TimingEditResolver.hpp"
 #include "TimingSemanticKey.hpp"
 
-namespace ista::timing_dual_csr::detail {
+namespace ista::timing_dual_csr {
 namespace {
 
 [[noreturn]] void baselineFail(std::string message)
 {
-  throw DualCsrTraceRuntimeError(
-      DualCsrTraceFailureCode::kInvalidBaseline,
-      "Dual-CSR trace baseline: " + std::move(message));
+  throw std::invalid_argument("Dual-CSR baseline: " + std::move(message));
 }
 
 }  // namespace
 
-CommittedDualCsrAnalysisState makeTraceBaseline(
+CommittedDualCsrAnalysisState makeCpuDualCsrBaseline(
     const Database& database,
     const csr::CsrReferenceInput& reference_input,
     timing_edit::TimingEditSessionToken session_token)
@@ -51,8 +49,12 @@ CommittedDualCsrAnalysisState makeTraceBaseline(
       = timing_edit::TimingEditResolverState::bindBaseline(database);
   DualCsrBaselineAttempt baseline = DualCsrBaselineFactory::create(
       reference_input, session_token, resolver.highWater());
-  if (!baseline.success())
-    baselineFail("baseline factory rejected the full reference input");
+  if (!baseline.success()) {
+    std::string message = "baseline factory rejected the full reference input";
+    for (const auto& error : baseline.violations)
+      message += "; " + error.field + ": " + error.message;
+    baselineFail(std::move(message));
+  }
   DualCsrState graph = std::move(*baseline.state);
 
   DualCsrArcGroupBindingAttempt bindings
@@ -103,4 +105,4 @@ CommittedDualCsrAnalysisState makeTraceBaseline(
   return committed;
 }
 
-}  // namespace ista::timing_dual_csr::detail
+}  // namespace ista::timing_dual_csr

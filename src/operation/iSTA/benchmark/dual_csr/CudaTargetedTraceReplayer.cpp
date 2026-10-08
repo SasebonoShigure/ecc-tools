@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "BufferTraceTypes.hpp"
-#include "CudaTargetedExecutionInternal.hpp"
+#include "CudaTargetedExecution.hpp"
 #include "Database.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "NativeTargetedEditPreparer.hpp"
@@ -29,38 +29,6 @@ void require(bool valid, const char* message)
 
 }  // namespace
 
-CudaDualCsrSession detail::stageCudaTargetedBatch(CudaDualCsrSession& owner, const CudaDualCsrPatch& patch, StaUpdateStrategy strategy,
-                                                  StaFallbackPolicy fallback, CudaTargetedTraceBatch& batch)
-{
-  const bool incremental = strategy == StaUpdateStrategy::kIncremental;
-  batch.execution = {StaBackend::kCuda,
-                     strategy,
-                     fallback,
-                     StaBackend::kCuda,
-                     strategy,
-                     incremental ? StaExecutionKind::kIncrementalUpdate : StaExecutionKind::kFullUpdate,
-                     StaPropagationScope::kFullGraph,
-                     incremental,
-                     false,
-                     std::nullopt};
-  std::optional<CudaDualCsrSession> candidate(owner.stage(patch, incremental ? CudaLevelizationMode::kMixed : CudaLevelizationMode::kFull));
-  if (candidate->computationCode() && candidate->telemetry().mixed_failure == timing_incremental_levelization::MixedStageFailureCode::kOldLevelOrderConflict
-      && fallback == StaFallbackPolicy::kFullWithRecord) {
-    batch.rejected_mixed_attempt = candidate->telemetry();
-    // Retry the same uncommitted edit against the healthy origin. Never
-    // clear a candidate status or use fallback for cycles/CUDA failures.
-    candidate.reset();
-    candidate.emplace(owner.stage(patch, CudaLevelizationMode::kFull));
-    batch.execution.executed_update_strategy = StaUpdateStrategy::kFull;
-    batch.execution.execution_kind = StaExecutionKind::kFallbackFull;
-    batch.execution.incremental_batch_executed = false;
-    batch.execution.fallback_to_full = true;
-    batch.execution.fallback_reason = StaFallbackReason::kOldLevelOrderConflict;
-  }
-  require(!candidate->computationCode(), "targeted GPU update/propagation failed");
-  require(!validateStaExecutionRecord(batch.execution), "inconsistent actual CUDA execution record");
-  return std::move(*candidate);
-}
 
 CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& session, Database& baseline, const CsrReferenceInput& input,
                                                        const timing_edit::NativeExecutionAuthority& authority, const buffer_trace::ReplayProgram& program,
@@ -106,7 +74,7 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
         batch.diagnostic.emplace();
         batch.diagnostic->canonical_input = std::move(std::get<CsrReferenceInput>(exported));
       }
-      auto candidate = detail::stageCudaTargetedBatch(device, prepared.patch, strategy, fallback, batch);
+      auto candidate = detail::stageCudaTargetedBatch(device, prepared.patch, strategy, fallback, batch.execution, batch.rejected_mixed_attempt);
       if constexpr (incregpusta_debug_checks_enabled) {
         batch.diagnostic->values = candidate.timingValues();
         batch.diagnostic->node_names = prepared.staged.node_names;

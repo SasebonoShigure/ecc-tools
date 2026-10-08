@@ -33,6 +33,7 @@
 #include "IdbNet.h"
 
 #include <algorithm>
+#include <memory>
 
 #include "IdbInstance.h"
 
@@ -54,11 +55,14 @@ IdbNet::IdbNet()
   _frequency = -1;
   _average_coordinate = nullptr;
 
-  _io_pin_list = new IdbPins();
-  _instance_pin_list = new IdbPins();
-  _instance_list = new IdbInstanceList();
-
-  _wire_list = new IdbRegularWireList();
+  auto io_pins = std::make_unique<IdbPins>();
+  auto instance_pins = std::make_unique<IdbPins>();
+  auto instances = std::make_unique<IdbInstanceList>();
+  auto wires = std::make_unique<IdbRegularWireList>();
+  _io_pin_list = io_pins.release();
+  _instance_pin_list = instance_pins.release();
+  _instance_list = instances.release();
+  _wire_list = wires.release();
 }
 
 IdbNet::~IdbNet()

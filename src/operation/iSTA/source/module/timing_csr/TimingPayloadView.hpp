@@ -24,6 +24,7 @@ class TimingPayloadView
   [[nodiscard]] virtual std::size_t nodeCount() const noexcept = 0;
   [[nodiscard]] virtual const std::vector<NodeRecord>& nodeRecords() const noexcept = 0;
   [[nodiscard]] virtual const std::vector<ReferencedLibraryCellModel>& referencedLibraryCells() const noexcept = 0;
+  [[nodiscard]] virtual const InputPortRcThresholds& inputPortRcThresholds() const noexcept = 0;
   [[nodiscard]] virtual const std::vector<NodeId>& orderedRootIds() const noexcept = 0;
   [[nodiscard]] virtual const std::vector<NodeId>& orderedStartIds() const noexcept = 0;
   [[nodiscard]] virtual const std::vector<NodeId>& orderedEndIds() const noexcept = 0;

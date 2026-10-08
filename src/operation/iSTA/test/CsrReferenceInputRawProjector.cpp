@@ -125,9 +125,20 @@ CsrReferenceInputRawProjection projectCsrReferenceInputRaw(const ista::Database&
   projection.arcs.reserve(database.get_arc_list().size());
   for (std::size_t rank = 0; rank < database.get_arc_list().size(); ++rank) {
     const auto& arc = database.get_arc_list().at(rank);
+    std::optional<std::uint64_t> ordinal;
+    if (const auto* bound = arc.get_timing_cell_arc()) {
+      const auto& instance = database.get_instance_map().at(arc.get_owner_name());
+      const auto& cell = database.get_timing_library().get_cell_map().at(instance.get_cell_name());
+      std::uint64_t index = 0;
+      for (const auto& candidate : cell.get_cell_arc_list()) {
+        if (&candidate == bound) ordinal = index;
+        ++index;
+      }
+      if (!ordinal) throw std::runtime_error("raw projector: unowned native cell arc");
+    }
     projection.arcs.push_back({static_cast<std::uint64_t>(rank), arc.get_source_pin(), arc.get_sink_pin(), arcKindToken(arc.get_type()), arc.get_owner_name(),
                                arc.get_library_source_port(), arc.get_library_sink_port(), arc.get_is_clock_arc(), arc.get_is_disable_arc(),
-                               arc.get_is_loop_disable()});
+                               arc.get_is_loop_disable(), ordinal});
   }
 
   projection.nets.reserve(database.get_net_map().size());
@@ -183,6 +194,7 @@ void appendArc(Writer& writer, const RawArc& arc)
   writer.boolean(arc.is_clock_arc);
   writer.boolean(arc.disabled);
   writer.boolean(arc.loop_disabled);
+  writer.optional(arc.native_cell_arc_ordinal, [](Writer& local, std::uint64_t value) { local.u64(value); });
 }
 
 void appendNet(Writer& writer, const RawNet& net)
@@ -198,7 +210,7 @@ void appendNet(Writer& writer, const RawNet& net)
 std::vector<std::uint8_t> canonicalIndependentReferenceInputRawBytes(const CsrReferenceInputRawProjection& projection)
 {
   raw_wire::Writer writer;
-  writer.string("ista-csr-reference-input-raw/2.0.0");
+  writer.string("ista-csr-reference-input-raw/3.0.0");
   writer.vector(projection.nodes, raw_wire::appendNode);
   writer.vector(projection.instances, raw_wire::appendInstance);
   writer.vector(projection.arcs, raw_wire::appendArc);

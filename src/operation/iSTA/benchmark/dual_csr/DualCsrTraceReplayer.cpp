@@ -24,7 +24,7 @@
 #include "NativeTargetedEditPreparer.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
-#include "DualCsrTraceBaselineInternal.hpp"
+#include "CpuDualCsrBaseline.hpp"
 #include "DualCsrTransactionCoordinator.hpp"
 #include "DualSemanticReadView.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
@@ -342,9 +342,13 @@ DualCsrTraceRunResult replayPrefixWithMode(
          "operation authority and context session differ");
 
   const std::uint64_t baseline_factory_before = incregpusta_debug_checks_enabled ? detail::currentBaselineFactoryCallCount() : 0;
-  CommittedDualCsrAnalysisState baseline = detail::makeTraceBaseline(
-      context.baseline_database, context.baseline_reference_input,
-      session_token);
+  CommittedDualCsrAnalysisState baseline = [&] {
+    try {
+      return makeCpuDualCsrBaseline(context.baseline_database, context.baseline_reference_input, session_token);
+    } catch (const std::invalid_argument& error) {
+      fail(DualCsrTraceFailureCode::kInvalidBaseline, error.what());
+    }
+  }();
   const std::uint64_t targeted_baseline_before = incregpusta_debug_checks_enabled ? detail::currentBaselineFactoryCallCount() : 0;
   const std::uint64_t baseline_outside = counterDelta(
       baseline_factory_before, targeted_baseline_before,
@@ -395,7 +399,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
         evidence.phase_trace.push_back(DualCsrReceiptPhase::kCandidateApplyExecute);
 
       const auto capture_started = SteadyClock::now();
-      CandidateBoundCapture capture = NarrowTimingRecordReader{context.models}.read(
+      CandidateBoundCapture capture = NarrowTimingRecordReader{context.models, &native_batch}.read(
           native_batch.transaction.database(), committed_view,
           committed.arc_group_index, pending.stagedResolver(),
           pending.preparedBatch(), pending.capturePlan());

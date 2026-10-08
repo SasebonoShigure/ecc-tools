@@ -278,6 +278,16 @@ void testTaggedPlacementAndRcEncoding()
   auto parasitic = fixture.edit_value;
   parasitic.rc_inputs = ParasiticRcInputs{ParasiticEditPolicy::kFullWithRecord};
   require(canonicalBufferInsertionMutationBytes(unplaced) != canonicalBufferInsertionMutationBytes(parasitic), "RC tags alias");
+  auto pre_route = parasitic;
+  pre_route.rc_inputs = ParasiticRcInputs{ParasiticEditPolicy::kPreRouteTree};
+  require(canonicalBufferInsertionMutationBytes(pre_route) != canonicalBufferInsertionMutationBytes(parasitic),
+          "prepared pre-route trees alias full-rebuild fallback");
+  require(!validateEditBatch({TransactionGeneration{0}, {pre_route}}).empty(),
+          "pre-route edit accepted absent placement");
+  pre_route.placement_inputs = PlacedInputs{1.0, 2.0};
+  require(validateEditBatch({TransactionGeneration{0}, {pre_route}}).empty(),
+          "placed pre-route intent was rejected");
+
 }
 
 void testReverseRestoresBaselineArcAndSealIsPrivate()

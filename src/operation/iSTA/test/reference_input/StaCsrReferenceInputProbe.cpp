@@ -371,7 +371,7 @@ Json makeResult(const Options& options, const Observation& observation)
                         {"before_typed_bytes_hex", toHex(canary.before_typed_bytes)},
                         {"after_typed_bytes_hex", toHex(canary.after_typed_bytes)}});
   return {
-      {"schema", "ista-csr-reference-input-probe/1"},
+      {"schema", "ista-csr-reference-input-probe/2"},
       {"name", options.case_name},
       {"top", options.top},
       {"expected_clock", options.expected_clock},

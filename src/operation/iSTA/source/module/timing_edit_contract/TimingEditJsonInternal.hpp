@@ -2,6 +2,7 @@
 // Licensed under Mulan PSL v2.
 #pragma once
 #include <stdexcept>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,6 +18,11 @@ class WireError : public std::runtime_error
   WireError(std::string field, std::string message) : std::runtime_error(message), field(std::move(field)) {}
   std::string field;
 };
+void exactObject(const nlohmann::json&, std::string_view field, std::initializer_list<std::string_view> expected);
+[[nodiscard]] std::string string(const nlohmann::json&, std::string_view field);
+[[nodiscard]] std::uint64_t u64(const nlohmann::json&, std::string_view field);
+[[nodiscard]] std::int32_t i32(const nlohmann::json&, std::string_view field);
+[[nodiscard]] bool boolean(const nlohmann::json&, std::string_view field);
 [[nodiscard]] BaselineSemanticIdentity baseline(const nlohmann::json&, std::string_view field);
 [[nodiscard]] BufferInsertionMutation edit(const nlohmann::json&, std::string_view field);
 [[nodiscard]] StableNodeRef nodeRef(const nlohmann::json&, std::string_view field);

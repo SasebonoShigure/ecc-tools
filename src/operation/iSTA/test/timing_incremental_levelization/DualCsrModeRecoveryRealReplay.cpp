@@ -10,7 +10,7 @@
 #include "DualCsrFunctionalReceiptJson.hpp"
 #include "DualCsrModeRecoveryTestSupport.hpp"
 #include "DualCsrTargetedArtifactSupport.hpp"
-#include "DualCsrTraceBaselineInternal.hpp"
+#include "CpuDualCsrBaseline.hpp"
 #include "DualCsrTraceReplayer.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
@@ -113,7 +113,7 @@ void realReplayRecovery(const char* replay, const char* output)
     timing_edit::oracle::ProductionFreshSessionLoader::run(
         artifacts.artifacts(),
         [&](const timing_edit::oracle::ProductionFreshSessionView& loaded) {
-          auto baseline = ::ista::timing_dual_csr::detail::makeTraceBaseline(
+          auto baseline = ::ista::timing_dual_csr::makeCpuDualCsrBaseline(
               loaded.database, loaded.reference_input, timing_edit::TimingEditSessionToken{loaded.session_token});
           recovery_support::CumulativeBatchSource source(loaded.authority);
           try {

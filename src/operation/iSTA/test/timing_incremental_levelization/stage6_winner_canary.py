@@ -41,6 +41,8 @@ def _row_offsets(source: int = 0) -> list[int]:
 
 def _clock_section(size: int, default_node: object) -> dict[str, object]:
     return {
+        "arrivals": _soa([0] * size, [_number(0.0)] * size),
+        "slews": _soa([0] * size, [_number(0.0)] * size),
         "predecessor_nodes": _soa([0] * size, [default_node] * size),
         "predecessor_arc_delays": _soa(
             [0] * size, [_number(0.0) for _ in range(size)]),
@@ -67,6 +69,8 @@ def _equal_cost_fixture(winner: int) -> tuple[dict[str, Any],
             "path_source_order": ["input", "register"],
             "transition_order": ["rise", "fall"],
             "ordered_starts": [source0, source1],
+            "clocks": [],
+            "clock_owners": [{"node": node, "clock_name": None} for node in nodes],
             "start_seeds": [_seed(source0), _seed(source1)],
         },
     }
@@ -155,6 +159,31 @@ def _run_sequential_canary(compare: Callable, first_difference: Callable,
     physical["predecessor_arc_delays"]["values"][8] = _number(1.0)
     compare(graph, timing, copy.deepcopy(timing), "sequential-canary",
             first_difference, require)
+
+    propagated_graph = copy.deepcopy(graph)
+    propagated = copy.deepcopy(timing)
+    payload = propagated_graph["reference_payload"]
+    payload["clocks"] = [{"map_key": "clk", "propagated": True}]
+    for owner in payload["clock_owners"]:
+        owner["clock_name"] = "clk"
+    for section in ("effective_clock", "physical_clock"):
+        propagated[section] = copy.deepcopy(physical)
+        propagated[section]["arrivals"] = _soa([1] * 12, [_number(2.0)] * 12)
+        propagated[section]["slews"] = _soa([1] * 12, [_number(0.1)] * 12)
+    propagated["paths"]["launches"]["values"] = [_number(2.0)] * 3
+    propagated["nodes"]["launches"]["values"] = [_number(2.0)] * 3
+    compare(propagated_graph, propagated, copy.deepcopy(propagated),
+            "propagated-sequential", first_difference, require)
+    for kind in ("arrival", "predecessor", "root_launch"):
+        bad = copy.deepcopy(propagated)
+        if kind == "arrival":
+            bad["effective_clock"]["arrivals"]["values"][0] = _number(9.0)
+        elif kind == "predecessor":
+            bad["effective_clock"]["predecessor_nodes"]["values"][8] = _key("s1")
+        else:
+            bad["paths"]["launches"]["values"] = [_number(0.0)] * 3
+        _expect_rejected(propagated_graph, bad, bad, compare, first_difference,
+                         require, error_type, f"propagated-{kind}-tamper")
 
     bad = copy.deepcopy(timing)
     bad["physical_clock"]["predecessor_nodes"]["values"][8] = _key("s1")

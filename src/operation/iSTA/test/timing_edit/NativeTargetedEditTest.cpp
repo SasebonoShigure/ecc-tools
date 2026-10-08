@@ -179,12 +179,12 @@ void runTargetedContracts()
         const std::string buffer_name = "BUF_X1";
         const auto& cached_cell = models.cell(buffer_name);
         const auto& native_model = database.get_timing_library().get_cell_map().at(buffer_name).get_cell_arc_list().front();
-        const auto* cached_transfer = &models.transfer(buffer_name, native_model);
+        const auto cached_ordinal = models.arcOrdinal(buffer_name, native_model);
         ista_test_allocation::armCountOnly();
         bool same_models = true;
         for (unsigned i = 0; i < 100; ++i)
           same_models = same_models && &models.cell(buffer_name) == &cached_cell
-                        && &models.transfer(buffer_name, native_model) == cached_transfer;
+                        && models.arcOrdinal(buffer_name, native_model) == cached_ordinal;
         const auto model_allocations = ista_test_allocation::disable();
         require(same_models && model_allocations == 0, "cached model lookup allocated or projected another table");
         for (unsigned field = 0; field < 4; ++field) {

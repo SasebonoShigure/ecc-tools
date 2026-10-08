@@ -107,9 +107,10 @@ struct NativeEditTransaction::Undo
   {
     raw.database = &target;
   }
-  Undo(Database& target, std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver, std::uint64_t first_instance_id)
+  Undo(Database& target, std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver, std::uint64_t first_instance_id,
+       std::map<std::string, ParasiticNet> prepared_rc)
       : database(target),
-        raw(detail::prepareNativeBufferInsertions(target, edits, resolver, first_instance_id)),
+        raw(detail::prepareNativeBufferInsertions(target, edits, resolver, first_instance_id, std::move(prepared_rc))),
         full(std::in_place, target)
   {
   }
@@ -151,11 +152,12 @@ NativeEditTransaction NativeEditTransaction::prepareFull(
 }
 NativeEditTransaction NativeEditTransaction::prepareFull(
     const NativeExecutionAuthority& authority, std::span<const BufferInsertionMutation> edits,
-    TimingEditResolverView resolver, std::uint64_t first_instance_id)
+    TimingEditResolverView resolver, std::uint64_t first_instance_id,
+    std::map<std::string, ParasiticNet> prepared_rc)
 {
   if (!authority.active())
     throw std::invalid_argument("native full edit received an expired authority");
-  auto undo = std::make_unique<Undo>(STADM.getDatabase(), edits, resolver, first_instance_id);
+  auto undo = std::make_unique<Undo>(STADM.getDatabase(), edits, resolver, first_instance_id, std::move(prepared_rc));
   NativeEditTransaction transaction(std::move(undo));
   transaction.attach(authority);
   transaction.apply();

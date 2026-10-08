@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "BufferTraceCanonicalEncoding.hpp"
+#include "BufferInsertionGain.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "TimingEditByteOrder.hpp"
 #include "TimingEditCanonicalEncoding.hpp"
@@ -174,21 +175,10 @@ std::variant<GainComputationReceipt, CandidateRejectionReason> evaluateNumeric(c
       || candidate.buffer_resistance_kohm != profile.rc_profile.buffer_resistance_kohm)
     return CandidateRejectionReason::kInvalidEnvironmentInputs;
 
-  const double delta_capacitance_pf = candidate.candidate_load_pf - candidate.buffer_capacitance_pf;
-  if (!std::isfinite(delta_capacitance_pf))
-    return CandidateRejectionReason::kNonFiniteIntermediate;
-  const double benefit_ns = candidate.upstream_resistance_kohm * delta_capacitance_pf;
-  if (!std::isfinite(benefit_ns))
-    return CandidateRejectionReason::kNonFiniteIntermediate;
-  const double penalty_ns = candidate.buffer_resistance_kohm * candidate.buffer_capacitance_pf;
-  if (!std::isfinite(penalty_ns))
-    return CandidateRejectionReason::kNonFiniteIntermediate;
-  const double benefit_minus_penalty_ns = benefit_ns - penalty_ns;
-  if (!std::isfinite(benefit_minus_penalty_ns))
-    return CandidateRejectionReason::kNonFiniteIntermediate;
-  const double gain_ns = benefit_minus_penalty_ns - candidate.buffer_delay_ns;
-  if (!std::isfinite(gain_ns))
-    return CandidateRejectionReason::kNonFiniteIntermediate;
+  const auto gain = timing_edit::bufferInsertionGain(candidate.upstream_resistance_kohm,
+      candidate.candidate_load_pf, candidate.buffer_capacitance_pf,
+      candidate.buffer_resistance_kohm, candidate.buffer_delay_ns);
+  if (!gain) return CandidateRejectionReason::kNonFiniteIntermediate;
 
   return GainComputationReceipt{.arrival_ns = timing.arrival_ns,
                                 .required_ns = timing.required_ns,
@@ -196,13 +186,13 @@ std::variant<GainComputationReceipt, CandidateRejectionReason> evaluateNumeric(c
                                 .upstream_resistance_kohm = candidate.upstream_resistance_kohm,
                                 .candidate_load_pf = candidate.candidate_load_pf,
                                 .buffer_capacitance_pf = candidate.buffer_capacitance_pf,
-                                .delta_capacitance_pf = delta_capacitance_pf,
-                                .benefit_ns = benefit_ns,
+                                .delta_capacitance_pf = gain->delta_capacitance_pf,
+                                .benefit_ns = gain->benefit_ns,
                                 .buffer_resistance_kohm = candidate.buffer_resistance_kohm,
-                                .penalty_ns = penalty_ns,
-                                .benefit_minus_penalty_ns = benefit_minus_penalty_ns,
+                                .penalty_ns = gain->penalty_ns,
+                                .benefit_minus_penalty_ns = gain->benefit_minus_penalty_ns,
                                 .buffer_delay_ns = candidate.buffer_delay_ns,
-                                .gain_ns = gain_ns};
+                                .gain_ns = gain->gain_ns};
 }
 
 std::variant<EvaluatedCandidate, GreedySelectionError> evaluate(const BufferCandidateObservation& candidate,

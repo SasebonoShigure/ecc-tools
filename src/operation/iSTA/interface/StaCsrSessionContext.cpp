@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include "StaCsrSessionContext.hpp"
+#include "PhysicalStaSessionState.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -118,7 +119,12 @@ void StaCsrSessionContext::materializeCudaTiming(Database& database, const timin
 {
   if (!authority.readyForQuery() || &database != &STADM.getDatabase())
     throw std::logic_error("CUDA query requires a committed canonical Database");
-  cudaState(authority).materialize(database);
+  try {
+    cudaState(authority).materialize(database);
+  } catch (...) {
+    if (_cuda && (_cuda->_poisoned || _cuda->device.poisoned())) authority.poison();
+    throw;
+  }
 }
 void StaCsrSessionContext::prepareCudaReport(Database& database, const timing_edit::NativeExecutionAuthority& authority)
 {
@@ -129,8 +135,8 @@ void StaCsrSessionContext::prepareCudaReport(Database& database, const timing_ed
   const auto result = executeStaLifecyclePipeline(
       {{"CUDA report preparation", [] {}, [&] { state.prepareReport(database); }, [] {}}},
       StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
-  if (result.cleanup_failed)
-    state._poisoned = true;
+  if (result.cleanup_failed) state._poisoned = true;
+  if (state._poisoned || state.device.poisoned()) authority.poison();
   if (!result.succeeded)
     throw std::runtime_error("CUDA report query failed: " + result.message);
 }
@@ -186,6 +192,7 @@ bool StaCsrSessionContext::release(std::unique_ptr<csr::CsrSnapshotObservation>*
   if (_substate == StaCsrSessionSubstate::kReleased)
     return true;
   bool clean = true;
+  _physical.reset();
 
   if (_substate == StaCsrSessionSubstate::kReady || _substate == StaCsrSessionSubstate::kInvalidated) {
     if (_snapshot) {

@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "CsrReferenceInputAdapterInternal.hpp"
+#include "CsrParasiticTree.hpp"
 
 namespace ista::csr::detail {
 namespace {
@@ -69,6 +70,8 @@ std::map<std::string, LoadMatrix> buildNetLoads(const ReferenceBuildState& state
   for (const auto& [map_key, native_net] : state.database.get_net_map()) {
     if (map_key != native_net.get_net_name())
       malformedReferenceInput();
+    if (state.database.get_parasitic_library().get_net_map().contains(map_key))
+      continue;
     std::map<std::string, CanonicalLoadPinFacts> facts;
     for (const auto& load_pin_name : native_net.get_load_pin_list()) {
       const auto node = resolveNode(state, load_pin_name);
@@ -107,17 +110,85 @@ std::map<std::string, LoadMatrix> buildNetLoads(const ReferenceBuildState& state
 
 void exportLoads(ReferenceBuildState& state)
 {
-  if (!state.input.parasitics.nets.empty()) {
-    for (auto& arc : state.input.arcs)
-      arc.output_load.reset();
-    return;
-  }
-
   const auto net_loads = buildNetLoads(state);
+  const auto& rc_nets = state.database.get_parasitic_library().get_net_map();
   for (auto& arc : state.input.arcs) {
     const NodeRecord& sink = requireNode(state, arc.sink);
-    arc.output_load = projectCanonicalNoParasiticOutputLoad(sink.net_name, net_loads);
+    if (rc_nets.contains(sink.net_name))
+      arc.output_load.reset();
+    else
+      arc.output_load = projectCanonicalNoParasiticOutputLoad(sink.net_name, net_loads);
   }
+}
+
+ArcOutputLoadMatrix rcPinCapacitance(const ReferenceBuildState& state, NodeId node)
+{
+  ArcOutputLoadMatrix load{};
+  if (requireNode(state, node).is_port) {
+    const auto* constraint = findPortConstraint(state, node);
+    const double value = constraint && constraint->output_load ? *constraint->output_load : 0.0;
+    for (auto& analysis : load) analysis.fill(value);
+  } else {
+    const auto* capacitance = findPinCapacitance(state, node);
+    if (!capacitance) malformedReferenceInput();
+    for (std::size_t a = 0; a < kAnalysisCount; ++a)
+      for (std::size_t t = 0; t < kTransitionCount; ++t)
+        load[a][t] = capacitance->transition_capacitance[a][t].value_or(capacitance->default_capacitance);
+  }
+  return load;
+}
+
+bool exportParasiticBindings(ReferenceBuildState& state)
+{
+  if (state.input.parasitics.nets.empty()) return true;
+  std::map<std::string, std::shared_ptr<const CsrParasiticTree>, std::less<>> trees;
+  std::map<NodeId, CsrParasiticBinding> terminals;
+  for (const auto& net : state.input.parasitics.nets) {
+    const auto native = state.database.get_net_map().find(net.map_key);
+    // Raw unsupported parasitics remain exportable for typed rejection.
+    if (native == state.database.get_net_map().end()) return false;
+    const auto driver = resolveNode(state, native->second.get_driver_pin());
+    if (!driver || requireNode(state, *driver).net_name != net.map_key)
+      malformedReferenceInput();
+    std::vector<CsrRcPin> pins{{*driver, requireNode(state, *driver).key.full_name, rcPinCapacitance(state, *driver)}};
+    for (const auto& name : native->second.get_load_pin_list()) {
+      const auto node = resolveNode(state, name);
+      if (!node || *node == *driver || requireNode(state, *node).net_name != net.map_key)
+        malformedReferenceInput();
+      const auto& record = requireNode(state, *node);
+      pins.push_back({*node, record.key.full_name, rcPinCapacitance(state, *node)});
+    }
+    std::shared_ptr<const CsrParasiticTree> tree;
+    try {
+      tree = std::make_shared<const CsrParasiticTree>(prepareCsrParasiticTree(net, *driver, pins));
+    } catch (const std::invalid_argument&) {
+      return false;
+    } catch (const std::overflow_error&) {
+      illegalReferenceNumeric();
+    }
+    if (!trees.emplace(net.map_key, tree).second) malformedReferenceInput();
+    for (std::size_t slot = 0; slot < tree->terminals.size(); ++slot)
+      if (!terminals.emplace(tree->terminals[slot], CsrParasiticBinding{tree, slot}).second)
+        malformedReferenceInput();
+  }
+  for (auto& arc : state.input.arcs) {
+    const auto tree = trees.find(requireNode(state, arc.sink).net_name);
+    if (tree == trees.end()) continue;
+    const auto terminal = terminals.find(arc.sink);
+    if (terminal == terminals.end() || terminal->second.tree != tree->second)
+      malformedReferenceInput();
+    if ((arc.kind == ArcKind::kCell && arc.sink != tree->second->terminals.front())
+        || (arc.kind == ArcKind::kNet && arc.source != tree->second->terminals.front()))
+      malformedReferenceInput();
+    arc.parasitic = terminal->second;
+  }
+  for (auto& seed : state.input.start_seeds) {
+    if (seed.availability != StartSeedAvailability::kDeferredSequential) continue;
+    const auto tree = trees.find(requireNode(state, seed.seed_node).net_name);
+    if (tree != trees.end() && tree->second->terminals.front() == seed.seed_node)
+      seed.parasitic = {tree->second, 0};
+  }
+  return true;
 }
 
 void preflightConvertedLoads(const ReferenceBuildState& state)
@@ -178,13 +249,12 @@ bool validateDividerFlags(const ReferenceBuildState& state)
   return any_divider;
 }
 
-void exportUnsupportedReasons(ReferenceBuildState& state)
+void exportUnsupportedReasons(ReferenceBuildState& state, bool prepared_parasitics)
 {
   const bool has_divider = validateDividerFlags(state);
   for (const auto& seed : state.input.start_seeds)
     if (seed.crpr_node.has_value() != seed.crpr_transition.has_value())
       malformedReferenceInput();
-  const bool has_propagated_clock = std::ranges::any_of(state.input.clocks, [](const ClockConstraintModel& clock) { return clock.propagated; });
   const bool has_clock_gating = std::ranges::any_of(state.input.instances, [](const InstanceRecord& instance) { return instance.is_clock_gating; });
 
   state.input.unsupported_reasons.clear();
@@ -192,8 +262,9 @@ void exportUnsupportedReasons(ReferenceBuildState& state)
     if (condition)
       state.input.unsupported_reasons.push_back(reason);
   };
-  add(!state.input.parasitics.nets.empty(), CsrReferenceUnsupportedReason::kParasiticNet);
-  add(has_propagated_clock, CsrReferenceUnsupportedReason::kPropagatedClock);
+  add(!state.input.parasitics.nets.empty()
+          && (state.input.analysis_context.rc_corner != "pre_route" || !prepared_parasitics),
+      CsrReferenceUnsupportedReason::kParasiticNet);
   add(has_clock_gating || has_divider, CsrReferenceUnsupportedReason::kClockGatingOrDivider);
   add(!state.input.case_analysis_constraints.empty(), CsrReferenceUnsupportedReason::kCaseAnalysis);
 }
@@ -203,8 +274,9 @@ void exportUnsupportedReasons(ReferenceBuildState& state)
 void exportReferenceLoadsAndSupport(ReferenceBuildState& state)
 {
   exportLoads(state);
+  const bool prepared_parasitics = exportParasiticBindings(state);
   preflightConvertedLoads(state);
-  exportUnsupportedReasons(state);
+  exportUnsupportedReasons(state, prepared_parasitics);
 }
 
 }  // namespace ista::csr::detail

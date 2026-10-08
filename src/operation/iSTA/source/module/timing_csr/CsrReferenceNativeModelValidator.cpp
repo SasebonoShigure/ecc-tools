@@ -21,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 
 #include "CsrReferenceNativeModelValidatorInternal.hpp"
@@ -279,6 +280,8 @@ void validateGraphTransferMirrors(const CsrReferenceInput& input, Violations& er
 {
   std::set<FallbackArcKey> actual_fallback;
   for (const auto& arc : input.arcs) {
+    if (arc.kind != ArcKind::kCell && arc.native_cell_arc_ordinal)
+      reject(errors, "arcs.native_cell_arc_ordinal", "net arc cannot carry a Liberty cell-arc identity");
     if (arc.kind != ArcKind::kCell || arc.source.value() >= input.nodes.size() || arc.sink.value() >= input.nodes.size())
       continue;
     const auto& source = input.nodes[arc.source.value()];
@@ -287,6 +290,8 @@ void validateGraphTransferMirrors(const CsrReferenceInput& input, Violations& er
     const auto* cell = instance == nullptr ? nullptr : findReferencedCell(input, instance->cell_name);
     const bool fallback_cell = cell == nullptr || !cell->present || cell->cell_arcs.empty();
     if (fallback_cell) {
+      if (arc.native_cell_arc_ordinal)
+        reject(errors, "arcs.native_cell_arc_ordinal", "fallback arc cannot carry a Liberty cell-arc identity");
       if (!isInputLike(source.direction) || !isOutputLike(sink.direction) || arc.source == arc.sink || !isUnitFallbackTransfer(arc))
         reject(errors, "arcs.transfer", "fallback cell arc must use one exact input-like to output-like unit transfer");
       if (!actual_fallback.emplace(source.key.instance_name, arc.source.value(), arc.sink.value()).second)
@@ -294,9 +299,11 @@ void validateGraphTransferMirrors(const CsrReferenceInput& input, Violations& er
       continue;
     }
 
-    const bool mirrored = std::ranges::any_of(cell->cell_arcs, [&](const LibraryCellArcModel& model) {
-      return model.source_port == source.key.pin_name && model.sink_port == sink.key.pin_name && model.transfer == arc.transfer;
-    });
+    bool mirrored = false;
+    if (arc.native_cell_arc_ordinal && *arc.native_cell_arc_ordinal < cell->cell_arcs.size()) {
+      const auto& model = cell->cell_arcs[*arc.native_cell_arc_ordinal];
+      mirrored = model.source_port == source.key.pin_name && model.sink_port == sink.key.pin_name && model.transfer == arc.transfer;
+    }
     if (!mirrored)
       reject(errors, "arcs.transfer", "bound cell transfer must exactly mirror one referenced Liberty cell arc");
   }
@@ -361,32 +368,43 @@ void validateLibraryClosure(const CsrReferenceInput& input, Violations& errors)
 void validateParasitics(const ParasiticModel& parasitics, Violations& errors)
 {
   if (parasitics.nets.empty()) {
-    if (!parasitics.capacitance_unit.empty() || !parasitics.resistance_unit.empty())
+    if (!parasitics.capacitance_unit.empty() || !parasitics.resistance_unit.empty()
+        || parasitics.input_port_thresholds != InputPortRcThresholds{})
       reject(errors, "parasitics", "empty parasitic domain must normalize unit strings to empty");
     return;
   }
+  const auto& thresholds = parasitics.input_port_thresholds;
+  if (!isFinite(thresholds.slew_derate)
+      || std::ranges::any_of(thresholds.lower, [](double value) { return !isFinite(value); })
+      || std::ranges::any_of(thresholds.upper, [](double value) { return !isFinite(value); }))
+    reject(errors, "parasitics.input_port_thresholds", "global thresholds must be finite");
   if (parasitics.capacitance_unit.empty() || parasitics.resistance_unit.empty())
     reject(errors, "parasitics", "nonempty parasitic domain requires both unit strings");
   for (std::size_t net_index = 0; net_index < parasitics.nets.size(); ++net_index) {
     const auto& net = parasitics.nets[net_index];
     if (net_index != 0 && !byteStringLess(parasitics.nets[net_index - 1].map_key, net.map_key))
       reject(errors, "parasitics.nets", "nets must follow strict native map-key byte order");
-    if (!isFinite(net.lumped_capacitance) || net.lumped_capacitance < 0)
-      reject(errors, "parasitics.nets.lumped_capacitance", "lumped capacitance must be finite and nonnegative");
-    for (std::size_t node_index = 0; node_index < net.nodes.size(); ++node_index) {
-      const auto& node = net.nodes[node_index];
-      if (node_index != 0 && !byteStringLess(net.nodes[node_index - 1].map_key, node.map_key))
-        reject(errors, "parasitics.nets.nodes", "nodes must follow strict native map-key byte order");
-      if (!isFinite(node.capacitance) || node.capacitance < 0 || !isFinite(node.x) || !isFinite(node.y))
-        reject(errors, "parasitics.nets.nodes", "node capacitance and coordinates are invalid");
-    }
-    for (const auto& resistor : net.resistors)
-      if (!isFinite(resistor.resistance) || resistor.resistance < 0)
-        reject(errors, "parasitics.nets.resistors", "resistance must be finite and nonnegative");
+    validateParasiticNet(net, errors);
   }
 }
 
 }  // namespace
+
+void validateParasiticNet(const ParasiticNetModel& net, Violations& errors)
+{
+  if (!isFinite(net.lumped_capacitance) || net.lumped_capacitance < 0)
+    reject(errors, "parasitics.nets.lumped_capacitance", "lumped capacitance must be finite and nonnegative");
+  for (std::size_t node_index = 0; node_index < net.nodes.size(); ++node_index) {
+    const auto& node = net.nodes[node_index];
+    if (node_index != 0 && !byteStringLess(net.nodes[node_index - 1].map_key, node.map_key))
+      reject(errors, "parasitics.nets.nodes", "nodes must follow strict native map-key byte order");
+    if (!isFinite(node.capacitance) || node.capacitance < 0 || !isFinite(node.x) || !isFinite(node.y))
+      reject(errors, "parasitics.nets.nodes", "node capacitance and coordinates are invalid");
+  }
+  for (const auto& resistor : net.resistors)
+    if (!isFinite(resistor.resistance) || resistor.resistance < 0)
+      reject(errors, "parasitics.nets.resistors", "resistance must be finite and nonnegative");
+}
 
 std::vector<CsrContractViolation> validateParasiticContextCrossField(const CsrReferenceInput& input)
 {
@@ -398,8 +416,17 @@ std::vector<CsrContractViolation> validateParasiticContextCrossField(const CsrRe
 
 void validateLibraryCell(const ReferencedLibraryCellModel& cell, Violations& errors)
 {
+    if (!isFinite(cell.slew_derate))
+      reject(errors, "referenced_library_cells.slew_derate", "load slew derate must be finite");
+    for (const auto& thresholds : {cell.slew_lower_threshold_pct, cell.slew_upper_threshold_pct, cell.input_threshold_pct})
+      for (double value : thresholds)
+        if (!isFinite(value) || value < 0.0 || value > 1.0)
+          reject(errors, "referenced_library_cells.thresholds", "load thresholds must be normalized finite values");
     if (!cell.present) {
-      if (!cell.library_name.empty() || cell.is_sequential || cell.is_clock_gating || cell.is_macro || !cell.clock_pin_name.empty()
+      const ReferencedLibraryCellModel empty;
+      if (cell.slew_derate != empty.slew_derate || cell.slew_lower_threshold_pct != empty.slew_lower_threshold_pct
+          || cell.slew_upper_threshold_pct != empty.slew_upper_threshold_pct || cell.input_threshold_pct != empty.input_threshold_pct
+          || !cell.library_name.empty() || cell.is_sequential || cell.is_clock_gating || cell.is_macro || !cell.clock_pin_name.empty()
           || !cell.data_pin_name.empty() || !cell.output_pin_name.empty() || !cell.ports.empty() || !cell.cell_arcs.empty() || !cell.timing_checks.empty()) {
         reject(errors, "referenced_library_cells", "missing cell must own no present payload");
       }
@@ -465,10 +492,16 @@ void validateReferenceNativeModels(const CsrReferenceInput& input, Violations& e
           if (!isFinite(value) || value < 0)
             reject(errors, "arcs.output_load", "load must be finite and nonnegative");
   }
-  const bool loads_present = input.parasitics.nets.empty();
-  for (const auto& arc : input.arcs)
+  std::set<std::string_view> rc_nets;
+  for (const auto& net : input.parasitics.nets)
+    rc_nets.insert(net.map_key);
+  for (const auto& arc : input.arcs) {
+    if (arc.sink.value() >= input.nodes.size())
+      continue;  // Structural validation reports the invalid NodeId.
+    const bool loads_present = !rc_nets.contains(input.nodes[arc.sink.value()].net_name);
     if (arc.output_load.has_value() != loads_present)
-      reject(errors, "arcs.output_load", "load presence must follow the global parasitic-domain state");
+      reject(errors, "arcs.output_load", "load presence must follow its output net's parasitic state");
+  }
 
   for (const auto& clock : input.clocks) {
     if (!isFinite(clock.period))

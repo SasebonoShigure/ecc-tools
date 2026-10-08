@@ -368,7 +368,7 @@ ReplayReceipt runReplay(BufferTraceProductionFreshAdapter& adapter,
 Json replayEnvelope(BufferTraceProductionFreshAdapter& adapter,
                     const ReplayReceipt& receipt, std::uint64_t repetition)
 {
-  return {{"schema_version", "buffer-replay-probe/3.0.0"},
+  return {{"schema_version", "buffer-replay-probe/4.0.0"},
           {"functional", replayReceiptToJson(receipt)},
           {"source_isolation", sourceIsolation(adapter.sourceIsolationReceipt())},
           {"derived_timing_freshness",

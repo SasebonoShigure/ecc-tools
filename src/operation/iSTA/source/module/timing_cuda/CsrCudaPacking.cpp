@@ -58,15 +58,20 @@ Table packTable(const TimingTableModel& source, std::vector<double>& values)
   return table;
 }
 
-Child packChild(const ChildTimingArcModel& source, std::vector<double>& tables, Index table_base = 0)
+Child packChild(const ChildTimingArcModel& source, std::vector<double>& tables, Index library, Index table_base)
 {
   Child child;
+  child.library = library;
+  child.slew_derate = source.slew_derate;
   child.time_scale = source.time_unit_scale;
   child.capacitance_scale = source.capacitance_unit_scale;
   child.arc_index = source.signature.arc_index;
   child.sense = static_cast<std::uint8_t>(source.signature.sense);
   child.trigger = static_cast<std::uint8_t>(source.signature.trigger_transition);
   for (std::size_t t = 0; t < 2; ++t) {
+    child.lower[t] = source.slew_lower_threshold_pct[t];
+    child.upper[t] = source.slew_upper_threshold_pct[t];
+    child.output_threshold[t] = source.output_threshold_pct[t];
     child.delay[t] = packTable(source.delay_tables[t], tables);
     child.slew[t] = packTable(source.slew_tables[t], tables);
     child.check[t] = packTable(source.check_tables[t], tables);
@@ -164,14 +169,11 @@ void packSeeds(const CsrReferenceInput& input, HostData& data)
       if (owner == input.clocks.end())
         throw std::invalid_argument("CUDA clock owner has no constraint");
       node.clock_owner = owner - input.clocks.begin();
+      node.propagated_clock = owner->propagated;
     }
     for (std::size_t lane = 0; lane < 4; ++lane) {
       if (source.data_start)
         node.slew[lane] = {source.slew[lane], true};
-      if (source.clock_point) {
-        node.effective_arrival[lane] = {0.0, true};
-        node.effective_slew[lane] = {0.0, true};
-      }
       if (source.physical_clock_source) {
         node.physical_clock[lane].arrival = {0.0, true};
         node.physical_clock[lane].slew = {0.0, true};
@@ -471,6 +473,14 @@ void updatePathDomain(std::span<const ArcBinding> arcs, std::span<const PathAdja
   result.offsets.back() = result.tags.size();
 }
 
+Index ModelStorage::libraryIndex(std::string_view name)
+{
+  const auto found = _libraries.find(name);
+  if (found != _libraries.end())
+    return found->second;
+  return _libraries.emplace(std::string(name), _libraries.size()).first->second;
+}
+
 Index ModelStorage::intern(const std::shared_ptr<const std::vector<ChildTimingArcModel>>& owner)
 {
   if (!owner || owner->empty())
@@ -506,7 +516,7 @@ Index ModelStorage::intern(const std::shared_ptr<const std::vector<ChildTimingAr
   std::vector<double> values;
   packed.reserve(source.size());
   for (const auto& child : source)
-    packed.push_back(packChild(child, values, tables.size()));
+    packed.push_back(packChild(child, values, libraryIndex(child.signature.library_name), tables.size()));
   // All allocating work precedes publishing the new immutable range.
   const auto reserveAppend = []<class T>(std::vector<T>& target, std::size_t added) {
     if (added > target.max_size() - target.size())
@@ -551,6 +561,7 @@ HostData pack(const CsrReferenceInput& input, ModelStorage& models)
     data.endpoints.push_back({source.node.value(), source.clock_period,
                               {source.output_delay[0].value_or(0.0), source.output_delay[0].has_value()}});
   packSequential(input, data, models);
+  packRcGraph(input, data, models);
   std::stable_sort(data.path_seeds.begin(), data.path_seeds.end(), [](const PathSeed& a, const PathSeed& b) {
     return std::pair{a.row, a.tag} < std::pair{b.row, b.tag};
   });
@@ -568,7 +579,8 @@ HostData pack(const CsrReferenceInput& input, ModelStorage& models)
   data.bindings.reserve(input.arcs.size());
   for (const auto& arc : input.arcs) {
     data.bindings.push_back({arc.source.value(), arc.sink.value(), true, arc.eligibility.levelization,
-                        EdgeStorageKind::kBaseOut, pathTransitions(arc.kind, arc.transfer, arc.eligibility.data_arrival)});
+                        EdgeStorageKind::kBaseOut, pathTransitions(arc.kind, arc.transfer, arc.eligibility.data_arrival),
+                        data.arcs.at(arc.id.value()).rc_binding});
   }
   data.adjacency = buildPathAdjacency(input.nodes.size(), data.bindings);
   data.paths = buildPathDomain(data.bindings, data.adjacency, data.path_seeds);

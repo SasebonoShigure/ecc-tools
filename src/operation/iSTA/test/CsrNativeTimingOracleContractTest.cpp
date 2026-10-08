@@ -42,6 +42,8 @@
 #include "TimingPathState.hpp"
 #include "TimingPoint.hpp"
 
+void verifyNeutralArcIdentity();
+
 namespace {
 
 using ista::AnalysisType;
@@ -561,6 +563,7 @@ int main()
     verifyRichRead();
     verifyFamilyMutationCanaries();
     verifyNegativeContracts();
+    verifyNeutralArcIdentity();
   } catch (const std::exception& error) {
     std::cerr << "CSR native timing oracle contract failure: " << error.what() << '\n';
     return 1;

@@ -4,9 +4,9 @@
 import copy
 import math
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
-from dual_csr_reference_model_validator import run_reference_model_self_test
+from dual_csr_reference_model_validator import run_reference_model_self_test, validate_parasitic_net
 from dual_csr_reference_model_validator import (
     validate_reference_value as validate_exact_reference_value,
 )
@@ -149,7 +149,7 @@ def _transfer(value: object, label: str, require: Require) -> None:
 
 def validate_arc_payload(value: object, label: str, require: Require) -> None:
     keys = {"key", "source", "sink", "kind", "is_clock_arc", "is_disabled",
-            "is_loop_disabled", "eligibility", "transfer", "output_load"}
+            "is_loop_disabled", "eligibility", "transfer", "output_load", "native_cell_arc_ordinal"}
     item = _object(value, keys, label, require)
     _arc_key(item["key"], f"{label}.key", require)
     _count(item["source"], f"{label}.source", require)
@@ -163,6 +163,8 @@ def validate_arc_payload(value: object, label: str, require: Require) -> None:
     for field in eligibility:
         _boolean(eligibility[field], f"{label}.eligibility.{field}", require)
     _transfer(item["transfer"], f"{label}.transfer", require)
+    if item["native_cell_arc_ordinal"] is not None:
+        _count(item["native_cell_arc_ordinal"], f"{label}.native_cell_arc_ordinal", require)
     if item["output_load"] is not None:
         _nested_numbers(item["output_load"], f"{label}.output_load", require)
 
@@ -193,11 +195,76 @@ REFERENCE_APPEND_KEYS = {"instances", "referenced_library_cells",
                          "cell_pin_capacitances", "clock_owner_by_node"}
 
 
+def validate_parasitic_delta(value: object, label: str, require: Require,
+                             chain: dict[str, Any]) -> None:
+    item = _object(value, {"expected_size", "changes", "appends"}, label, require)
+    size = _count(item["expected_size"], f"{label}.expected_size", require)
+    if "size" in chain:
+        require(chain["size"] == size, f"{label} breaks the net extent chain")
+    known = chain.setdefault("nets", {})
+    changed: set[int] = set()
+    for index, value in enumerate(_array(item["changes"], f"{label}.changes", require)):
+        field = f"{label}.changes[{index}]"
+        change = _object(value, {"slot", "expected", "replacement"}, field, require)
+        slot = _count(change["slot"], f"{field}.slot", require)
+        require(slot < size and slot not in changed, f"{field} invalid or duplicate slot")
+        changed.add(slot)
+        for side in ("expected", "replacement"):
+            validate_parasitic_net(change[side], f"{field}.{side}", require)
+        require(change["expected"]["map_key"] == change["replacement"]["map_key"],
+                f"{field} renames the net slot")
+        if slot in known:
+            require(known[slot] == change["expected"], f"{field} breaks the value chain")
+        known[slot] = copy.deepcopy(change["replacement"])
+    appends = _array(item["appends"], f"{label}.appends", require)
+    for index, net in enumerate(appends):
+        validate_parasitic_net(net, f"{label}.appends[{index}]", require)
+        known[size + index] = copy.deepcopy(net)
+    names = [net["map_key"] for net in known.values()]
+    require(len(set(names)) == len(names), f"{label} repeats a net identity")
+    chain["size"] = size + len(appends)
+
+
+def validate_start_seed_delta(value: object, label: str, require: Require,
+                               chain: dict[str, Any]) -> None:
+    item = _object(value, {"expected_size", "changes", "appends"}, label, require)
+    size = _count(item["expected_size"], f"{label}.expected_size", require)
+    if "size" in chain:
+        require(chain["size"] == size, f"{label} breaks the seed extent chain")
+    known = chain.setdefault("seeds", {})
+    changed: set[int] = set()
+    for index, value in enumerate(_array(item["changes"], f"{label}.changes", require)):
+        field = f"{label}.changes[{index}]"
+        change = _object(value, {"slot", "expected", "replacement"}, field, require)
+        slot = _count(change["slot"], f"{field}.slot", require)
+        require(slot < size and slot not in changed, f"{field} invalid or duplicate slot")
+        changed.add(slot)
+        for side in ("expected", "replacement"):
+            validate_exact_reference_value(
+                "start_seeds", [change[side]], f"{field}.{side}", require)
+        if slot in known:
+            require(known[slot] == change["expected"], f"{field} breaks the value chain")
+        known[slot] = copy.deepcopy(change["replacement"])
+    appends = _array(item["appends"], f"{label}.appends", require)
+    validate_exact_reference_value("start_seeds", appends, f"{label}.appends", require)
+    for index, seed in enumerate(appends):
+        known[size + index] = copy.deepcopy(seed)
+    chain["size"] = size + len(appends)
+
+
 def validate_reference_delta(value: object, label: str, require: Require,
                              chain: dict[str, object]) -> None:
     item = _object(value, REFERENCE_KEYS, label, require)
     for field, replacement in item.items():
         if replacement is None:
+            continue
+        if field == "parasitics":
+            validate_parasitic_delta(replacement, f"{label}.{field}", require,
+                                     cast(dict[str, Any], chain.setdefault(field, {})))
+            continue
+        if field == "start_seeds":
+            validate_start_seed_delta(replacement, f"{label}.{field}", require,
+                                      cast(dict[str, Any], chain.setdefault(field, {})))
             continue
         if field in REFERENCE_APPEND_KEYS:
             typed = _object(replacement, {"expected_size", "values"},
@@ -223,7 +290,7 @@ def validate_reference_delta(value: object, label: str, require: Require,
 
 def validate_descriptor_schema(value: object, label: str,
                                require: Require) -> None:
-    require(value == "ista-dual-csr-update/2.0.0",
+    require(value == "ista-dual-csr-update/3.0.0",
             f"{label} exact schema differs")
 
 
@@ -234,7 +301,7 @@ def run_typed_validator_self_test(require: Require) -> None:
         if not ok:
             errors.append(message)
 
-    validate_descriptor_schema("ista-dual-csr-update/2.0.0", "schema-canary",
+    validate_descriptor_schema("ista-dual-csr-update/3.0.0", "schema-canary",
                                collect_error)
     require(not errors, f"valid descriptor schema was rejected: {errors}")
     validate_descriptor_schema("ista-dual-csr-update/1.2.0", "old-schema-canary",
@@ -252,7 +319,7 @@ def run_typed_validator_self_test(require: Require) -> None:
         "data_slew": True, "clock": False}, "transfer": {"delay": number,
         "delay_min": number, "delay_max": number, "is_clock_arc": False,
         "is_disabled": False, "is_clear_or_preset": False, "children": []},
-        "output_load": None}
+        "output_load": None, "native_cell_arc_ordinal": None}
     for mutate in ("id", "transfer"):
         tampered = copy.deepcopy(payload)
         if mutate == "id":
@@ -274,7 +341,11 @@ def run_typed_validator_self_test(require: Require) -> None:
             "name": "A", "direction": "input", "is_clock": False,
             "is_output": False, "default_capacitance": number,
             "transition_capacitance": [[None, negative_zero], [number, None]]}],
-        "cell_arcs": [], "timing_checks": []}
+        "cell_arcs": [], "timing_checks": [],
+        "slew_derate": {**number, "value": 1.0},
+        "slew_lower_threshold_pct": [{**number, "value": 0.3}] * 2,
+        "slew_upper_threshold_pct": [{**number, "value": 0.7}] * 2,
+        "input_threshold_pct": [{**number, "value": 0.5}] * 2}
     errors = []
     try:
         validate_exact_reference_value(

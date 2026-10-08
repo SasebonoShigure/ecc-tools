@@ -18,12 +18,15 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <memory>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "CsrParasiticTree.hpp"
 #include "CsrReferenceFingerprintPayload.hpp"
 #include "CsrReferenceValidator.hpp"
 
@@ -178,6 +181,63 @@ inline CsrReferenceInput referenceInput()
   return input;
 }
 
+// Two disconnected port nets; only n2 carries an RC tree.
+inline CsrReferenceInput mixedParasiticInput()
+{
+  auto input = referenceInput();
+  for (std::size_t id = 0; id < 2; ++id) {
+    auto node = input.nodes[id];
+    node.id = NodeId{id + 2};
+    node.key = port(id == 0 ? "z_in" : "z_out");
+    node.net_name = "n2";
+    input.node_ids_by_key.push_back({node.key, node.id});
+    auto constraint = input.port_constraints[id];
+    constraint.map_key = constraint.embedded_port_name = node.key.full_name;
+    constraint.resolved_node = node.id;
+    input.port_constraints.push_back(std::move(constraint));
+    input.nodes.push_back(std::move(node));
+  }
+  auto arc = input.arcs.front();
+  arc.id = ArcId{1};
+  arc.source = NodeId{2};
+  arc.sink = NodeId{3};
+  arc.key.base.source = input.nodes[2].key;
+  arc.key.base.sink = input.nodes[3].key;
+  arc.key.base.owner_name = "n2";
+  arc.native_traversal_rank = 1;
+  arc.output_load.reset();
+  input.arc_ids_by_key.push_back({arc.key, arc.id});
+  input.arcs.push_back(std::move(arc));
+  input.out_row_offsets = {0, 1, 1, 2, 2};
+  input.in_row_offsets = {0, 0, 1, 1, 2};
+  input.out_arc_ids.push_back(ArcId{1});
+  input.in_arc_ids.push_back(ArcId{1});
+  input.ordered_root_ids.push_back(NodeId{2});
+  input.ordered_start_ids.push_back(NodeId{2});
+  input.ordered_end_ids.push_back(NodeId{3});
+  input.clock_owner_by_node.resize(4);
+  auto seed = input.start_seeds.front();
+  seed.seed_node = seed.path_start_node = NodeId{2};
+  input.start_seeds.push_back(std::move(seed));
+  auto endpoint = input.endpoint_required.front();
+  endpoint.node = NodeId{3};
+  input.endpoint_required.push_back(std::move(endpoint));
+  input.analysis_context.rc_corner = "rc";
+  input.parasitics = {"PF", "OHM", {ParasiticNetModel{"n2", "n2", 0.03,
+      {{"z_in", "z_in", 0.01, 0.0, 0.0}, {"z_out", "z_out", 0.02, 0.0, 0.0}},
+      {{"z_in", "z_out", 100.0}}}}};
+  const std::array pins{
+      CsrRcPin{NodeId{2}, "z_in", outputLoad(0.0)},
+      CsrRcPin{NodeId{3}, "z_out", outputLoad(0.5)}};
+  input.arcs.back().parasitic = {
+      std::make_shared<CsrParasiticTree>(
+          prepareCsrParasiticTree(input.parasitics.nets.front(), NodeId{2}, pins)),
+      1};
+  input.unsupported_reasons = {CsrReferenceUnsupportedReason::kParasiticNet};
+  refreshIdentity(input);
+  return input;
+}
+
 inline CsrReferenceInput cellInput()
 {
   CsrReferenceInput input;
@@ -215,6 +275,7 @@ inline CsrReferenceInput cellInput()
   arc.kind = ArcKind::kCell;
   arc.eligibility = {true, true, true, false};
   arc.transfer.setChildren({child});
+  arc.native_cell_arc_ordinal = 0;
   arc.output_load = outputLoad(0.0);
   input.arcs = {arc};
   input.arc_ids_by_key = {{arc.key, arc.id}};
@@ -264,6 +325,7 @@ inline CsrReferenceInput cycleInput()
   reverse.source = NodeId{1};
   reverse.sink = NodeId{0};
   reverse.native_traversal_rank = 1;
+  reverse.native_cell_arc_ordinal = input.referenced_library_cells[0].cell_arcs.size();
   input.arcs.push_back(reverse);
   input.arc_ids_by_key = {{input.arcs[0].key, ArcId{0}}, {input.arcs[1].key, ArcId{1}}};
   input.out_row_offsets = {0, 1, 2};

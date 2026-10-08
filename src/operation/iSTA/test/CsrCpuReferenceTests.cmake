@@ -29,6 +29,7 @@ set(ISTA_STEP5_CONTRACT_SOURCES
     CsrCpuReferenceContractTest.cpp
     CsrCpuReferenceOutcomeContract.cpp
     CsrCpuReferenceArcContract.cpp
+    CsrCpuReferenceRcInitializationTest.cpp
     CsrCpuReferencePropagationContract.cpp
     CsrCpuReferenceTopologyContract.cpp
     CsrCpuReferenceDagFixture.cpp
@@ -96,3 +97,17 @@ foreach(PROPERTY_SEED IN LISTS ISTA_STEP5_PROPERTY_SEEDS)
       PROPERTIES LABELS "ista_property" TIMEOUT 60
   )
 endforeach()
+
+
+set(ISTA_RC_MODEL_SOURCES CsrParasiticModelTest.cpp)
+ista_add_step5_target(ista_csr_parasitic_model_test ISTA_RC_MODEL_SOURCES)
+add_test(NAME ista_csr_parasitic_model_test COMMAND ista_csr_parasitic_model_test)
+set_tests_properties(ista_csr_parasitic_model_test PROPERTIES LABELS "ista_unit" TIMEOUT 60)
+
+if(ECC_INCREGPUSTA_DEBUG_CHECKS)
+  add_executable(ista_csr_native_parasitic_test CsrNativeParasiticTest.cpp)
+  target_link_libraries(ista_csr_native_parasitic_test PRIVATE ista_source ista_timing_csr_core)
+  target_compile_options(ista_csr_native_parasitic_test PRIVATE ${ISTA_STEP5_STRICT_OPTIONS})
+  add_test(NAME ista_csr_native_parasitic_test COMMAND ista_csr_native_parasitic_test)
+  set_tests_properties(ista_csr_native_parasitic_test PROPERTIES LABELS "ista_unit;ista_diagnostic" TIMEOUT 60)
+endif()

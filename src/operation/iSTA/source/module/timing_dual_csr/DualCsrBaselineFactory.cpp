@@ -33,7 +33,7 @@ csr::ArcSemanticPayload semanticPayload(const csr::ArcRecord& arc)
           arc.is_loop_disabled,
           arc.eligibility,
           arc.transfer,
-          arc.output_load};
+          arc.output_load, arc.native_cell_arc_ordinal, arc.parasitic};
 }
 
 template <typename T>
@@ -151,6 +151,8 @@ DualCsrBaselineAttempt DualCsrBaselineFactory::create(
   state.aux_out.source_extent = extentOf(state.aux_out.row_sources);
   state.aux_out.mapping_extent = extentOf(state.aux_out.source_to_aux_row);
   state.reference_payload = makeDualCsrReferencePayload(input);
+  for (std::size_t slot = 0; slot < input.parasitics.nets.size(); ++slot)
+    state.parasitic_net_slots.emplace(input.parasitics.nets[slot].map_key, slot);
 
   state.telemetry.generation_before = 0;
   state.telemetry.generation_after = 0;

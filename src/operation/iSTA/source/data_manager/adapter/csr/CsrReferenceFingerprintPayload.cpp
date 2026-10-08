@@ -189,6 +189,8 @@ std::vector<std::uint8_t> timingInputPayload(const CsrReferenceInput& input)
     encoder.appendBool(arc.eligibility.data_arrival);
     encoder.appendBool(arc.eligibility.data_slew);
     encoder.appendBool(arc.eligibility.clock);
+    encoder.appendBool(arc.native_cell_arc_ordinal.has_value());
+    if (arc.native_cell_arc_ordinal) encoder.appendU64(*arc.native_cell_arc_ordinal);
     detail::appendCellTransferModelFields(encoder, arc.transfer);
     encoder.appendBool(arc.output_load.has_value());
     if (arc.output_load)

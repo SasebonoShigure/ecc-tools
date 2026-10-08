@@ -14,11 +14,13 @@
 //
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <tuple>
 
 #include "CsrCpuReferenceBackendInternal.hpp"
 #include "CsrTableLookup.hpp"
@@ -117,30 +119,63 @@ void resetRequiredSoa(OptionalSoa<T>& soa, std::size_t size, const T& value)
   return false;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus lookupTable(const TimingTableModel& table, double input_slew, double output_load, const ChildTimingArcModel& child,
-                                                     double& result)
+[[nodiscard]] CsrCpuReferenceStageStatus lookupChild(
+    const ArcSemanticPayload& arc, std::size_t child_index, AnalysisMode analysis,
+    Transition output, double input_slew, bool slew, CsrCpuReferenceWorkState& work, double& result)
 {
-  const auto value = lookupCsrTimingTable(table, input_slew, output_load, child.time_unit_scale, child.capacitance_unit_scale);
-  if (!value || !std::isfinite(*value))
-    return CsrCpuReferenceStageStatus::kNumericFailure;
-  result = *value;
-  return CsrCpuReferenceStageStatus::kSuccess;
+  if ((!arc.output_load && !arc.parasitic.tree) || (arc.parasitic.tree && !arc.native_cell_arc_ordinal))
+    return CsrCpuReferenceStageStatus::kInvariantViolation;
+  const auto& child = arc.transfer.children()[child_index];
+  const double load = arc.output_load ? (*arc.output_load)[csrAnalysisIndex(analysis)][csrTransitionIndex(output)] : 0.0;
+  const CsrCpuRcChildKey key{arc.sink, false, arc.native_cell_arc_ordinal.value_or(0), child_index, analysis, output};
+  return evaluateCsrCpuCellTiming(arc.parasitic, key, child, input_slew, load, slew, work.rc, result)
+             == CsrRcEvaluationStatus::kSuccess
+         ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kNumericFailure;
 }
 
-void initializeNet(std::size_t arc, ArcResultSoa& result)
+[[nodiscard]] CsrCpuReferenceStageStatus netTiming(
+    const ArcSemanticPayload& arc, AnalysisMode analysis, Transition transition,
+    double source_slew, bool initializing, const CsrCpuReferenceWorkState& work,
+    double& delay, double& slew)
 {
+  delay = 0.0;
+  slew = source_slew;
+  if (!arc.parasitic.tree) return CsrCpuReferenceStageStatus::kSuccess;
+  if (arc.source.value() >= work.rc_nodes.size() || arc.sink.value() >= work.rc_nodes.size())
+    return CsrCpuReferenceStageStatus::kInvariantViolation;
+  const auto& sink = work.rc_nodes[arc.sink.value()];
+  const ReferencedLibraryCellModel* load_cell = nullptr;
+  if (!sink.is_port) {
+    const auto found = std::lower_bound(work.rc_cells.begin(), work.rc_cells.end(), sink.instance_cell,
+        [](const ReferencedLibraryCellModel& cell, const std::string& name) { return cell.cell_name < name; });
+    if (found != work.rc_cells.end() && found->cell_name == sink.instance_cell) load_cell = &*found;
+  }
+  return evaluateCsrCpuNetTiming(arc.parasitic, analysis, transition, source_slew,
+      work.rc_nodes[arc.source.value()].is_port, load_cell, work.input_port_thresholds,
+      initializing ? nullptr : &work.rc, delay, slew) == CsrRcEvaluationStatus::kSuccess
+      ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kNumericFailure;
+}
+
+[[nodiscard]] CsrCpuReferenceStageStatus initializeNet(
+    std::size_t arc, const ArcSemanticPayload& payload, CsrCpuReferenceWorkState& work)
+{
+  auto& result = work.result.arcs;
   for (AnalysisMode analysis : kAnalyses) {
     for (Transition input_transition : kTransitions) {
+      double delay = 0.0, unused_slew = 0.0;
+      const auto status = netTiming(payload, analysis, input_transition, 0.0, true, work, delay, unused_slew);
+      if (status != CsrCpuReferenceStageStatus::kSuccess) return status;
       const std::size_t transition_lane = csrArcTransitionLane(arc, analysis, input_transition);
-      result.transition_delays.values[transition_lane] = 0.0;
+      result.transition_delays.values[transition_lane] = delay;
       const std::size_t io_lane = csrArcIoLane(arc, analysis, input_transition, input_transition);
       result.input_output_delays.presence[io_lane] = 1;
-      result.input_output_delays.values[io_lane] = 0.0;
+      result.input_output_delays.values[io_lane] = delay;
       const std::size_t type_lane = csrArcTypeLane(arc, input_transition);
       result.transition_types.presence[type_lane] = 1;
       result.transition_types.values[type_lane] = input_transition;
     }
   }
+  return CsrCpuReferenceStageStatus::kSuccess;
 }
 
 void initializeEmptyCell(std::size_t arc, const CellTransferModel& transfer, ArcResultSoa& result)
@@ -173,9 +208,10 @@ void writeInitializationCache(std::size_t lane, double candidate, AnalysisMode a
     result.timing_arc_delays.values[lane] = candidate;
 }
 
-[[nodiscard]] CsrCpuReferenceStageStatus initializeNonemptyCell(std::size_t arc_index, const ArcSemanticPayload& arc, std::size_t child_begin, ArcResultSoa& result)
+[[nodiscard]] CsrCpuReferenceStageStatus initializeNonemptyCell(std::size_t arc_index, const ArcSemanticPayload& arc, std::size_t child_begin, CsrCpuReferenceWorkState& work)
 {
-  if (!arc.output_load)
+  auto& result = work.result.arcs;
+  if (!arc.output_load && !arc.parasitic.tree)
     return CsrCpuReferenceStageStatus::kInvariantViolation;
 
   for (AnalysisMode analysis : kAnalyses) {
@@ -199,7 +235,7 @@ void writeInitializationCache(std::size_t lane, double candidate, AnalysisMode a
 
           double candidate = 0.0;
           CsrCpuReferenceStageStatus status
-              = lookupTable(table, 0.0, (*arc.output_load)[csrAnalysisIndex(analysis)][csrTransitionIndex(output_transition)], child, candidate);
+              = lookupChild(arc, child_index, analysis, output_transition, 0.0, false, work, candidate);
           if (status != CsrCpuReferenceStageStatus::kSuccess)
             return status;
 
@@ -292,6 +328,12 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView
       || !checkedMultiply(work.arc_transition_lane_count, kTransitionCount, work.arc_io_lane_count))
     return CsrCpuReferenceStageStatus::kInvariantViolation;
 
+  struct RcInitialization {
+    NodeId driver;
+    std::uint64_t ordinal;
+    ArcId arc;
+  };
+  std::vector<RcInitialization> rc_initialization;
   std::vector<std::size_t> child_counts(work.arc_count, 0);
   std::optional<CsrCpuReferenceStageStatus> callback_status;
   EdgeVisitResult visit = edges.forEachActiveArc([&](const EdgeEntry& entry) {
@@ -301,6 +343,14 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView
       return EdgeVisitResult::fail(CsrViewError::kCallbackError);
     }
     const std::size_t count = payload.value().transfer.children().size();
+    const auto& arc = payload.value();
+    if (arc.kind == ArcKind::kCell && arc.parasitic.tree && count != 0) {
+      if (!arc.native_cell_arc_ordinal) {
+        callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
+        return EdgeVisitResult::fail(CsrViewError::kCallbackError);
+      }
+      rc_initialization.push_back({arc.sink, *arc.native_cell_arc_ordinal, entry.arc_id});
+    }
     if (count > std::numeric_limits<std::size_t>::max() - work.timing_arc_count) {
       callback_status = CsrCpuReferenceStageStatus::kInvariantViolation;
       return EdgeVisitResult::fail(CsrViewError::kCallbackError);
@@ -350,13 +400,17 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView
         result.transition_delays.presence[csrArcTransitionLane(arc_index, analysis, transition)] = 1;
     CsrCpuReferenceStageStatus status = CsrCpuReferenceStageStatus::kSuccess;
     if (arc.kind == ArcKind::kNet) {
-      initializeNet(arc_index, result);
-    } else if (!arc.output_load) {
+      status = initializeNet(arc_index, arc, work);
+    } else if (!arc.output_load && !arc.parasitic.tree) {
       status = CsrCpuReferenceStageStatus::kInvariantViolation;
     } else if (arc.transfer.children().empty()) {
       initializeEmptyCell(arc_index, arc.transfer, result);
+    } else if (arc.parasitic.tree) {
+      // Complete below in native Liberty order within each driver. Physical
+      // slots and propagation candidate order remain unchanged.
+      return EdgeVisitResult::continueVisit();
     } else {
-      status = initializeNonemptyCell(arc_index, arc, child_offset, result);
+      status = initializeNonemptyCell(arc_index, arc, child_offset, work);
     }
     if (status != CsrCpuReferenceStageStatus::kSuccess) {
       callback_status = status;
@@ -365,8 +419,20 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceArcs(const ActiveCsrEdgeView
     finalizeScalar(arc_index, result);
     return EdgeVisitResult::continueVisit();
   });
-  return visit.control == EdgeVisitControl::kError ? callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation)
-                                                   : CsrCpuReferenceStageStatus::kSuccess;
+  if (visit.control == EdgeVisitControl::kError)
+    return callback_status.value_or(CsrCpuReferenceStageStatus::kInvariantViolation);
+  std::ranges::sort(rc_initialization, [](const RcInitialization& lhs, const RcInitialization& rhs) {
+    return std::tie(lhs.driver, lhs.ordinal, lhs.arc) < std::tie(rhs.driver, rhs.ordinal, rhs.arc);
+  });
+  for (const auto& entry : rc_initialization) {
+    const auto payload = edges.arc(entry.arc);
+    if (!payload) return CsrCpuReferenceStageStatus::kInvariantViolation;
+    const auto id = entry.arc.value();
+    const auto status = initializeNonemptyCell(id, payload.value(), result.timing_arc_row_offsets[id], work);
+    if (status != CsrCpuReferenceStageStatus::kSuccess) return status;
+    finalizeScalar(id, result);
+  }
+  return CsrCpuReferenceStageStatus::kSuccess;
 }
 
 CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges, ArcId arc_id, AnalysisMode analysis, Transition input_transition,
@@ -389,8 +455,11 @@ CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges,
   value.present = true;
   value.delay = work.result.arcs.input_output_delays.values[io_lane];
   value.slew = source_slew;
-  if (!arc.transfer.children().empty()) {
-    if (!arc.output_load)
+  if (arc.kind == ArcKind::kNet) {
+    const auto status = netTiming(arc, analysis, output_transition, source_slew, false, work, value.delay, value.slew);
+    if (status != CsrCpuReferenceStageStatus::kSuccess) return status;
+  } else if (!arc.transfer.children().empty()) {
+    if (!arc.output_load && !arc.parasitic.tree)
       return CsrCpuReferenceStageStatus::kInvariantViolation;
     bool delay_seen = false;
     bool slew_seen = false;
@@ -401,11 +470,10 @@ CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges,
       const auto& child = arc.transfer.children()[child_index];
       if (!csrChildSelected(child, input_transition, output_transition))
         continue;
-      const double output_load = (*arc.output_load)[csrAnalysisIndex(analysis)][csrTransitionIndex(output_transition)];
       const TimingTableModel& delay_table = child.delay_tables[csrTransitionIndex(output_transition)];
       if (delay_table.present) {
         double candidate = 0.0;
-        CsrCpuReferenceStageStatus status = lookupTable(delay_table, source_slew, output_load, child, candidate);
+        CsrCpuReferenceStageStatus status = lookupChild(arc, child_index, analysis, output_transition, source_slew, false, work, candidate);
         if (status != CsrCpuReferenceStageStatus::kSuccess)
           return status;
         status = updateDynamicCache(csrTimingArcLane(child_begin + child_index, analysis, input_transition, output_transition), candidate, analysis,
@@ -418,10 +486,17 @@ CsrCpuReferenceStageStatus evaluateCsrDynamicArc(const ActiveCsrEdgeView& edges,
         }
       }
 
+    }
+    // Native calculateArc completes all delay children before slew children.
+    // RC driver cache misses make this order observable.
+    for (std::size_t child_index = 0; child_index < arc.transfer.children().size(); ++child_index) {
+      const auto& child = arc.transfer.children()[child_index];
+      if (!csrChildSelected(child, input_transition, output_transition))
+        continue;
       const TimingTableModel& slew_table = child.slew_tables[csrTransitionIndex(output_transition)];
       if (slew_table.present) {
         double candidate = 0.0;
-        CsrCpuReferenceStageStatus status = lookupTable(slew_table, source_slew, output_load, child, candidate);
+        CsrCpuReferenceStageStatus status = lookupChild(arc, child_index, analysis, output_transition, source_slew, true, work, candidate);
         if (status != CsrCpuReferenceStageStatus::kSuccess || candidate < 0.0)
           return CsrCpuReferenceStageStatus::kNumericFailure;
         if (!slew_seen || rawBetter(analysis, candidate, aggregate_slew)) {

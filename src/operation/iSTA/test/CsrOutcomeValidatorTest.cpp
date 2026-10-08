@@ -71,8 +71,8 @@ void testComputationOutcome()
   reject(cycle, static_cast<CsrComputationCode>(0xff), "cycle unknown code");
 
   CsrReferenceInput unsupported = clockInput();
-  unsupported.clocks[0].propagated = true;
-  unsupported.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
+  unsupported.case_analysis_constraints = {{"in", NodeId{0}, true}};
+  unsupported.unsupported_reasons = {CsrReferenceUnsupportedReason::kCaseAnalysis};
   refreshIdentity(unsupported);
   requireValid(validateReferenceInput(unsupported), "unsupported reference input");
   accept(unsupported, CsrReferenceSupportResult{unsupported.unsupported_reasons}, "exact support result");

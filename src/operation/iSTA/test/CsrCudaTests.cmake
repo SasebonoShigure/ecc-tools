@@ -40,11 +40,23 @@ if(ISTA_ENABLE_CUDA AND ECC_INCREGPUSTA_DEBUG_CHECKS)
   set_tests_properties(ista_cuda_native_baseline PROPERTIES
       LABELS "ista_cuda;ista_integration;ista_diagnostic" TIMEOUT 300
       ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
+  add_test(NAME ista_cuda_propagated_clock_trace
+      COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/baseline/run_propagated_trace.py"
+      --oracle "$<TARGET_FILE:ista_timing_edit_independent_oracle_probe>"
+      --cpu-probe "$<TARGET_FILE:ista_stage6_production_fresh_probe>"
+      --cuda-full-probe "$<TARGET_FILE:ista_cuda_full_trace_probe>"
+      --cuda-incremental-probe "$<TARGET_FILE:ista_cuda_targeted_trace_probe>"
+      --run-root "${CMAKE_CURRENT_BINARY_DIR}/propagated-clock-runs")
+  set_tests_properties(ista_cuda_propagated_clock_trace PROPERTIES
+      LABELS "ista_cuda;ista_integration;ista_diagnostic" TIMEOUT 1500
+      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endif()
 
 if(ISTA_ENABLE_CUDA)
   add_executable(ista_cuda_dual_csr_session_test CudaDualCsrSessionTest.cpp CudaDualCsrStorageContract.cpp CudaParallelPatchContract.cpp CsrCpuReferenceTestFixture.cpp CsrCpuReferenceDagFixture.cpp
-      CudaDualCsrTestReader.cu CsrCudaSequentialContract.cu timing_edit/BufferTraceCsrJson.cpp)
+      CudaDualCsrTestReader.cu CsrCudaSequentialContract.cu CsrCudaRcPropagationTest.cpp timing_edit/BufferTraceCsrJson.cpp)
   target_sources(ista_cuda_dual_csr_session_test PRIVATE AllocationFailureSupport.cpp)
   target_include_directories(ista_cuda_dual_csr_session_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(ista_cuda_dual_csr_session_test PRIVATE ista_cuda CUDA::cudart)
@@ -85,4 +97,16 @@ if(ISTA_ENABLE_CUDA)
   target_compile_options(ista_cuda_incremental_fallback_test PRIVATE -Wall -Wextra -Werror -pedantic -ffp-contract=off)
   add_test(NAME ista_cuda_incremental_fallback_test COMMAND ista_cuda_incremental_fallback_test)
   set_tests_properties(ista_cuda_incremental_fallback_test PROPERTIES LABELS "ista_cuda;ista_cuda_mixed" TIMEOUT 180)
+endif()
+
+
+if(ISTA_ENABLE_CUDA)
+  add_executable(ista_csr_cuda_parasitic_model_test CsrCudaParasiticModelTest.cu CsrCudaParasiticPackingTest.cu)
+  target_link_libraries(ista_csr_cuda_parasitic_model_test PRIVATE ista_cuda CUDA::cudart)
+  set_target_properties(ista_csr_cuda_parasitic_model_test PROPERTIES
+      CUDA_STANDARD 20 CUDA_STANDARD_REQUIRED ON CUDA_RUNTIME_LIBRARY Shared)
+  target_compile_options(ista_csr_cuda_parasitic_model_test PRIVATE
+      --fmad=false -Xcompiler=-Wall,-Wextra,-Werror,-ffp-contract=off)
+  add_test(NAME ista_csr_cuda_parasitic_model_test COMMAND ista_csr_cuda_parasitic_model_test)
+  set_tests_properties(ista_csr_cuda_parasitic_model_test PROPERTIES LABELS "ista_cuda" TIMEOUT 180)
 endif()

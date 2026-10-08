@@ -9,7 +9,7 @@
 #include "NativeEditTransaction.hpp"
 #include "NativeFullEditPreparer.hpp"
 #include "TimingEditResolver.hpp"
-#include "TimingGraphCsrAdapter.hpp"
+#include "CudaFullExecution.hpp"
 #include "TimingResultScatterInternal.hpp"
 #include "TimingSemanticKey.hpp"
 #include "StaCsrSessionContext.hpp"
@@ -45,7 +45,6 @@ CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Dat
   owned.device.requireCommitted();
   require(owned.device.generation().value() == 0, "trace must start with the loaded baseline");
   auto state = NativeFullEditPreparer::bindBaseline(baseline, baseline_input, program.baseline());
-  const auto& analysis = baseline_input.analysis_context;
   CudaFullTraceResult result;
   result.batches.reserve(prefix);
   result.backend_setup_ms = elapsed(setup_started);
@@ -58,39 +57,26 @@ CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Dat
       batch.generation_before = state.generation().value();
       batch.prepare_ms = elapsed(started);
       auto phase = Clock::now();
-      auto& transaction = prepared.transaction();
-      NativeCandidateExecutor::prepareFullGraph(transaction);
-      batch.native_graph_ms = elapsed(phase);
-      phase = Clock::now();
-      auto exported = exportCsrReferenceInputCandidate(transaction.database(), analysis, authority.sessionToken().value(), session.libraryModels(baseline));
-      require(std::holds_alternative<CsrReferenceInput>(exported), "full CSR export failed");
-      auto input = std::move(std::get<CsrReferenceInput>(exported));
-      batch.export_ms = elapsed(phase);
-      batch.node_count = input.nodes.size();
-      batch.arc_count = input.arcs.size();
-      std::vector<std::string> node_names;
-      node_names.reserve(input.nodes.size());
-      for (const auto& node : input.nodes)
-        node_names.push_back(node.key.full_name);
-      std::vector<std::optional<std::size_t>> arc_ranks(input.arcs.size());
-      for (const auto& arc : input.arcs)
-        arc_ranks.at(arc.id.value()) = arc.native_traversal_rank;
-      auto candidate = owned.device.stageFullNativeExport(input, {input.nodes.size(), current.get_net_map().size(), input.arcs.size()});
-      require(!candidate.computationCode(), "full GPU computation failed");
+      auto staged = detail::stageCudaFullBatch(session, prepared, owned.device);
+      auto& candidate = staged.candidate;
+      batch.native_graph_ms = staged.native_graph_ms;
+      batch.export_ms = staged.export_ms;
+      batch.node_count = staged.node_count;
+      batch.arc_count = staged.arc_count;
       batch.generation_after = prepared.targetGeneration().value();
       if constexpr (incregpusta_debug_checks_enabled) {
         CsrTimingResult timing;
-        timing.schema_version = input.schema_version;
-        timing.source_identity = input.source_identity;
+        timing.schema_version = staged.diagnostic_input->schema_version;
+        timing.source_identity = staged.diagnostic_input->source_identity;
         static_cast<CsrTimingValues&>(timing) = candidate.timingValues();
-        batch.diagnostic_input.emplace(std::move(input));
+        batch.diagnostic_input = std::move(staged.diagnostic_input);
         batch.diagnostic_timing.emplace(std::move(timing));
       }
       // All allocating preparation precedes the no-throw native commit.
       result.batches.push_back(std::move(batch));
       require(owned.device.publish(std::move(candidate)), "full GPU commit rejected");
       require(prepared.commit(), "native full commit rejected");
-      owned.committedFull(std::move(node_names), std::move(arc_ranks));
+      owned.committedFull(std::move(staged.node_names), std::move(staged.arc_ranks));
       result.batches.back().commit_ms = elapsed(started);
       phase = Clock::now();
       session.materializeCudaTiming(current, authority);

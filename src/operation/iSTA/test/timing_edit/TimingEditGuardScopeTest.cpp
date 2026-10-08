@@ -6,6 +6,8 @@
 // iEDA is licensed under Mulan PSL v2.
 // ***************************************************************************************
 #include <optional>
+#include <future>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -186,11 +188,71 @@ void testInstalledOwnerIsBoundToGuardThread()
           "wrong-thread poisoned session close failed");
 }
 
+void testEditExcludesSessionClose()
+{
+  installNativeTransactionBaseline();
+  GuardedTestSession session;
+  std::promise<void> started;
+  std::promise<StaStatus> completed;
+  auto entered = started.get_future();
+  auto done = completed.get_future();
+  std::thread closer;
+  bool nested_rejected = false, close_blocked = false;
+  const auto status = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(session.session(),
+      [&](std::uint64_t, StaCsrSessionContext&, const NativeExecutionAuthority&) {
+        nested_rejected = session.session().close().code == StaSessionStatusCode::kInvalidState;
+        const auto nested = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(session.session(),
+            [](std::uint64_t, StaCsrSessionContext&, const NativeExecutionAuthority&) {
+              throw std::runtime_error("recursive edit was admitted");
+              return StaStatus::success(StaSessionState::kBaselineExecuted);
+            });
+        nested_rejected = nested_rejected && nested.code == StaSessionStatusCode::kInvalidState;
+        closer = std::thread([&] { started.set_value(); completed.set_value(session.session().close()); });
+        entered.wait();
+        close_blocked = done.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout
+                        && session.session().state() == StaSessionState::kBaselineExecuted;
+        return StaStatus::success(session.session().state());
+      });
+  if (closer.joinable()) closer.join();
+  require(status.ok() && nested_rejected && close_blocked && done.get().ok(),
+          "edit did not reject recursion or exclude concurrent session close");
+}
+
+void testGlobalGuardRejectsApiLockInversion()
+{
+  installNativeTransactionBaseline();
+  GuardedTestSession session;
+  std::promise<void> api_held;
+  auto ready = api_held.get_future();
+  std::thread contender;
+  StaStatus nested;
+  bool close_rejected = false;
+  StaTimingEditSessionProbeAccess::inspectDatabase(session.token().value(), [&](const Database&) {
+    contender = std::thread([&] {
+      // This is the close path's lock order: API held while waiting for global.
+      auto api = StaTimingEditSessionProbeAccess::lockSessionApiForTesting(session.session());
+      api_held.set_value();
+      StaTimingEditSessionProbeAccess::inspectDatabase(session.token().value(), [](const Database&) {});
+    });
+    ready.wait();
+    nested = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(session.session(),
+        [](std::uint64_t, StaCsrSessionContext&, const NativeExecutionAuthority&) {
+          return StaStatus::success(StaSessionState::kBaselineExecuted);
+        });
+    close_rejected = session.session().close().code == StaSessionStatusCode::kInvalidState;
+  });
+  contender.join();
+  require(nested.code == StaSessionStatusCode::kInvalidState && close_rejected,
+          "global guard recursion waited on a conflicting session API lock");
+}
+
 }  // namespace
 
 int main()
 {
   NativeTransactionRuntime runtime;
+  testGlobalGuardRejectsApiLockInversion();
+  testEditExcludesSessionClose();
   testInstalledOwnerCannotEscapeOperationGuard();
   testInstalledOwnerIsBoundToGuardThread();
   return 0;

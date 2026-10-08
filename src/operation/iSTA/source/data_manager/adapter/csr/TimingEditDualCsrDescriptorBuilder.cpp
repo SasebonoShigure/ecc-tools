@@ -14,6 +14,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -313,17 +314,17 @@ void requireArcCoverage(const PendingStructuredBatch& pending,
           || captured.payload.is_loop_disabled
                  != expected.is_loop_disabled
           || captured.payload.eligibility != expected.eligibility
+          || captured.payload.native_cell_arc_ordinal != expected.native_cell_arc_ordinal
           || (base_unchanged
               && (captured.payload.source != expected.source
                   || captured.payload.sink != expected.sink))
           || (delay_changes == 0
               && captured.payload.transfer != expected.transfer)
           || (load == records.net_loads.end()
-              && captured.payload.output_load != expected.output_load)
+              && (captured.payload.output_load != expected.output_load || captured.payload.parasitic != expected.parasitic))
           || (load != records.net_loads.end()
               && captured.payload.output_load
-                     != std::optional<csr::ArcOutputLoadMatrix>{
-                         load->output_load}))
+                     != load->output_load))
         invalid("captured existing arc changed outside its field policy");
     }
     if (groups.at(&captured.payload.key.base).size() != request.expected_post_multiplicity)
@@ -430,8 +431,7 @@ void requireForbiddenReferenceFieldsEmpty(
       || delta.ordered_root_ids || delta.ordered_start_ids
       || delta.ordered_end_ids || delta.clock_tags || delta.clocks
       || delta.port_constraints || delta.case_analysis_constraints
-      || delta.timing_check_endpoints || delta.parasitics
-      || delta.start_seeds || delta.endpoint_required
+      || delta.timing_check_endpoints || delta.endpoint_required
       || delta.unsupported_reasons)
     invalid("capture attempted to replace an unrequested reference field");
 }
@@ -442,6 +442,34 @@ void requireReferenceDelta(const PendingStructuredBatch& pending,
   const auto& current = pending.expectedBefore().graph().reference_payload;
   const auto& delta = records.reference_payload;
   requireForbiddenReferenceFieldsEmpty(delta);
+  // Sealed native capture may update only affected RC nets and their deferred
+  // launch seed binding. The updater checks slot/old-value applicability.
+  std::set<std::string_view, std::less<>> affected_nets;
+  if (delta.parasitics || delta.start_seeds)
+    for (const auto& net : pending.capturePlan().load_nets)
+      affected_nets.insert(net.expected_name);
+  if (delta.parasitics) {
+    if (current.parasitics.nets.empty() || current.analysis_context.rc_corner != "pre_route")
+      invalid("RC delta requires the pre-route baseline");
+    for (const auto& change : delta.parasitics->changes)
+      if (change.expected.map_key != change.replacement.map_key || !affected_nets.contains(change.replacement.map_key))
+        invalid("RC delta changes an unrequested net");
+    for (const auto& net : delta.parasitics->appends)
+      if (!affected_nets.contains(net.map_key)) invalid("RC append is not in the capture plan");
+  }
+  if (delta.start_seeds) {
+    if (!delta.start_seeds->appends.empty()) invalid("data buffer insertion cannot append launch seeds");
+    for (const auto& change : delta.start_seeds->changes) {
+      auto only_binding = change.expected;
+      only_binding.parasitic = change.replacement.parasitic;
+      const auto& rc = only_binding.parasitic;
+      if (only_binding != change.replacement
+          || only_binding.availability != csr::StartSeedAvailability::kDeferredSequential
+          || !rc.tree || rc.terminal != 0 || rc.tree->terminals.empty()
+          || rc.tree->terminals.front() != only_binding.seed_node || !affected_nets.contains(rc.tree->net_name))
+        invalid("launch seed change exceeds the affected RC binding");
+    }
+  }
 
   std::vector<csr::InstanceRecord> instances;
   for (const auto& captured : records.instances) {
@@ -620,8 +648,7 @@ void requireCapturedLoadsApplied(const PendingStructuredBatch& pending,
         records.net_loads, sink.net_name, &CapturedNetLoad::net_name);
     if (load != records.net_loads.end()
         && arc.payload.output_load
-               != std::optional<csr::ArcOutputLoadMatrix>{
-                   load->output_load})
+               != load->output_load)
       invalid("captured arc did not apply its invalidated net load");
   }
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CsrCudaTableLookup.cuh"
+#include "CsrCudaRcPropagation.cuh"
 
 namespace ista::csr::cuda_detail {
 
@@ -57,14 +58,21 @@ __device__ inline void initializeArc(DeviceView view, Index index)
   ArcState& state = view.arc_state[index];
   if (!arc.active)
     return;
-  if (!arc.net && !arc.has_load) {
+  if (!arc.net && !arc.has_load && arc.rc_binding == absent) {
     *view.status = Status::invariant;
     return;
   }
   for (unsigned analysis = 0; analysis < 2; ++analysis) {
     for (unsigned input = 0; input < 2; ++input) {
       if (arc.net || arc.child_count == 0) {
-        const double delay = arc.net ? 0.0 : (analysis == 0 ? arc.delay_max : arc.delay_min);
+        double delay = arc.net ? 0.0 : (analysis == 0 ? arc.delay_max : arc.delay_min);
+        if (arc.net && arc.rc_binding != absent) {
+          double slew = 0.0;
+          if (netTiming(view, arc.rc_binding, analysis, input, 0.0, true, delay, slew) != CsrRcEvaluationStatus::kSuccess) {
+            numeric(view);
+            return;
+          }
+        }
         state.transition[analysis * 2 + input] = delay;
         state.io[ioLane(analysis, input, input)] = {delay, true};
         state.type[input] = {static_cast<std::uint8_t>(input), true};
@@ -84,7 +92,7 @@ __device__ inline void initializeArc(DeviceView view, Index index)
           const Child& child = view.children[child_index];
           if (!childSelected(child, input, output) || !child.delay[output].present)
             continue;
-          const double candidate = lookupTable(view, child.delay[output], child, 0.0, arc.load[analysis * 2 + output]);
+          const double candidate = cellTiming(view, arc.rc_binding, arc.child_begin, local, analysis, output, 0.0, arc.load[analysis * 2 + output], false);
           ChildState& cache = view.child_state[arc.child_state_begin + local];
           if (!cache.delay[lane].present) {
             cache.delay[lane] = {candidate, true};
@@ -137,8 +145,14 @@ __device__ inline DynamicValue dynamicArc(DeviceView view, Index index, unsigned
   if (!state.io[lane].present)
     return value;
   value = {state.io[lane].value, source_slew, true};
-  if (arc.child_count != 0) {
-    if (!arc.has_load) {
+  if (arc.net && arc.rc_binding != absent) {
+    if (netTiming(view, arc.rc_binding, analysis, output, source_slew, false, value.delay, value.slew)
+        != CsrRcEvaluationStatus::kSuccess) {
+      numeric(view);
+      return value;
+    }
+  } else if (arc.child_count != 0) {
+    if (!arc.has_load && arc.rc_binding == absent) {
       *view.status = Status::invariant;
       return value;
     }
@@ -153,7 +167,7 @@ __device__ inline DynamicValue dynamicArc(DeviceView view, Index index, unsigned
         continue;
       const double load = arc.load[analysis * 2 + output];
       if (child.delay[output].present) {
-        const double candidate = lookupTable(view, child.delay[output], child, source_slew, load);
+        const double candidate = cellTiming(view, arc.rc_binding, arc.child_begin, local, analysis, output, source_slew, load, false);
         ChildState& cache = view.child_state[arc.child_state_begin + local];
         if (!cache.delay[lane].present) {
           *view.status = Status::invariant;
@@ -170,8 +184,15 @@ __device__ inline DynamicValue dynamicArc(DeviceView view, Index index, unsigned
           delay_seen = true;
         }
       }
+    }
+    // Native delay children precede slew children, including cache side effects.
+    for (Index local = 0; local < arc.child_count; ++local) {
+      const Child& child = view.children[arc.child_begin + local];
+      if (!childSelected(child, input, output))
+        continue;
+      const double load = arc.load[analysis * 2 + output];
       if (child.slew[output].present) {
-        const double candidate = lookupTable(view, child.slew[output], child, source_slew, load);
+        const double candidate = cellTiming(view, arc.rc_binding, arc.child_begin, local, analysis, output, source_slew, load, true);
         if (candidate < 0.0) {
           numeric(view);
           return value;

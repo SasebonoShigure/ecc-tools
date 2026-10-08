@@ -41,9 +41,12 @@ class CsrFullExactMismatch final : public std::runtime_error
 
 // Test-only bridge. Production headers only forward-declare and friend this
 // class; no timing-edit batch API is added to STAInterface in Stage 3.
+class PhysicalStaSessionState;
 class StaTimingEditSessionProbeAccess final
 {
  public:
+  [[nodiscard]] static std::string physicalDiagnostic(IncrementalStaSession& session);
+  static PhysicalStaSessionState& physicalState(StaCsrSessionContext& context);
   using GuardedMutation = std::function<StaStatus(std::uint64_t, StaCsrSessionContext&, const timing_edit::NativeExecutionAuthority&)>;
 
   // Timing-only test workloads reuse production authorization and failure handling.
@@ -62,12 +65,12 @@ class StaTimingEditSessionProbeAccess final
       StaCsrSessionContext& context);
   [[nodiscard]] static StaCsrScatterAttempt scatterForTesting(
       StaCsrSessionContext& context, Database& database, const csr::CsrTimingResult& result);
+  static void inspectDatabase(std::uint64_t token, const std::function<void(const Database&)>& callback);
+  static std::unique_lock<std::mutex> lockSessionApiForTesting(IncrementalStaSession& session);
   static void requireCsrFullExact(csr::CsrCommittedSessionSnapshot& snapshot, const Database& database);
   static void requireNativeTimingEqual(const csr::CsrReferenceInput& input,
                                       const csr::CsrTimingResult& reference, const Database& database);
 
- private:
-  static void poisonSessionOnScopeViolation(void* opaque_session) noexcept;
 };
 
 }  // namespace ista

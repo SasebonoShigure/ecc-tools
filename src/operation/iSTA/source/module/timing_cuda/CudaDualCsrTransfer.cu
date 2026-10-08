@@ -20,6 +20,10 @@ void CudaDualCsrSession::Impl::bindGraph() noexcept
   view.arcs = storage->graph.arcs.data;
   view.children = storage->children.data;
   view.table_data = storage->tables.data;
+  view.rc_load_cells = storage->rc_load_cells.data;
+  view.rc_nets = storage->graph.rc_views.data;
+  view.rc_bindings = storage->graph.rc_bindings.data;
+  view.rc_net_by_node = storage->graph.rc_net_by_node.data;
   view.endpoints = storage->graph.endpoints.data;
   view.indegrees = storage->indegrees.data;
 }
@@ -58,6 +62,7 @@ void CudaDualCsrSession::Impl::allocate()
   grow(storage->graph.arcs, view.arc_count, old ? old->view.arc_count : 0);
   grow(storage->children, view.child_count, storage->uploaded_children);
   grow(storage->tables, table_count, storage->uploaded_tables);
+  grow(storage->rc_load_cells, storage->models.rc_load_cells.size(), storage->uploaded_rc_load_cells);
   grow(storage->graph.endpoints, view.endpoint_count, old ? old->view.endpoint_count : 0);
   grow(storage->indegrees, view.node_count);
   if (storage->graph.aux_storage.size() < view.node_count)
@@ -156,6 +161,7 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
   storage->arc_undo_count = arcs.size();
   try {
     memory.record(0);
+    transferRcPatch(prior);
     const auto offset_begin = prior.view.node_count + 1;
     memory.upload(host->out_offsets.data() + offset_begin, const_cast<Index*>(view.out_offsets) + offset_begin, host->out_offsets.size() - offset_begin);
     memory.upload(host->in_offsets.data() + offset_begin, const_cast<Index*>(view.in_offsets) + offset_begin, host->in_offsets.size() - offset_begin);

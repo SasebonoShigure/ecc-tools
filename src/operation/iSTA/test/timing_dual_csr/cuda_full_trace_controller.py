@@ -20,7 +20,7 @@ def require_cuda_telemetry(timing: dict) -> None:
 def require_performance_result(result: dict, prefix: int, build: dict) -> None:
     require(not any(key in result for key in ("functional", "batches", "device_checks")),
             "performance child generated a diagnostic receipt")
-    require(result["schema_version"] == "ista-cuda-full-trace/4.0.0"
+    require(result["schema_version"] == "ista-cuda-full-trace/5.0.0"
             and result["build"] == build and result["debug_checks_enabled"] is False
             and result["correctness_comparison"] == "not_run"
             and result["requested_backend"] == result["executed_backend"] == "cuda"
@@ -141,8 +141,8 @@ def run(args: argparse.Namespace) -> int:
             input_flag=input_flag,
         )
         require(
-            gpu["schema_version"] == "ista-cuda-full-trace/4.0.0"
-            and cpu["schema_version"] == "ista-cuda-full-trace/4.0.0",
+            gpu["schema_version"] == "ista-cuda-full-trace/5.0.0"
+            and cpu["schema_version"] == "ista-cuda-full-trace/5.0.0",
             "unexpected full trace schema",
         )
         difference = first_difference(gpu["batches"][-1], cpu["functional"])
@@ -196,7 +196,7 @@ def run(args: argparse.Namespace) -> int:
         )
     write_json(
         root / "verdict.json",
-        {"schema_version": "ista-cuda-full-verdict/4.0.0", "build": build, "prefixes": verdicts},
+        {"schema_version": "ista-cuda-full-verdict/5.0.0", "build": build, "prefixes": verdicts},
     )
     return 0
 

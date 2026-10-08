@@ -15,6 +15,8 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include <algorithm>
+#include <set>
+#include <string_view>
 
 #include "CsrTimingResultValidatorInternal.hpp"
 
@@ -65,9 +67,12 @@ void validateArcResultSoa(const CsrReferenceInput& input, const ArcResultSoa& re
   const bool data_shape = checkedProduct(input.nodes.size(), kAnalysisCount * kTransitionCount, data_lanes, errors, ResultClass::kShape, "result.data_slews")
                           && data_slews.presence.size() == data_lanes && data_slews.values.size() == data_lanes
                           && physical_slews.presence.size() == data_lanes && physical_slews.values.size() == data_lanes;
-  if (input.parasitics.nets.empty() && data_shape && delays_ok && min_delays_ok && max_delays_ok && transition_ok && io_ok && graph_ok && types_ok) {
+  if (data_shape && delays_ok && min_delays_ok && max_delays_ok && transition_ok && io_ok && graph_ok && types_ok) {
+    std::set<std::string_view> rc_nets;
+    for (const auto& net : input.parasitics.nets)
+      rc_nets.insert(net.map_key);
     for (std::size_t arc = 0; arc < arc_count; ++arc) {
-      if (input.arcs[arc].kind != ArcKind::kNet)
+      if (input.arcs[arc].kind != ArcKind::kNet || rc_nets.contains(input.arcs[arc].key.base.owner_name))
         continue;
       if (result.delays.values[arc] != 0 || result.min_delays.values[arc] != 0 || result.max_delays.values[arc] != 0)
         reject(errors, ResultClass::kNumeric, "result.arcs.delays", "no-SPEF net scalar delays must be zero");

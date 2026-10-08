@@ -1,3 +1,4 @@
+add_subdirectory(${IZH_MODULE}/timing_optimization)
 add_subdirectory(${IZH_MODULE}/antenna_checker)
 add_subdirectory(${IZH_MODULE}/fanout_fixer)
 add_subdirectory(${IZH_MODULE}/filler_inserter)

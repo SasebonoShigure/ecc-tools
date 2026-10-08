@@ -50,6 +50,8 @@
 #include "IdbObs.h"
 #include "IdbPins.h"
 
+namespace izh { class PreparedPhysicalBatch; }
+
 namespace idb {
 class IdbRegion;
 
@@ -173,6 +175,7 @@ class IdbInstance : public IdbObject
 
 class IdbInstanceList
 {
+  friend class izh::PreparedPhysicalBatch;
  public:
   IdbInstanceList();
   ~IdbInstanceList();

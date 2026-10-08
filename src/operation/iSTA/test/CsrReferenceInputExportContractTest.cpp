@@ -189,7 +189,7 @@ void verifyRichChain()
           "no-SPEF export must materialize every output-load matrix");
   const auto divider = std::ranges::find(first.arcs, "div_net", [](const ArcRecord& arc) { return arc.key.base.owner_name; });
   require(divider != first.arcs.end() && divider->kind == ArcKind::kNet && divider->is_disabled, "sequential divider exact disabled mirror is absent");
-  const std::vector expected_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock, CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kCaseAnalysis};
+  const std::vector expected_reasons = {CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kCaseAnalysis};
   require(first.unsupported_reasons == expected_reasons, "rich chain support reasons are not exact-derived and sorted");
 }
 
@@ -209,7 +209,7 @@ void verifyEmptyDiamondAndCycle()
   require(cycle_input.ordered_root_ids.empty() && !cycle_input.arcs.empty(), "active-cycle fixture unexpectedly has a root");
 }
 
-void verifyParasiticAllOrNoneAndPathExclusion()
+void verifyParasiticNetLoadsAndPathExclusion()
 {
   auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
   addParasitics(fixture.database(), "first.spef");
@@ -218,8 +218,9 @@ void verifyParasiticAllOrNoneAndPathExclusion()
   const CsrReferenceInput first = exportWithoutNativeWrites(fixture, context, 9, "parasitic");
   require(first.parasitics.nets.size() == 1 && first.parasitics.nets[0].nodes.size() == 2 && first.parasitics.nets[0].resistors.size() == 1,
           "raw parasitic semantic was not detached completely");
-  require(std::ranges::all_of(first.arcs, [](const ArcRecord& arc) { return !arc.output_load.has_value(); }),
-          "nonempty parasitics must make every output load absent");
+  require(std::ranges::all_of(first.arcs, [&](const ArcRecord& arc) {
+            return arc.output_load.has_value() != (first.nodes[arc.sink.value()].net_name == "div_net");
+          }), "parasitics must only suppress the corresponding net load");
   require(!first.unsupported_reasons.empty() && first.unsupported_reasons.front() == CsrReferenceUnsupportedReason::kParasiticNet,
           "parasitic support reason is missing or unsorted");
 
@@ -307,7 +308,7 @@ int main()
   try {
     verifyRichChain();
     verifyEmptyDiamondAndCycle();
-    verifyParasiticAllOrNoneAndPathExclusion();
+    verifyParasiticNetLoadsAndPathExclusion();
     verifyIdentityAndSessionBinding();
     verifyImmutableSessionModels();
   } catch (const std::exception& error) {

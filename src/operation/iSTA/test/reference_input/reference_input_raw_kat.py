@@ -123,5 +123,8 @@ def complex_raw_kat_input() -> model.RawReferenceInput:
         (),
         (),
         (model.RawReferencedLibraryCell("slow", "CELL", payload),),
-        model.RawParasitics("fixture.spef", "PF", "OHM", (z_net, a_net)),
+        model.RawParasitics(
+            "fixture.spef", "PF", "OHM", (z_net, a_net),
+            model.InputPortRcThresholds(0.5, (0.125, 0.25), (0.75, 0.875)),
+        ),
     )

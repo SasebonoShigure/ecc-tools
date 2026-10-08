@@ -71,7 +71,8 @@ DualCsrProjectedArc projectArc(const DualCsrState& state,
       .is_loop_disabled = source.is_loop_disabled,
       .eligibility = source.eligibility,
       .transfer = source.transfer,
-      .output_load = source.output_load};
+      .output_load = source.output_load,
+      .native_cell_arc_ordinal = source.native_cell_arc_ordinal};
 }
 
 DualCsrProjectedInstance projectInstance(

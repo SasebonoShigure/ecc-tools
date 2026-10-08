@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "CsrReferencePrimitives.hpp"
+#include "CsrParasiticModel.hpp"
 
 namespace ista::csr {
 
@@ -139,6 +140,9 @@ struct ArcRecord
   ArcEligibility eligibility;
   CellTransferModel transfer;
   std::optional<ArcOutputLoadMatrix> output_load;
+  // Index in the owning Liberty cell, distinct from child/table interning.
+  std::optional<std::uint64_t> native_cell_arc_ordinal{std::nullopt};
+  CsrParasiticBinding parasitic{};
 
   friend bool operator==(const ArcRecord&, const ArcRecord&) = default;
 };
@@ -197,6 +201,8 @@ struct StartSeedModel
   OptionalLaneMatrix slew;
   std::optional<NodeId> crpr_node;
   std::optional<Transition> crpr_transition;
+  // Q can have no graph arc; its deferred seed still owns the net model.
+  CsrParasiticBinding parasitic{};
 
   friend bool operator==(const StartSeedModel&, const StartSeedModel&) = default;
 };
@@ -297,6 +303,11 @@ struct ReferencedLibraryCellModel
   std::vector<LibraryPortModel> ports;
   std::vector<LibraryCellArcModel> cell_arcs;
   std::vector<LibraryTimingCheckArcModel> timing_checks;
+  // Load-cell library thresholds, independent of its outgoing arc children.
+  double slew_derate{1.0};
+  std::array<double, kTransitionCount> slew_lower_threshold_pct{0.3, 0.3};
+  std::array<double, kTransitionCount> slew_upper_threshold_pct{0.7, 0.7};
+  std::array<double, kTransitionCount> input_threshold_pct{0.5, 0.5};
 
   friend bool operator==(const ReferencedLibraryCellModel&, const ReferencedLibraryCellModel&) = default;
 };
@@ -332,11 +343,20 @@ struct ParasiticNetModel
   friend bool operator==(const ParasiticNetModel&, const ParasiticNetModel&) = default;
 };
 
+struct InputPortRcThresholds
+{
+  double slew_derate{1.0};
+  std::array<double, kTransitionCount> lower{0.3, 0.3};
+  std::array<double, kTransitionCount> upper{0.7, 0.7};
+  friend bool operator==(const InputPortRcThresholds&, const InputPortRcThresholds&) = default;
+};
+
 struct ParasiticModel
 {
   std::string capacitance_unit;
   std::string resistance_unit;
   std::vector<ParasiticNetModel> nets;
+  InputPortRcThresholds input_port_thresholds{};
 
   friend bool operator==(const ParasiticModel&, const ParasiticModel&) = default;
 };

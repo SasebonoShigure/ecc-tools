@@ -16,6 +16,8 @@
 // ***************************************************************************************
 #include "DataManager.hpp"
 
+#include <stdexcept>
+
 #include "Logger.hpp"
 #include "Monitor.hpp"
 #include "STAInterface.hpp"
@@ -631,6 +633,18 @@ void DataManager::parseCommand(std::vector<std::string>& token_list)
   }
   if (token_list.front() == "create_clock") {
     parseCreateClock(token_list);
+  } else if (token_list.front() == "set_propagated_clock") {
+    std::vector<std::string> names;
+    for (std::size_t i = 1; i < token_list.size(); ++i)
+      pushObjectName(names, token_list[i]);
+    if (names.empty())
+      throw std::invalid_argument("set_propagated_clock requires at least one clock");
+    auto& clocks = getDatabase().get_timing_constraint().get_clock_map();
+    for (const auto& name : names)
+      if (!clocks.contains(name))
+        throw std::invalid_argument("set_propagated_clock: unknown clock " + name);
+    for (const auto& name : names)
+      clocks.at(name).set_is_propagated(true);
   } else if (token_list.front() == "set_case_analysis") {
     parseSetCaseAnalysis(token_list);
   } else if (token_list.front() == "set_input_delay") {

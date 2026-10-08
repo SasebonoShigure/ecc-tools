@@ -185,10 +185,10 @@ void testClockWaveformReachabilityAndOverlap()
 
   CsrReferenceInput propagated = input;
   propagated.clocks[0].propagated = true;
-  propagated.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
+  propagated.unsupported_reasons.clear();
   refreshIdentity(propagated);
   requireValid(validateReferenceInput(propagated), "propagated-clock input");
-  rejectMutation(propagated, "propagated reason exact", [](auto& value) { value.unsupported_reasons.erase(value.unsupported_reasons.begin()); });
+  rejectMutation(propagated, "spurious propagated rejection", [](auto& value) { value.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock}; });
 }
 
 }  // namespace

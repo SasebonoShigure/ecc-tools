@@ -17,6 +17,8 @@
 #pragma once
 
 #include <any>
+#include <array>
+#include <vector>
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -24,6 +26,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <span>
 #include <string>
 
 #include "StaExecutionContract.hpp"
@@ -35,8 +38,30 @@ struct StaAnalysisContext;
 }  // namespace ista::csr
 
 namespace ista {
+namespace timing_edit { struct EditBatch; }
+struct PhysicalBufferLocation;
+struct PhysicalStaPlacement;
+struct PhysicalGreedySelection;
 
 class StaCsrSessionContext;
+struct PhysicalStaConfig
+{
+  std::string bottom_layer, top_layer, horizontal_layer, vertical_layer;
+  std::string recovery_directory{};
+  // Exact checkpoint, constraints, Liberty and technology inputs supplied by the production loader.
+  std::map<std::string, std::string> checkpoint_files{};
+};
+struct PhysicalStaBatchResult
+{
+  std::uint64_t generation;
+  StaExecutionRecord execution;
+};
+struct PhysicalStaCurrentResult
+{
+  std::uint64_t generation;
+  std::vector<std::pair<std::string, std::array<double, 3>>> timing;
+  std::string qor_json, paths_json;
+};
 class StaTimingEditSessionProbeAccess;
 struct StaCsrReferenceAttempt;
 struct StaCsrScatterAttempt;
@@ -66,6 +91,15 @@ class IncrementalStaSession
 
   StaStatus initialize(const csr::StaAnalysisContext& analysis_context, std::map<std::string, std::any> config_map);
   StaExecutionResult runFullBaseline();
+  StaExecutionResult runPhysicalBaseline(const PhysicalStaConfig& config);
+  PhysicalStaBatchResult recoverPhysicalBaseline(const PhysicalStaConfig& config);
+  PhysicalStaBatchResult applyPhysicalBatch(const timing_edit::EditBatch& edits, std::span<const PhysicalBufferLocation> locations);
+  PhysicalStaCurrentResult readPhysicalResult(bool summary_only = false);
+  PhysicalGreedySelection selectPhysicalBuffers(std::uint64_t expected_generation,
+      const std::vector<std::string>& cell_names, std::uint64_t top_k, std::uint64_t max_buffers);
+  std::string publishPhysicalArtifacts(std::uint64_t expected_generation);
+  std::string readPhysicalArtifacts(std::uint64_t expected_generation);
+  PhysicalStaPlacement readPhysicalPlacement(std::uint64_t expected_generation, const std::vector<std::string>& cell_names);
   StaStatus close();
   StaCsrReferenceAttempt computeCsrReferenceForTesting();
   StaCsrScatterAttempt scatterCsrTimingResultForTesting(const csr::CsrTimingResult& result);
@@ -77,7 +111,9 @@ class IncrementalStaSession
 
  private:
   friend class StaTimingEditSessionProbeAccess;
+  friend class StaEditOperation;
 
+  StaExecutionResult runPhysicalBaselineImpl(const PhysicalStaConfig& config, bool recovery);
   [[nodiscard]] StaStatus withCurrentState(StaStatus status) const;
   [[nodiscard]] StaStatus invalidState(std::string message) const;
   [[nodiscard]] bool usesCpuSnapshot() const noexcept;

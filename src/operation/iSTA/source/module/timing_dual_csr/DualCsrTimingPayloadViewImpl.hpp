@@ -24,6 +24,7 @@ class DualCsrTimingPayloadViewImpl final : public csr::TimingPayloadView
   [[nodiscard]] std::size_t nodeCount() const noexcept override;
   [[nodiscard]] const std::vector<csr::NodeRecord>& nodeRecords() const noexcept override;
   [[nodiscard]] const std::vector<csr::ReferencedLibraryCellModel>& referencedLibraryCells() const noexcept override;
+  [[nodiscard]] const csr::InputPortRcThresholds& inputPortRcThresholds() const noexcept override;
   [[nodiscard]] const std::vector<csr::NodeId>& orderedRootIds() const noexcept override;
   [[nodiscard]] const std::vector<csr::NodeId>& orderedStartIds() const noexcept override;
   [[nodiscard]] const std::vector<csr::NodeId>& orderedEndIds() const noexcept override;

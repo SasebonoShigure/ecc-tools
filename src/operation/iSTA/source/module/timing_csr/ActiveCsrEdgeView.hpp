@@ -30,6 +30,9 @@ struct ArcSemanticPayload
   ArcEligibility eligibility;
   CellTransferModel transfer;
   std::optional<ArcOutputLoadMatrix> output_load;
+  // Index in the owning Liberty cell, distinct from child/table interning.
+  std::optional<std::uint64_t> native_cell_arc_ordinal{std::nullopt};
+  CsrParasiticBinding parasitic{};
 
   friend bool operator==(const ArcSemanticPayload&, const ArcSemanticPayload&) = default;
 };

@@ -5,6 +5,22 @@
 #include "CudaDualCsrTestReader.hpp"
 #include "timing_edit/BufferTraceCsrJson.hpp"
 namespace ista::csr {
+CudaDualCsrSession CudaDualCsrTestReader::computeRc(const CsrReferenceInput& input, unsigned threads,
+    std::optional<timing_edit::AppendOnlyHighWater> high_water)
+{
+  auto state = std::make_shared<CudaDualCsrSession::Impl>(
+      input, high_water.value_or(timing_edit::AppendOnlyHighWater{input.nodes.size(), 0, input.arcs.size()}));
+  cuda_detail::demand(!state->code && threads > 0 && threads <= 1024, "RC component initialization failed");
+  state->storage->kernel_threads = threads;
+  state->memory.zero(state->view.status, 1);
+  state->memory.zero(state->view.level_offset_count, 1);
+  state->execute();
+  return CudaDualCsrSession(std::move(state));
+}
+CudaDualCsrSession CudaDualCsrTestReader::stageRc(CudaDualCsrSession& owner, const CsrReferenceInput& input)
+{
+  return owner.stageFullNativeExport(input, {input.nodes.size(), 0, input.arcs.size()});
+}
 void CudaDualCsrTestReader::setKernelThreads(CudaDualCsrSession& session, unsigned threads)
 {
   cuda_detail::demand(session._impl && !session._impl->storage->pending && threads > 0 && threads <= 1024,
@@ -160,9 +176,9 @@ void runCudaClockContracts()
   std::vector<Arc> arcs(2);
   for (Index node = 0; node < 3; ++node) {
     seeds[node].clock_owner = 0;
+    seeds[node].clock_point = true;
+    seeds[node].propagated_clock = node != 1;
     for (unsigned lane = 0; lane < 4; ++lane) {
-      seeds[node].effective_arrival[lane] = {0.0, true};
-      seeds[node].effective_slew[lane] = {0.0, true};
       seeds[node].slew[lane] = {7.0, true};
       if (node == 0) {
         seeds[node].physical_clock[lane].arrival = {0.0, true};
@@ -204,11 +220,34 @@ void runCudaClockContracts()
       demand(value.predecessor == (node == 0 ? absent : 0) && value.predecessor_delay == expected
                  && value.predecessor_transition == (node == 0 ? 2 : lane % 2),
              "CUDA physical clock predecessor differs");
-      demand(result[node].effective_arrival[lane].value == 0.0 && result[node].effective_slew[lane].value == 0.0
-                 && result[node].slew[lane].value == 7.0,
-             "CUDA physical clock changed effective or data timing");
+      demand(result[node].propagated_clock == seeds[node].propagated_clock && result[node].slew[lane].value == 7.0,
+             "CUDA physical clock changed its mode or data timing");
     }
   }
+  DownloadData downloaded;
+  downloaded.nodes = result;
+  PathDomain empty_paths;
+  empty_paths.offsets.assign(result.size() * 8 + 1, 0);
+  const auto published = unpackValues(std::move(downloaded), ResultLayout{}, empty_paths);
+  for (Index node = 0; node < 3; ++node)
+    for (unsigned lane = 0; lane < 4; ++lane) {
+      const auto index = node * 4 + lane;
+      const auto& clock = result[node].physical_clock[lane];
+      const bool propagated = result[node].propagated_clock;
+      demand(published.effective_clock.arrivals.presence[index] == 1
+                 && published.effective_clock.arrivals.values[index] == (propagated ? clock.arrival.value : 0.0)
+                 && published.effective_clock.slews.presence[index] == 1
+                 && published.effective_clock.slews.values[index] == (propagated ? clock.slew.value : 0.0),
+             "CUDA effective clock materialization lost mode-specific values");
+      const bool predecessor = propagated && node != 0;
+      demand(published.effective_clock.predecessor_nodes.presence[index] == predecessor
+                 && published.effective_clock.predecessor_arc_delays.presence[index] == predecessor
+                 && published.effective_clock.predecessor_transitions.presence[index] == predecessor
+                 && (!predecessor || (published.effective_clock.predecessor_nodes.values[index] == NodeId{0}
+                     && published.effective_clock.predecessor_arc_delays.values[index] == clock.predecessor_delay
+                     && published.effective_clock.predecessor_transitions.values[index] == static_cast<Transition>(lane % 2))),
+             "CUDA effective clock materialization lost predecessor identity");
+    }
   seeds[2].clock_owner = 1;
   demand(run() == Status::invariant, "CUDA clock owner conflict was silently ignored");
   seeds[2].clock_owner = 0;

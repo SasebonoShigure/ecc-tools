@@ -17,6 +17,8 @@
 
 namespace ista {
 class StaTimingEditSessionProbeAccess;
+class StaEditOperation;
+class STAInterface;
 }
 
 namespace ista::timing_edit {
@@ -137,7 +139,8 @@ class NativeExecutionAuthority final
   TimingEditSessionToken _session_token;
   std::shared_ptr<NativeExecutionScopeState> _scope_state;
 
-  friend class ::ista::StaTimingEditSessionProbeAccess;
+  friend class ::ista::StaEditOperation;
+  friend class ::ista::STAInterface;
   friend class NativeEditTransaction;
   friend class NativeCandidateExecutor;
 };

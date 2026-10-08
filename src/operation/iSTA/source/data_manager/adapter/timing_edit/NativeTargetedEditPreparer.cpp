@@ -96,10 +96,12 @@ NativeTargetedEditState NativeTargetedEditPreparer::bindBaseline(const Database&
   state.clock_arcs = std::move(clock_arcs);
   state.base_out_offsets = input.out_row_offsets;
   state.base_in_offsets = input.in_row_offsets;
+  detail::bindTargetedBaselineParasitics(state, input);
   return state;
 }
 
-NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, const NativeExecutionAuthority& authority, EditBatch plan, NativeTargetedEditState& current)
+NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, const NativeExecutionAuthority& authority, EditBatch plan, NativeTargetedEditState& current,
+    std::map<std::string, ParasiticNet> prepared_rc)
 {
   demand(authority.active() && authority.sessionToken() == current.session_token && &database == &STADM.getDatabase(),
          "targeted edit requires the canonical Database and matching operation authority");
@@ -125,7 +127,9 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   std::set<csr::NodeId> changed_rows;
   std::set<csr::ArcId> payloads;
   for (const auto& edit : plan.edits) {
-    demand(std::holds_alternative<NoParasiticRcInputs>(edit.rc_inputs), "targeted buffer only supports NoParasitic edits");
+    const auto* rc = std::get_if<ParasiticRcInputs>(&edit.rc_inputs);
+    demand(!rc || rc->parasitic_policy == ParasiticEditPolicy::kPreRouteTree,
+           "targeted buffer requires NoParasitic or prepared pre-route trees");
     const auto& cell = requireLegalNativeBufferCell(database, edit.library_cell);
     demand(std::ranges::count_if(cell.get_cell_arc_list(), [](const auto& arc) { return arc.get_is_timing_graph_arc(); }) == 1,
            "targeted buffer protocol does not support additional disabled graph arcs");
@@ -200,7 +204,14 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
       old_rows.emplace(node, std::pair{detail::targetedRow(database, current, node, false),
                                       detail::targetedRow(database, current, node, true)});
 
-  auto raw = detail::prepareNativeBufferInsertions(database, plan.edits, metadata->resolver(), detail::nextNativeInstanceId(database));
+  std::vector<std::string> changed_rc_nets;
+  changed_rc_nets.reserve(prepared_rc.size());
+  for (const auto& [name, tree] : prepared_rc) {
+    static_cast<void>(tree);
+    changed_rc_nets.push_back(name);
+  }
+  auto raw = detail::prepareNativeBufferInsertions(database, plan.edits, metadata->resolver(),
+                                                   detail::nextNativeInstanceId(database), std::move(prepared_rc));
   detail::PreparedNativeGraphPatch graph;
   graph.arc_count_before = database.get_arc_list().size();
   graph.appends.reserve(insertions.size() * 2);
@@ -314,6 +325,7 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   // Moving Arc values during capacity growth does not change physical indices.
   // No Arc* survives this preparation; raw/map publication below is no-throw.
   detail::reserveTargetedAppend(database.get_arc_list(), graph.arc_count_before + graph.appends.size());
+  auto* metadata_undo = metadata.get();
   transaction.applyMetadata(std::move(metadata));
   for (const auto& insertion : insertions)
     for (const auto& [old, replacement] : insertion.replaced) {
@@ -331,6 +343,13 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   auto& staged = current;
   auto& target = transaction.database();
   csr::CudaDualCsrPatch patch;
+  auto bindings = detail::prepareTargetedParasitics(target, staged, changed_rc_nets);
+  patch.rc_bindings.reserve(bindings.size());
+  for (const auto& [node, next] : bindings) {
+    const auto previous = staged.parasitics.find(node);
+    patch.rc_bindings.push_back({node, previous == staged.parasitics.end() ? csr::CsrParasiticBinding{} : previous->second, next});
+  }
+  metadata_undo->applyParasitics(std::move(bindings));
   patch.session_token = current.session_token;
   patch.expected_generation = expected_generation;
   patch.target_generation = staged.generation;
@@ -338,6 +357,8 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   patch.after = slots.after;
   for (std::uint64_t id = slots.before.node_slots; id < slots.after.node_slots; ++id) {
     auto node = detail::targetedNode(target, staged, staged.node_names.at(id), starts, ends);
+    if (!node.is_port && staged.parasitics.contains(node.id))
+      patch.rc_load_cells.try_emplace(node.instance_cell, std::cref(staged.models->cell(node.instance_cell)));
     patch.node_appends.push_back({csr::NodeId{id}, node.key, std::move(node)});
   }
   for (std::uint64_t id = slots.before.arc_slots; id < slots.after.arc_slots; ++id) {

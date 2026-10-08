@@ -137,8 +137,13 @@ struct PreparedDualCsrGraphPatch::Data
   std::optional<decltype(DualCsrReferencePayload::port_constraints)> port_constraints;
   std::optional<decltype(DualCsrReferencePayload::case_analysis_constraints)> case_analysis_constraints;
   std::optional<decltype(DualCsrReferencePayload::timing_check_endpoints)> timing_check_endpoints;
-  std::optional<decltype(DualCsrReferencePayload::parasitics)> parasitics;
-  std::optional<decltype(DualCsrReferencePayload::start_seeds)> start_seeds;
+  std::vector<std::pair<std::size_t, csr::ParasiticNetModel>> parasitic_nets;
+  std::vector<csr::ParasiticNetModel> appended_parasitic_nets;
+  std::size_t old_parasitic_nets;
+  decltype(DualCsrState::parasitic_net_slots) appended_parasitic_slots;
+  std::vector<std::pair<std::size_t, csr::StartSeedModel>> start_seeds;
+  std::vector<csr::StartSeedModel> appended_start_seeds;
+  std::size_t old_start_seeds;
   std::optional<decltype(DualCsrReferencePayload::endpoint_required)> endpoint_required;
   std::optional<decltype(DualCsrReferencePayload::unsupported_reasons)> unsupported_reasons;
   decltype(DualCsrReferencePayload::instances) instances;
@@ -244,10 +249,24 @@ struct PreparedDualCsrGraphPatch::Data
       case_analysis_constraints = delta.case_analysis_constraints->replacement;
     if (delta.timing_check_endpoints)
       timing_check_endpoints = delta.timing_check_endpoints->replacement;
-    if (delta.parasitics)
-      parasitics = delta.parasitics->replacement;
-    if (delta.start_seeds)
-      start_seeds = delta.start_seeds->replacement;
+    old_parasitic_nets = graph.reference_payload.parasitics.nets.size();
+    if (delta.parasitics) {
+      for (const auto& change : delta.parasitics->changes)
+        parasitic_nets.emplace_back(change.slot, change.replacement);
+      appended_parasitic_nets = delta.parasitics->appends;
+      for (std::size_t index = 0; index < appended_parasitic_nets.size(); ++index) {
+        const auto& name = appended_parasitic_nets[index].map_key;
+        if (graph.parasitic_net_slots.contains(name)
+            || !appended_parasitic_slots.emplace(name, old_parasitic_nets + index).second)
+          throw std::invalid_argument("appended RC net name already exists");
+      }
+    }
+    old_start_seeds = graph.reference_payload.start_seeds.size();
+    if (delta.start_seeds) {
+      for (const auto& change : delta.start_seeds->changes)
+        start_seeds.emplace_back(change.slot, change.replacement);
+      appended_start_seeds = delta.start_seeds->appends;
+    }
     if (delta.endpoint_required)
       endpoint_required = delta.endpoint_required->replacement;
     if (delta.unsupported_reasons)
@@ -282,6 +301,8 @@ struct PreparedDualCsrGraphPatch::Data
       for (auto& row : aux_rows)
         if (!row.appended)
           reserveFor(graph.aux_out.row_arcs[row.row], row.after.size(), DualCsrBufferKind::kAuxArcs, telemetry);
+      reserveAppend(graph.reference_payload.parasitics.nets, appended_parasitic_nets.size());
+      reserveAppend(graph.reference_payload.start_seeds, appended_start_seeds.size());
       reserveAppend(graph.reference_payload.instances, instances.size());
       reserveAppend(graph.reference_payload.referenced_library_cells, referenced_library_cells.size());
       reserveAppend(graph.reference_payload.cell_pin_capacitances, cell_pin_capacitances.size());
@@ -315,8 +336,8 @@ struct PreparedDualCsrGraphPatch::Data
     swapReplacement(state->reference_payload.port_constraints, port_constraints);
     swapReplacement(state->reference_payload.case_analysis_constraints, case_analysis_constraints);
     swapReplacement(state->reference_payload.timing_check_endpoints, timing_check_endpoints);
-    swapReplacement(state->reference_payload.parasitics, parasitics);
-    swapReplacement(state->reference_payload.start_seeds, start_seeds);
+    swapSlots(state->reference_payload.parasitics.nets, parasitic_nets);
+    swapSlots(state->reference_payload.start_seeds, start_seeds);
     swapReplacement(state->reference_payload.endpoint_required, endpoint_required);
     swapReplacement(state->reference_payload.unsupported_reasons, unsupported_reasons);
   }
@@ -348,6 +369,9 @@ struct PreparedDualCsrGraphPatch::Data
       }
     }
     swapPayloads();
+    appendReserved(graph.reference_payload.parasitics.nets, appended_parasitic_nets);
+    appendReserved(graph.reference_payload.start_seeds, appended_start_seeds);
+    graph.parasitic_net_slots.merge(appended_parasitic_slots);
     appendReserved(graph.reference_payload.instances, instances);
     appendReserved(graph.reference_payload.referenced_library_cells, referenced_library_cells);
     appendReserved(graph.reference_payload.cell_pin_capacitances, cell_pin_capacitances);
@@ -395,6 +419,10 @@ struct PreparedDualCsrGraphPatch::Data
     graph.base_in.row_offsets.resize(before.node_slots + 1);
     graph.nodes.resize(before.node_slots);
     graph.arc_slots.resize(before.arc_slots);
+    for (std::size_t slot = old_parasitic_nets; slot < graph.reference_payload.parasitics.nets.size(); ++slot)
+      graph.parasitic_net_slots.erase(graph.reference_payload.parasitics.nets[slot].map_key);
+    graph.reference_payload.parasitics.nets.resize(old_parasitic_nets);
+    graph.reference_payload.start_seeds.resize(old_start_seeds);
     graph.reference_payload.instances.resize(old_instances);
     graph.reference_payload.referenced_library_cells.resize(old_referenced_library_cells);
     graph.reference_payload.cell_pin_capacitances.resize(old_cell_pin_capacitances);

@@ -55,6 +55,7 @@ class DualSemanticReadView final
       const noexcept;
   [[nodiscard]] timing_edit::TransactionGeneration generation()
       const noexcept;
+  [[nodiscard]] std::optional<std::size_t> parasiticNetSlot(const std::string& name) const noexcept;
   [[nodiscard]] const DualCsrReferencePayload& referencePayload()
       const noexcept;
 

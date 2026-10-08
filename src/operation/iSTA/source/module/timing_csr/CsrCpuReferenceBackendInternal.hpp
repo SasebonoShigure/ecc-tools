@@ -20,10 +20,12 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "CsrFifoLevelization.hpp"
 #include "CsrCpuReferenceBackend.hpp"
+#include "CsrCpuReferenceParasitics.hpp"
 
 namespace ista::csr {
 
@@ -96,6 +98,11 @@ struct CsrInitialTimingSeeds
 struct CsrCpuReferenceWorkState
 {
   CsrTimingResult result;
+  CsrCpuRcCache rc;
+  // Borrowed only for this propagation; session ownership cannot change mid-batch.
+  std::span<const NodeRecord> rc_nodes;
+  std::span<const ReferencedLibraryCellModel> rc_cells;
+  InputPortRcThresholds input_port_thresholds;
   std::vector<std::vector<CsrCpuReferencePathState>> path_rows;
   std::size_t node_count{0};
   std::size_t node_lane_count{0};

@@ -162,6 +162,7 @@ csr::CsrReferenceInput logicalActiveInput(
     arc.eligibility = payload.eligibility;
     arc.transfer = payload.transfer;
     arc.output_load = payload.output_load;
+    arc.native_cell_arc_ordinal = payload.native_cell_arc_ordinal;
     input.arc_ids_by_key.push_back({arc.key, arc.id});
     outgoing.at(arc.source.value()).push_back(arc.id);
     incoming.at(arc.sink.value()).push_back(arc.id);

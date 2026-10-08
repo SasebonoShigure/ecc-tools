@@ -33,7 +33,8 @@ CsrCpuReferenceStageStatus outputLoad(const ActiveCsrEdgeView& edges, NodeId nod
 }
 
 CsrCpuReferenceStageStatus clockToQ(const CellTransferModel* transfer, AnalysisMode analysis, Transition clock_transition,
-                                   Transition output_transition, double clock_slew, double load, CsrDynamicArcValue& value)
+                                   Transition output_transition, double clock_slew, double load, const StartSeedModel& seed,
+                                   CsrCpuReferenceWorkState& work, CsrDynamicArcValue& value)
 {
   // Native Instance's absent clock-to-Q arc has zero delay, unlike a default
   // CSR graph arc. This standalone seed calculation must not mutate arc caches.
@@ -44,22 +45,26 @@ CsrCpuReferenceStageStatus clockToQ(const CellTransferModel* transfer, AnalysisM
   bool delay_seen = false;
   bool slew_seen = false;
   const auto output = csrTransitionIndex(output_transition);
-  for (const auto& child : transfer->children()) {
-    if (!csrChildSelected(child, clock_transition, output_transition))
-      continue;
-    const auto accumulate = [&](const TimingTableModel& table, double& result, bool& seen) {
+  // Match native DCTask: all delay children, then all slew children.
+  for (unsigned pass = 0; pass < 2; ++pass) {
+    for (std::size_t child_index = 0; child_index < transfer->children().size(); ++child_index) {
+      const auto& child = transfer->children()[child_index];
+      if (!csrChildSelected(child, clock_transition, output_transition))
+        continue;
+      const auto& table = pass == 0 ? child.delay_tables[output] : child.slew_tables[output];
       if (!table.present)
-        return true;
-      const auto candidate = lookupCsrTimingTable(table, clock_slew, load, child.time_unit_scale, child.capacitance_unit_scale);
-      if (!candidate || !std::isfinite(*candidate))
-        return false;
-      if (!seen || (analysis == AnalysisMode::kMax ? *candidate > result : *candidate < result))
-        result = *candidate;
+        continue;
+      double candidate = 0.0;
+      const CsrCpuRcChildKey key{seed.seed_node, true, 0, child_index, analysis, output_transition};
+      if (evaluateCsrCpuCellTiming(seed.parasitic, key, child, clock_slew, load, pass != 0, work.rc, candidate)
+          != CsrRcEvaluationStatus::kSuccess)
+        return CsrCpuReferenceStageStatus::kNumericFailure;
+      auto& result = pass == 0 ? value.delay : value.slew;
+      auto& seen = pass == 0 ? delay_seen : slew_seen;
+      if (!seen || (analysis == AnalysisMode::kMax ? candidate > result : candidate < result))
+        result = candidate;
       seen = true;
-      return true;
-    };
-    if (!accumulate(child.delay_tables[output], value.delay, delay_seen) || !accumulate(child.slew_tables[output], value.slew, slew_seen))
-      return CsrCpuReferenceStageStatus::kNumericFailure;
+    }
   }
   return std::isfinite(value.delay) && std::isfinite(value.slew) && value.slew >= 0.0
              ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kNumericFailure;
@@ -80,7 +85,7 @@ CsrCpuReferenceStageStatus initializeSeed(const ActiveCsrEdgeView& edges, const 
   }));
   const bool is_output = has_output && record.key.pin_name == cell.output_pin_name;
   ArcOutputLoadMatrix load{};
-  if (is_output) {
+  if (is_output && !seed.parasitic.tree) {
     const auto status = outputLoad(edges, seed.seed_node, load);
     if (status != CsrCpuReferenceStageStatus::kSuccess)
       return status;
@@ -110,7 +115,7 @@ CsrCpuReferenceStageStatus initializeSeed(const ActiveCsrEdgeView& edges, const 
       CsrDynamicArcValue value{true, 0.0, clock_slew};
       if (is_output) {
         const auto status = clockToQ(transfer, analysis, trigger, transition, clock_slew,
-                                     load[csrAnalysisIndex(analysis)][csrTransitionIndex(transition)], value);
+                                     load[csrAnalysisIndex(analysis)][csrTransitionIndex(transition)], seed, work, value);
         if (status != CsrCpuReferenceStageStatus::kSuccess)
           return status;
       }

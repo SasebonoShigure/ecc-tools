@@ -210,6 +210,7 @@ IdbLayerRouting::IdbLayerRouting()
   _thickness = -1;
   _resistance = -1;
   _capacitance = -1;
+  _edge_capacitance = -1;
   _area = -1;
   _min_cut_num = -1;
   _min_cut_width = -1;

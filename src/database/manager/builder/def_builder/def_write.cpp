@@ -116,6 +116,7 @@ DefWrite::DefWrite(IdbDefService* def_service, DefWriteType type)
 
 DefWrite::~DefWrite()
 {
+  if (_file_write || _file_write_gz) closeFile();
 }
 
 /**
@@ -126,6 +127,7 @@ DefWrite::~DefWrite()
  */
 bool DefWrite::initFile(const char* file)
 {
+  _write_failed = false;
   // Creating a compressed format handle
   if (std::string_view(file).find(".gz") != std::string_view::npos) {
     _font = SaveFormat::kGzip;
@@ -163,11 +165,12 @@ bool DefWrite::closeFile()
 
     case SaveFormat::kUnzip:
     default:
-      result = fclose(_file_write) == 0;
+      result = ferror(_file_write) == 0;
+      result = fclose(_file_write) == 0 && result;
       _file_write = nullptr;
       break;
   }
-  return result;
+  return result && !_write_failed;
 }
 
 /**
@@ -181,10 +184,10 @@ void DefWrite::writestr(const char* strdata, ...)
   va_start(args, strdata);
   switch (_font) {
     case SaveFormat::kUnzip:
-      vfprintf(_file_write, strdata, args);
+      _write_failed |= vfprintf(_file_write, strdata, args) < 0;
       break;
     case SaveFormat::kGzip:
-      gzvprintf(_file_write_gz, strdata, args);
+      _write_failed |= gzvprintf(_file_write_gz, strdata, args) <= 0;
       break;
   }
   va_end(args);

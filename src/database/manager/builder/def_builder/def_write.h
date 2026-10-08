@@ -132,12 +132,13 @@ class DefWrite
   clock_t _start_time;
   clock_t _end_time;
 
-  FILE* _file_write;
-  gzFile _file_write_gz;
+  FILE* _file_write = nullptr;
+  gzFile _file_write_gz = nullptr;
   DefWriteType _type;
   const char* _spacer = "  ";
 
-  SaveFormat _font;
+  SaveFormat _font = SaveFormat::kUnzip;
+  bool _write_failed = false;
   void writestr(const char* strdata, ...);
 
   std::string format_instance_name(const std::string& name) const;

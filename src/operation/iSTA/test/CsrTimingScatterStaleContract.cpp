@@ -130,8 +130,10 @@ void testGuardPriority()
   }
   {
     CsrTimingScatterTestFixture fixture = makeMaterialized(0x6205U);
-    fixture.committed_input.clocks.front().propagated = true;
-    fixture.committed_input.unsupported_reasons = {CsrReferenceUnsupportedReason::kPropagatedClock};
+    // Propagated clocks are supported; case analysis remains out of scope.
+    const auto& node = fixture.committed_input.nodes.front();
+    fixture.committed_input.case_analysis_constraints = {{node.key.full_name, node.id, true}};
+    fixture.committed_input.unsupported_reasons = {CsrReferenceUnsupportedReason::kCaseAnalysis};
     fixture.committed_input.source_identity = makeReferenceInputIdentity(fixture.committed_input, fixture.session_token, fixture.graph_generation);
     requireTimingScatter(validateReferenceInputForSession(fixture.committed_input, fixture.session_token).empty(),
                          "unsupported guard fixture is not strict-valid");

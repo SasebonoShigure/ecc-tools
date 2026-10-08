@@ -21,6 +21,7 @@ class Arc;
 class Database;
 class Instance;
 class Pin;
+class ParasiticNet;
 class TimingCellPort;
 class TimingCellArc;
 }
@@ -37,12 +38,16 @@ class NativeLibraryModels final
   NativeLibraryModels& operator=(const NativeLibraryModels&) = delete;
   void requireDatabase(const ista::Database& database) const;
   [[nodiscard]] const ReferencedLibraryCellModel& cell(const std::string& name);
-  [[nodiscard]] const CellTransferModel& transfer(const std::string& cell_name, const ista::TimingCellArc& arc);
+  [[nodiscard]] std::uint64_t arcOrdinal(const std::string& cell_name, const ista::TimingCellArc& arc);
 
  private:
   const ista::Database& _database;
   std::map<std::string, ReferencedLibraryCellModel> _cells;
-  std::map<const ista::TimingCellArc*, const CellTransferModel*> _arcs;
+  struct NativeArcSlot {
+    const ReferencedLibraryCellModel* owner;
+    std::uint64_t ordinal;
+  };
+  std::map<const ista::TimingCellArc*, NativeArcSlot> _arcs;
 };
 
 struct CanonicalArcKeyContext
@@ -65,6 +70,9 @@ struct CanonicalLoadPinFacts
                          const CanonicalLoadPinFacts&) = default;
 };
 
+// One native net only; shared by full export and affected-net preparation.
+[[nodiscard]] ParasiticNetModel projectCanonicalParasiticNet(
+    const std::string& map_key, const ista::ParasiticNet& native_net);
 [[nodiscard]] LibraryPortModel projectCanonicalLibraryPort(const ista::TimingCellPort& native_port);
 [[nodiscard]] ReferencedLibraryCellModel projectCanonicalReferencedLibraryCell(const ista::Database& database,
                                                                                const std::string& cell_name);
@@ -84,7 +92,7 @@ void applyCanonicalNodeLibraryRoles(
                                                              bool replayed_clock_arc);
 [[nodiscard]] std::optional<ArcOutputLoadMatrix> projectCanonicalNoParasiticOutputLoad(
     const std::string& sink_net_name, const std::map<std::string, ArcOutputLoadMatrix>& net_loads);
-[[nodiscard]] CellTransferModel projectCanonicalArcTransfer(const ista::Database& database, NativeLibraryModels& models, const ArcRecord& arc, const ista::Arc& native_arc);
+void projectCanonicalArcTransfer(const ista::Database& database, NativeLibraryModels& models, ArcRecord& arc, const ista::Arc& native_arc);
 [[nodiscard]] ArcOutputLoadMatrix projectCanonicalNoParasiticNetLoad(
     const ista::Database& database, const std::string& net_name,
     const std::map<std::string, CanonicalLoadPinFacts>& load_pin_facts);

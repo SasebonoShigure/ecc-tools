@@ -70,12 +70,13 @@ SDFWriter* SDFWriter::_sw_instance = nullptr;
 
 void SDFWriter::outputSDF(const std::string_view file_path)
 {
-  std::ofstream* sdf_file = STAUTIL.getOutputFileStream(file_path);
+  auto sdf_file_owner = STAUTIL.openOutputFile(file_path);
+  auto* sdf_file = &sdf_file_owner;
   outputSDFHeader(sdf_file);
   outputSDFInterconnect(sdf_file);
   outputSDFCellList(sdf_file);
   (*sdf_file) << ")\n";
-  STAUTIL.closeFileStream(sdf_file);
+  sdf_file_owner.close();
 }
 
 std::string SDFWriter::getSDFFilePath()

@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      cpu-integration:
+        description: Run source-build OFF/ON correctness and CPU integration.
+        required: false
+        type: boolean
+        default: false
   pull_request:
     paths:
       - 'src/**'
@@ -19,7 +25,11 @@ concurrency:
 
 jobs:
   build-wheel:
-    name: Build Wheel
+    name: Native source-build (${{ matrix.debug-checks }})
+    strategy:
+      fail-fast: false
+      matrix:
+        debug-checks: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.cpu-integration && '["OFF","ON"]' || '["OFF"]') }}
     runs-on: ubuntu-latest
     container: quay.io/pypa/manylinux_2_34_x86_64
     steps:
@@ -28,10 +38,13 @@ jobs:
 
       - name: Build wheel
         uses: ./.github/actions/build-wheel
+        with:
+          debug-checks: ${{ matrix.debug-checks }}
+          integration: ${{ github.event_name == 'workflow_dispatch' && inputs.cpu-integration && 'true' || 'false' }}
 
       - name: Upload repaired wheel
         uses: actions/upload-artifact@v4
         with:
-          name: ecc-tools-wheel
+          name: ${{ matrix.debug-checks == 'OFF' && 'ecc-tools-wheel' || 'ecc-tools-wheel-debug-checks' }}
           path: dist/wheel/repaired/*.whl
           if-no-files-found: error

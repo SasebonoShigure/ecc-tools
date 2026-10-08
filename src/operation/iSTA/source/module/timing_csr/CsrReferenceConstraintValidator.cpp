@@ -19,7 +19,9 @@
 #include <numeric>
 #include <optional>
 #include <queue>
+#include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "CsrReferenceInputValidatorInternal.hpp"
@@ -455,8 +457,9 @@ void validateCapacitances(const CsrReferenceInput& input, Violations& errors)
 
 void validateLoads(const CsrReferenceInput& input, const std::vector<const PortConstraintModel*>& ports, Violations& errors)
 {
-  if (!input.parasitics.nets.empty())
-    return;
+  std::set<std::string_view> rc_nets;
+  for (const auto& net : input.parasitics.nets)
+    rc_nets.insert(net.map_key);
   std::vector<const CellPinCapacitanceModel*> caps(input.nodes.size(), nullptr);
   for (const auto& cap : input.cell_pin_capacitances)
     if (cap.node.value() < caps.size())
@@ -477,6 +480,8 @@ void validateLoads(const CsrReferenceInput& input, const std::vector<const PortC
   });
   for (NodeId id : load_nodes) {
     const auto& sink = input.nodes[id.value()];
+    if (rc_nets.contains(sink.net_name))
+      continue;
     auto& load = net_loads[sink.net_name];
     for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis)
       for (std::size_t transition = 0; transition < kTransitionCount; ++transition)
@@ -580,13 +585,11 @@ void validateReferenceConstraints(const CsrReferenceInput& input, Violations& er
   validateCapacitances(input, errors);
   validateLoads(input, ports, errors);
   validateClockTags(input, errors);
+  const bool prepared_parasitics = validateReferenceParasitics(input, errors);
 
-  const bool has_propagated = std::ranges::any_of(input.clocks, &ClockConstraintModel::propagated);
   std::vector<CsrReferenceUnsupportedReason> expected_reasons;
-  if (!input.parasitics.nets.empty())
+  if (!input.parasitics.nets.empty() && (input.analysis_context.rc_corner != "pre_route" || !prepared_parasitics))
     expected_reasons.push_back(CsrReferenceUnsupportedReason::kParasiticNet);
-  if (has_propagated)
-    expected_reasons.push_back(CsrReferenceUnsupportedReason::kPropagatedClock);
   if (has_gating || has_divider)
     expected_reasons.push_back(CsrReferenceUnsupportedReason::kClockGatingOrDivider);
   if (!input.case_analysis_constraints.empty())

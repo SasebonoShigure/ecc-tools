@@ -34,6 +34,7 @@ struct NativeCandidateArcOrderFact
   bool is_loop_disabled{false};
   csr::CellTransferModel transfer;
   std::optional<csr::ArcId> assigned_id;
+  std::optional<std::uint64_t> native_cell_arc_ordinal{std::nullopt};
 };
 
 struct NativeAffectedArcRows

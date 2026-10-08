@@ -230,24 +230,28 @@ std::optional<ArcOutputLoadMatrix> projectCanonicalNoParasiticOutputLoad(
   const auto load = net_loads.find(sink_net_name);
   return load == net_loads.end() ? std::optional<ArcOutputLoadMatrix>{ArcOutputLoadMatrix{}} : std::optional<ArcOutputLoadMatrix>{load->second};
 }
-CellTransferModel projectCanonicalArcTransfer(const ista::Database& database, NativeLibraryModels& models, const ArcRecord& arc, const ista::Arc& native_arc)
+void projectCanonicalArcTransfer(const ista::Database& database, NativeLibraryModels& models, ArcRecord& arc, const ista::Arc& native_arc)
 {
   models.requireDatabase(database);
+  arc.native_cell_arc_ordinal.reset();
   if (arc.kind == ArcKind::kNet) {
     CellTransferModel transfer;
     transfer.delay = 0.0;
     transfer.delay_min = 0.0;
     transfer.delay_max = 0.0;
-    return transfer;
+    arc.transfer = std::move(transfer);
+    return;
   }
   const ista::TimingCellArc* native_cell_arc = native_arc.get_timing_cell_arc();
   if (native_cell_arc == nullptr) {
     CellTransferModel transfer;
     transfer.is_clock_arc = arc.is_clock_arc;
     transfer.is_disabled = arc.is_disabled;
-    return transfer;
+    arc.transfer = std::move(transfer);
+    return;
   }
   const auto& instance = database.get_instance_map().at(arc.key.base.owner_name);
-  return models.transfer(instance.get_cell_name(), *native_cell_arc);
+  arc.native_cell_arc_ordinal = models.arcOrdinal(instance.get_cell_name(), *native_cell_arc);
+  arc.transfer = models.cell(instance.get_cell_name()).cell_arcs.at(*arc.native_cell_arc_ordinal).transfer;
 }
 }  // namespace ista::csr::detail

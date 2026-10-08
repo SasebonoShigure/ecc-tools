@@ -1,4 +1,5 @@
 add_library(ista_timing_dual_csr_transaction
+    ${CMAKE_CURRENT_SOURCE_DIR}/CpuDualCsrBaseline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CommittedDualCsrAnalysisState.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrModeRecoveryReplay.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrRecoveryRebind.cpp
@@ -20,6 +21,7 @@ target_link_libraries(ista_timing_dual_csr_transaction
     ista_timing_edit_contract
     ista_timing_incremental_levelization
     PRIVATE
+    ista_timing_database_headers
     ista_timing_edit_native
 )
 

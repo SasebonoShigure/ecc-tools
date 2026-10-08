@@ -30,7 +30,7 @@ namespace ista {
 class StaInterfaceLifecycleTestAccess final
 {
  public:
-  static void acquireSession(std::uint64_t token)
+  static void acquireSession(std::uint64_t token, bool initialized)
   {
     STAInterface& interface = STAInterface::getInst();
     std::scoped_lock lock(interface._lifecycle_mutex);
@@ -39,13 +39,15 @@ class StaInterfaceLifecycleTestAccess final
       throw std::runtime_error("test failed to acquire STA session owner lease: "
                                + result.message);
     }
+    if (initialized) interface._is_initialized = true;
   }
 
-  static void releaseSession() noexcept
+  static void releaseSession(bool initialized) noexcept
   {
     STAInterface& interface = STAInterface::getInst();
     std::scoped_lock lock(interface._lifecycle_mutex);
     interface._lifecycle.completeClose(true);
+    if (initialized) { interface._is_initialized = false; interface._is_timing_updated = false; }
   }
 };
 
@@ -155,26 +157,26 @@ NativeTransactionRuntime::~NativeTransactionRuntime()
 }
 
 GuardedTestSession::GuardedTestSession()
+    : GuardedTestSession({StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError},
+                         editTestAnalysisContext(), true) {}
+GuardedTestSession::GuardedTestSession(StaExecutionRequest request, csr::StaAnalysisContext context)
+    : GuardedTestSession(request, std::move(context), false) {}
+GuardedTestSession::GuardedTestSession(StaExecutionRequest request, csr::StaAnalysisContext context, bool capture_baseline)
+    : _physical_baseline(!capture_baseline)
 {
-  StaExecutionRequest request{StaBackend::kCpu, StaUpdateStrategy::kIncremental,
-                              StaFallbackPolicy::kError};
-  _session = std::make_unique<IncrementalStaSession>(
-      request, std::make_unique<FakeSessionOperations>());
-  const csr::StaAnalysisContext context = editTestAnalysisContext();
-  if (!_session->initialize(context, {}).ok() || !_session->runFullBaseline().ok()
-      || _session->state() != StaSessionState::kBaselineExecuted
-      || !_session->sessionToken().has_value()) {
-    throw std::runtime_error("fake incremental session baseline failed");
-  }
+  _session = std::make_unique<IncrementalStaSession>(request, std::make_unique<FakeSessionOperations>());
+  if (!_session->initialize(context, {}).ok()
+      || (capture_baseline && !_session->runFullBaseline().ok()) || !_session->sessionToken().has_value())
+    throw std::runtime_error("fake incremental session initialization failed");
   _token = TimingEditSessionToken{*_session->sessionToken()};
-  StaInterfaceLifecycleTestAccess::acquireSession(_token.value());
+  StaInterfaceLifecycleTestAccess::acquireSession(_token.value(), _physical_baseline);
   _lease_active = true;
 }
 
 GuardedTestSession::~GuardedTestSession()
 {
   if (_lease_active) {
-    StaInterfaceLifecycleTestAccess::releaseSession();
+    StaInterfaceLifecycleTestAccess::releaseSession(_physical_baseline);
   }
 }
 
@@ -182,7 +184,7 @@ StaStatus GuardedTestSession::closeAndRelease()
 {
   const StaStatus status = _session->close();
   if (_lease_active) {
-    StaInterfaceLifecycleTestAccess::releaseSession();
+    StaInterfaceLifecycleTestAccess::releaseSession(_physical_baseline);
     _lease_active = false;
   }
   return status;

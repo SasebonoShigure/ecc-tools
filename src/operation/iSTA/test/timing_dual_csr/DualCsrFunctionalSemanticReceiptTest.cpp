@@ -158,6 +158,22 @@ void clockOwnershipAndPhysicalCausality()
   require(result.values.nodes.is_clock_point.values == std::vector<std::uint8_t>{1, 1}
           && result.values.physical_clock.predecessor_nodes.presence[4] == 1,
           "clock propagation did not produce an owned sink/predecessor");
+  input.clocks.front().propagated = true;
+  csr::test::refreshIdentity(input, kSessionValue);
+  auto propagated_baseline = DualCsrBaselineFactory::create(input, timing_edit::TimingEditSessionToken{kSessionValue},
+                                                           timing_edit::AppendOnlyHighWater{2, 0, 1});
+  require(propagated_baseline.success(), "Dual propagated baseline rejected");
+  const auto& propagated_state = *propagated_baseline.state;
+  const auto propagated = timingFor(propagated_state);
+  require(propagated.values.effective_clock == propagated.values.physical_clock
+              && validateDualCsrTimingResult(propagated_state, propagated).empty(),
+          "Dual propagated clock was not computed or validated");
+  auto missing = propagated;
+  missing.values.effective_clock.predecessor_nodes.presence[4] = 0;
+  missing.values.effective_clock.predecessor_arc_delays.presence[4] = 0;
+  missing.values.effective_clock.predecessor_transitions.presence[4] = 0;
+  require(!validateDualCsrTimingResult(propagated_state, missing).empty(),
+          "Dual propagated clock lost its effective predecessor");
   result.values.physical_clock.predecessor_arc_delays.values[4] += 0.25;
   require(!validateDualCsrTimingResult(state, result).empty(),
           "physical clock validator accepted a forged predecessor delay");

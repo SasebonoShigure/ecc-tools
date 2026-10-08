@@ -15,11 +15,11 @@ struct CsrReferenceInput;
 }
 }  // namespace ista
 
-namespace ista::timing_dual_csr::detail {
+namespace ista::timing_dual_csr {
 
-[[nodiscard]] CommittedDualCsrAnalysisState makeTraceBaseline(
+[[nodiscard]] CommittedDualCsrAnalysisState makeCpuDualCsrBaseline(
     const Database& database,
     const csr::CsrReferenceInput& reference_input,
     timing_edit::TimingEditSessionToken session_token);
 
-}  // namespace ista::timing_dual_csr::detail
+}  // namespace ista::timing_dual_csr

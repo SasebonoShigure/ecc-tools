@@ -44,6 +44,8 @@
 #include "../db_design/IdbTrackGrid.h"
 #include "../db_layout/IdbTerm.h"
 
+namespace izh { class PreparedPhysicalBatch; }
+
 namespace idb {
 
 class IdbNet;
@@ -52,6 +54,7 @@ class IdbSpecialNet;
 
 class IdbPin : public IdbObject
 {
+  friend class izh::PreparedPhysicalBatch;
  public:
   IdbPin();
   ~IdbPin();
@@ -137,6 +140,7 @@ class IdbPin : public IdbObject
 
 class IdbPins
 {
+  friend class izh::PreparedPhysicalBatch;
  public:
   IdbPins();
   ~IdbPins();

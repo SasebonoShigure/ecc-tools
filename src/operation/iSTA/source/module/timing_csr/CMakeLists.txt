@@ -13,13 +13,17 @@ add_library(ista_timing_csr_core
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrFifoLevelizationValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceInputValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceConstraintValidator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceParasiticValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceNativeModelValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrTimingResultValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrTimingResultArcValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrTableLookup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrParasiticModel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrParasiticTree.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceBackend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceResultInitialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceArcTransfer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceParasitics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceClockPropagation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceSequentialSeeds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrCpuReferenceSequentialRequired.cpp

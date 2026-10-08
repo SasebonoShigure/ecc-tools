@@ -128,24 +128,28 @@ const ReferencedLibraryCellModel& NativeLibraryModels::cell(const std::string& n
   if (const auto found = _cells.find(name); found != _cells.end())
     return found->second;
   auto model = projectCanonicalReferencedLibraryCell(_database, name);
-  std::map<const ista::TimingCellArc*, const CellTransferModel*> arcs;
+  std::map<const ista::TimingCellArc*, NativeArcSlot> arcs;
   const auto native = _database.get_timing_library().get_cell_map().find(name);
   if (native != _database.get_timing_library().get_cell_map().end()) {
     std::size_t ordinal = 0;
     for (const auto& arc : native->second.get_cell_arc_list())
-      arcs.emplace(&arc, &model.cell_arcs.at(ordinal++).transfer);
+      arcs.emplace(&arc, NativeArcSlot{nullptr, ordinal++});
   }
   auto result = _cells.emplace(name, std::move(model)).first;
+  for (auto& [native_arc, slot] : arcs) {
+    static_cast<void>(native_arc);
+    slot.owner = &result->second;
+  }
   _arcs.merge(arcs);
   return result->second;
 }
-const CellTransferModel& NativeLibraryModels::transfer(const std::string& name, const ista::TimingCellArc& arc)
+std::uint64_t NativeLibraryModels::arcOrdinal(const std::string& name, const ista::TimingCellArc& arc)
 {
-  static_cast<void>(cell(name));
+  const auto& owner = cell(name);
   const auto found = _arcs.find(&arc);
-  if (found == _arcs.end())
+  if (found == _arcs.end() || found->second.owner != &owner)
     malformedReferenceInput();
-  return *found->second;
+  return found->second.ordinal;
 }
 
 LibraryPortModel projectCanonicalLibraryPort(
@@ -193,6 +197,17 @@ ReferencedLibraryCellModel projectCanonicalReferencedLibraryCell(
   cell.is_sequential = native_cell.get_is_sequential();
   cell.is_clock_gating = native_cell.get_is_clock_gating();
   cell.is_macro = native_cell.get_is_macro();
+  cell.slew_derate = native_cell.get_slew_derate_from_library();
+  requireFiniteReference(cell.slew_derate);
+  cell.slew_lower_threshold_pct = {native_cell.get_slew_lower_threshold_pct_rise(), native_cell.get_slew_lower_threshold_pct_fall()};
+  cell.slew_upper_threshold_pct = {native_cell.get_slew_upper_threshold_pct_rise(), native_cell.get_slew_upper_threshold_pct_fall()};
+  cell.input_threshold_pct = {native_cell.get_input_threshold_pct_rise(), native_cell.get_input_threshold_pct_fall()};
+  for (auto* thresholds : {&cell.slew_lower_threshold_pct, &cell.slew_upper_threshold_pct, &cell.input_threshold_pct})
+    for (auto& value : *thresholds) {
+      requireFiniteReference(value);
+      if (value > 1.0) value *= 0.01;
+      if (value < 0.0 || value > 1.0) illegalReferenceNumeric();
+    }
   assignLibraryRoles(native_cell, cell);
 
   cell.ports.reserve(native_cell.get_port_map().size());

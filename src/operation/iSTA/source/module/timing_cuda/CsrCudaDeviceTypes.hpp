@@ -4,6 +4,12 @@
 #include <limits>
 #include <type_traits>
 
+namespace ista::csr {
+struct CsrRcTimingRow;
+struct CsrRcTimingRecord;
+struct CsrRcDriverLane;
+}
+
 namespace ista::csr::cuda_detail {
 
 using Index = std::uint64_t;
@@ -38,6 +44,65 @@ struct Child
   std::uint8_t sense{0};
   std::uint8_t trigger{2};
   Table check[2];
+  Index library{absent};
+  double slew_derate{1.0};
+  double lower[2]{0.3, 0.3}, upper[2]{0.7, 0.7};
+  double output_threshold[2]{0.5, 0.5};
+};
+
+// One immutable reduced lane; terminal payload is shared by all arcs on a net.
+// Offsets survive host/device allocation growth, unlike embedded host pointers.
+struct RcModel
+{
+  Index terminal_begin{0}, terminal_count{0};
+  int order{0};
+  double diagonal[5]{}, off_diagonal[5]{};
+  double total_capacitance{0.0}, sqrt_total_capacitance{0.0}, root_load{0.0};
+  bool dmp_valid{false};
+  double driver_capacitance{0.0}, resistance{0.0}, load_capacitance{0.0};
+};
+
+struct RcTerminal
+{
+  double projection[5]{};
+  int dmp_order{0};
+  double poles[2]{}, residues[2]{};
+  double fallback_delay{0.0}, fallback_impulse{0.0};
+  bool fallback_valid{false};
+};
+
+struct RcModelView
+{
+  const RcModel* model{nullptr};
+  const RcTerminal* terminals{nullptr};  // All lanes; model owns the offset.
+};
+
+struct RcLoadCell
+{
+  Index library{absent};
+  double slew_derate{1.0};
+  double lower[2]{0.3, 0.3}, upper[2]{0.7, 0.7}, input_threshold[2]{0.5, 0.5};
+};
+
+struct RcBinding
+{
+  Index net{absent}, terminal{0}, child_begin{0}, load_cell{absent};
+  // Keep every byte defined after a device field assignment: bindings are
+  // copied as whole objects when their persistent allocation grows.
+  Index input_port{0};
+};
+
+struct RcNet
+{
+  const RcModel* models{nullptr};
+  const RcTerminal* terminals{nullptr};
+  Index lanes[4]{};
+  Index child_count{0};
+  CsrRcTimingRow* rows{nullptr};
+  CsrRcTimingRecord* records{nullptr};
+  CsrRcDriverLane* drivers{nullptr};
+  const Index* initialize_arcs{nullptr};
+  Index initialize_count{0};
 };
 
 struct Arc
@@ -47,6 +112,7 @@ struct Arc
   Index child_begin{0};
   Index child_count{0};
   Index child_state_begin{0};
+  Index rc_binding{absent};
   double delay{0.0};
   double delay_min{0.0};
   double delay_max{0.0};
@@ -75,6 +141,7 @@ struct SequentialSeed
   SeedKind kind{SeedKind::none};
   Index clock_node{absent}, path_start{absent}, path_tag{absent};
   Index child_begin{0}, child_count{0};
+  Index rc_binding{absent};
   double delay{0.0}, delay_min{0.0}, delay_max{0.0};
   std::uint8_t trigger{0};
 };
@@ -91,7 +158,7 @@ struct NodeState
   Value<double> slew[4];
   Index clock_owner{absent};
   bool clock_point{false};
-  Value<double> effective_arrival[4], effective_slew[4];
+  bool propagated_clock{false};
   ClockLane physical_clock[4];
   SequentialSeed sequential;
 };
@@ -184,6 +251,12 @@ struct DeviceView
   const Arc* arcs{nullptr};
   const Child* children{nullptr};
   const double* table_data{nullptr};
+  RcNet* rc_nets{nullptr};
+  Index rc_net_count{0};
+  const Index* rc_net_by_node{nullptr};
+  const RcBinding* rc_bindings{nullptr};
+  const RcLoadCell* rc_load_cells{nullptr};
+  double rc_port_derate{1.0}, rc_port_lower[2]{0.3, 0.3}, rc_port_upper[2]{0.7, 0.7};
   NodeState* nodes{nullptr};
   PathState* paths{nullptr};
   ArcState* arc_state{nullptr};

@@ -27,6 +27,8 @@ void validateTransfer(const CellTransferModel& transfer, std::vector<CsrContract
 
 void validateLibraryCell(const ReferencedLibraryCellModel& cell, std::vector<CsrContractViolation>& errors);
 
+void validateParasiticNet(const ParasiticNetModel& net, std::vector<CsrContractViolation>& errors);
+
 void validateReferenceNativeModels(const CsrReferenceInput& input, std::vector<CsrContractViolation>& errors);
 
 [[nodiscard]] std::vector<CsrContractViolation> validateParasiticContextCrossField(const CsrReferenceInput& input);

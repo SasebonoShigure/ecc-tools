@@ -188,6 +188,7 @@ void CudaDualCsrSession::Impl::validatePatch(const Impl& prior, const CudaDualCs
     demand(std::ranges::equal(patch.roots->expected, prior.host->roots, {}, &NodeId::value), "CUDA targeted host->roots mismatch");
   if (patch.ends)
     demand(std::ranges::equal(patch.ends->expected, prior.host->ends, {}, &NodeId::value), "CUDA targeted host->ends mismatch");
+  validateRcPatch(prior, patch);
 }
 
 PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDualCsrPatch& patch)

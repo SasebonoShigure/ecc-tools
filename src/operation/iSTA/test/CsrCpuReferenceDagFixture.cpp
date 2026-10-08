@@ -140,8 +140,10 @@ CsrReferenceInput makeCpuReferenceDagFixture(std::size_t node_count, const std::
                                           .transition_capacitance = {}});
     input.cell_pin_capacitances.push_back({NodeId{node}, 0.0, {}});
   }
-  for (const ArcRecord& arc : input.arcs)
+  for (ArcRecord& arc : input.arcs) {
+    arc.native_cell_arc_ordinal = cell.cell_arcs.size();
     cell.cell_arcs.push_back({arc.key.base.library_source_port, arc.key.base.library_sink_port, arc.transfer});
+  }
   input.referenced_library_cells = {std::move(cell)};
   refreshCpuReferenceIdentity(input);
   requireCpuReference(validateReferenceInput(input).empty(), "cell-only DAG fixture is invalid");

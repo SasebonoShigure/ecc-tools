@@ -1,3 +1,4 @@
+#include <memory>
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Copyright (c) 2023-2025 Institute of Computing Technology, Chinese Academy of Sciences
@@ -99,14 +100,16 @@ void IdbLayerShape::add_rect(IdbRect* rect)
 
 void IdbLayerShape::add_rect(IdbRect rect)
 {
-  IdbRect* rect_new = new IdbRect(rect.get_low_x(), rect.get_low_y(), rect.get_high_x(), rect.get_high_y());
-  add_rect(rect_new);
+  auto rect_new = std::make_unique<IdbRect>(rect.get_low_x(), rect.get_low_y(), rect.get_high_x(), rect.get_high_y());
+  add_rect(rect_new.get());
+  (void) rect_new.release();
 }
 
 void IdbLayerShape::add_rect(int32_t ll_x, int32_t ll_y, int32_t ur_x, int32_t ur_y)
 {
-  IdbRect* rect = new IdbRect(ll_x, ll_y, ur_x, ur_y);
-  add_rect(rect);
+  auto rect = std::make_unique<IdbRect>(ll_x, ll_y, ur_x, ur_y);
+  add_rect(rect.get());
+  (void) rect.release();
 }
 
 IdbRect IdbLayerShape::get_bounding_box()

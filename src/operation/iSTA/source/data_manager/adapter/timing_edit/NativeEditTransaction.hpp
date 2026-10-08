@@ -3,9 +3,11 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 #pragma once
+#include <map>
 #include <memory>
 #include <span>
 #include "TimingEditTypes.hpp"
+#include "ParasiticNet.hpp"
 
 namespace ista {
 class Database;
@@ -47,7 +49,8 @@ class NativeEditTransaction final
  private:
   friend class NativeFullEditPreparer;
   static NativeEditTransaction prepareFull(const NativeExecutionAuthority& authority,
-      std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver, std::uint64_t first_instance_id);
+      std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver, std::uint64_t first_instance_id,
+      std::map<std::string, ParasiticNet> prepared_rc = {});
   struct Undo;
   [[nodiscard]] static NativeEditTransaction beginTargeted(const NativeExecutionAuthority& authority);
   void applyMetadata(std::unique_ptr<detail::PreparedNativeTargetedMetadata> metadata) noexcept;

@@ -55,9 +55,9 @@ add_test(
     "${ISTA_TEST_PYTHON_EXECUTABLE}"
     "${CMAKE_CURRENT_LIST_DIR}/reference_input/reference_input_contract.py"
     --probe-schema
-    "${CMAKE_CURRENT_LIST_DIR}/reference_input/schema/reference_input_result_v1.schema.json"
+    "${CMAKE_CURRENT_LIST_DIR}/reference_input/schema/reference_input_result_v2.schema.json"
     --controller-schema
-    "${CMAKE_CURRENT_LIST_DIR}/reference_input/schema/reference_input_controller_v1.schema.json"
+    "${CMAKE_CURRENT_LIST_DIR}/reference_input/schema/reference_input_controller_v2.schema.json"
     --self-test
 )
 set_tests_properties(
@@ -143,6 +143,7 @@ ista_add_reference_functional(
 ista_add_reference_functional(
     ista_csr_reference_transfer_contract_test
     CsrReferenceTransferContractTest.cpp
+    CsrReferenceParasiticBindingTest.cpp
     CsrReferenceInputTestFixture.cpp
     CsrReferenceInputNativeFixture.cpp
     CsrReferenceInputRawProjector.cpp

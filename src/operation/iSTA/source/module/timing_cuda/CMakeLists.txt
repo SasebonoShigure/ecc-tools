@@ -1,11 +1,15 @@
 add_library(ista_cuda STATIC
     CsrCudaPacking.cpp
+    CsrCudaParasiticPacking.cpp
     CsrCudaUnpacking.cpp
     CsrCudaRuntime.cu
     CsrCudaLevelization.cu
     CsrCudaPropagation.cu
     CudaDualCsrSession.cu
     CudaDualCsrTransfer.cu
+    CudaDualCsrParasitics.cu
+    CudaDualCsrRcPatch.cu
+    CudaDualCsrRcTransfer.cu
     CudaDualCsrPatch.cu
     CudaDualCsrKernels.cu
     CudaMixedLevelization.cu)

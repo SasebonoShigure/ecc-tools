@@ -86,6 +86,8 @@ std::int32_t i32(const Json& value, std::string_view field)
 {
   if (!value.is_number_integer())
     throw WireError(std::string(field), "expected signed integer");
+  if (value.is_number_unsigned() && value.get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()))
+    throw WireError(std::string(field), "unsigned integer exceeds int32");
   const auto result = value.get<std::int64_t>();
   if (result < std::numeric_limits<std::int32_t>::min() || result > std::numeric_limits<std::int32_t>::max())
     throw WireError(std::string(field), "signed integer exceeds int32");
@@ -295,7 +297,8 @@ RcInputs rcInputs(const Json& value, std::string_view field)
   if (kind == "parasitic") {
     exactObject(value, field, {"kind", "policy"});
     auto policy = enumValue<ParasiticEditPolicy>(string(value.at("policy"), std::string(field) + ".policy"), std::string(field) + ".policy",
-                            {{"error", ParasiticEditPolicy::kError}, {"full_with_record", ParasiticEditPolicy::kFullWithRecord}});
+                            {{"error", ParasiticEditPolicy::kError}, {"full_with_record", ParasiticEditPolicy::kFullWithRecord},
+                             {"pre_route_tree", ParasiticEditPolicy::kPreRouteTree}});
     return ParasiticRcInputs{policy};
   }
   throw WireError(std::string(field) + ".kind", "unknown RC input tag");

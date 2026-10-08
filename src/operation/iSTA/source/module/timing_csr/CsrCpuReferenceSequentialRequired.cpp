@@ -80,8 +80,8 @@ CsrCpuReferenceStageStatus applyCheck(const TimingPayloadView& payloads, std::si
       check_time = *value;
     seen = true;
   }
-  // Supported ideal clocks have no effective predecessor path, hence zero
-  // native CRPR correction. Propagated clocks remain explicitly unsupported.
+  // Native scalar RAT uses getEndPointRequired(end, end), without a launch
+  // path. Per-path CRPR is applied later by report analysis, not twice here.
   const double capture = (clock == nullptr ? 0.0 : clock->period) + clock_arrival;
   const double required = capture - check_time;
   const double scaled = required * 1.0e15;

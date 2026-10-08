@@ -31,6 +31,8 @@
 #include <regex>
 #include <string>
 #include <string_view>
+#include <stdexcept>
+#include <utility>
 
 #include "utility/logger/Logger.hpp"
 
@@ -108,7 +110,7 @@ VerilogWriter::~VerilogWriter()
 void VerilogWriter::writeModule()
 {
   if (_stream == nullptr && _gzip_stream == nullptr) {
-    ECCLOG.info(ecc::Loc::current(), "File", _file_name, "NotWritable");
+    throw std::runtime_error("Cannot open Verilog output: " + std::string(_file_name));
   }
   ECCLOG.info(ecc::Loc::current(), "start write verilog file ", _file_name);
 
@@ -126,6 +128,10 @@ void VerilogWriter::writeModule()
   writeStr("\n");
   writeStr("endmodule\n");
 
+  const bool closed = _save_format == VerilogSaveFormat::kGzip
+      ? gzclose(std::exchange(_gzip_stream, nullptr)) == Z_OK
+      : std::fclose(std::exchange(_stream, nullptr)) == 0;
+  if (!closed) throw std::runtime_error("Cannot close Verilog output: " + std::string(_file_name));
   ECCLOG.info(ecc::Loc::current(), "finish write verilog file ", _file_name);
 }
 
@@ -133,16 +139,19 @@ void VerilogWriter::writeStr(const char* strdata, ...)
 {
   va_list args;
   va_start(args, strdata);
+  int written = 0;
   switch (_save_format) {
     case VerilogSaveFormat::kGzip:
-      gzvprintf(_gzip_stream, strdata, args);
+      written = gzvprintf(_gzip_stream, strdata, args);
       break;
     case VerilogSaveFormat::kUnzip:
     default:
-      vfprintf(_stream, strdata, args);
+      written = vfprintf(_stream, strdata, args);
       break;
   }
   va_end(args);
+  if (written < 0 || (_save_format == VerilogSaveFormat::kGzip && written == 0))
+    throw std::runtime_error("Cannot write Verilog output: " + std::string(_file_name));
 }
 
 /**

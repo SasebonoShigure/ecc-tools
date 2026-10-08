@@ -94,6 +94,7 @@ csr::ArcRecord arcRecordFrom(const csr::ArcSemanticPayload& payload,
   result.eligibility = payload.eligibility;
   result.transfer = payload.transfer;
   result.output_load = payload.output_load;
+  result.native_cell_arc_ordinal = payload.native_cell_arc_ordinal;
   return result;
 }
 

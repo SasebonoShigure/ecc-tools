@@ -12,6 +12,7 @@
 #include "ParasiticNet.hpp"
 #include "ParasiticNode.hpp"
 #include "ParasiticResistor.hpp"
+#include "TimingLibrary.hpp"
 
 namespace ista::csr::test {
 
@@ -25,6 +26,10 @@ void projectCsrReferenceInputRawParasitics(const ista::Database& database, CsrRe
   raw.source_path = library.get_spef_file_path();
   raw.capacitance_unit = library.get_capacitive_unit();
   raw.resistance_unit = library.get_resistance_unit();
+  const auto& timing = database.get_timing_library();
+  raw.input_port_slew_derate = timing.get_slew_derate_from_library();
+  raw.input_port_lower = {timing.get_slew_lower_threshold_pct_rise(), timing.get_slew_lower_threshold_pct_fall()};
+  raw.input_port_upper = {timing.get_slew_upper_threshold_pct_rise(), timing.get_slew_upper_threshold_pct_fall()};
   raw.nets.reserve(library.get_net_map().size());
   for (const auto& [map_key, native] : library.get_net_map()) {
     RawParasiticNet net;
@@ -77,6 +82,9 @@ void appendParasitics(Writer& writer, const RawParasitics& parasitics)
   writer.string(parasitics.source_path);
   writer.string(parasitics.capacitance_unit);
   writer.string(parasitics.resistance_unit);
+  writer.finite(parasitics.input_port_slew_derate);
+  for (double value : parasitics.input_port_lower) writer.finite(value);
+  for (double value : parasitics.input_port_upper) writer.finite(value);
   writer.vector(parasitics.nets, appendParasiticNet);
 }
 

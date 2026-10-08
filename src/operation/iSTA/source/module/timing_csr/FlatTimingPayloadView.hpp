@@ -14,6 +14,7 @@ class FlatTimingPayloadView final : public TimingPayloadView
   [[nodiscard]] std::size_t nodeCount() const noexcept override { return _input->nodes.size(); }
   [[nodiscard]] const std::vector<NodeRecord>& nodeRecords() const noexcept override { return _input->nodes; }
   [[nodiscard]] const std::vector<ReferencedLibraryCellModel>& referencedLibraryCells() const noexcept override { return _input->referenced_library_cells; }
+  [[nodiscard]] const InputPortRcThresholds& inputPortRcThresholds() const noexcept override { return _input->parasitics.input_port_thresholds; }
   [[nodiscard]] const std::vector<NodeId>& orderedRootIds() const noexcept override { return _input->ordered_root_ids; }
   [[nodiscard]] const std::vector<NodeId>& orderedStartIds() const noexcept override { return _input->ordered_start_ids; }
   [[nodiscard]] const std::vector<NodeId>& orderedEndIds() const noexcept override { return _input->ordered_end_ids; }

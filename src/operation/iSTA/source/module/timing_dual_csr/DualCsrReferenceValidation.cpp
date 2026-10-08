@@ -169,6 +169,8 @@ void projectArcs(const DualCsrState& state,
     arc.eligibility = payload.eligibility;
     arc.transfer = payload.transfer;
     arc.output_load = payload.output_load;
+    arc.parasitic = payload.parasitic;
+    arc.native_cell_arc_ordinal = payload.native_cell_arc_ordinal;
     input.arc_ids_by_key.push_back({arc.key, arc.id});
     input.arcs.push_back(std::move(arc));
   }
@@ -262,6 +264,9 @@ void projectReferencePayload(const DualCsrState& state,
   input.referenced_library_cells = payload.referenced_library_cells;
   std::ranges::sort(input.referenced_library_cells, [](const auto& a, const auto& b) { return byteStringLess(a.cell_name, b.cell_name); });
   input.parasitics = payload.parasitics;
+  std::ranges::sort(input.parasitics.nets, [](const auto& lhs, const auto& rhs) {
+    return byteStringLess(lhs.map_key, rhs.map_key);
+  });
   input.start_seeds = payload.start_seeds;
   for (auto& seed : input.start_seeds) {
     seed.seed_node = remap(seed.seed_node, old_to_new);
@@ -294,6 +299,23 @@ csr::CsrReferenceInput canonicalValidationInput(const DualCsrState& state)
   projectArcs(state, old_to_new, input);
   projectAdjacency(input);
   projectReferencePayload(state, old_to_new, input);
+  // Canonical validation renumbers NodeIds. Retain shared numeric models and
+  // remap each tree's terminal identities once, including arc-free Q seeds.
+  std::map<const csr::CsrParasiticTree*, std::shared_ptr<const csr::CsrParasiticTree>> trees;
+  const auto project_binding = [&](csr::CsrParasiticBinding& binding) {
+    if (!binding.tree) return;
+    auto [entry, inserted] = trees.try_emplace(binding.tree.get(), binding.tree);
+    if (inserted && std::ranges::any_of(binding.tree->terminals, [&](csr::NodeId node) {
+          return remap(node, old_to_new) != node;
+        })) {
+      auto tree = std::make_shared<csr::CsrParasiticTree>(*binding.tree);
+      for (auto& node : tree->terminals) node = remap(node, old_to_new);
+      entry->second = std::move(tree);
+    }
+    binding.tree = entry->second;
+  };
+  for (auto& arc : input.arcs) project_binding(arc.parasitic);
+  for (auto& seed : input.start_seeds) project_binding(seed.parasitic);
   return input;
 }
 
@@ -452,6 +474,112 @@ void validateReferenceAppends(const DualCsrState& committed, const DualCsrBatchD
   }
 }
 
+void validateParasiticDelta(const std::optional<ParasiticNetDelta>& update,
+                           const DualCsrState& committed, DualCsrViolations& violations)
+{
+  if (!update) return;
+  const auto& current = committed.reference_payload.parasitics;
+  const auto& slots = committed.parasitic_net_slots;
+  const auto& delta = *update;
+  const auto fail = [&](DualCsrViolationCode code, const char* message) {
+    reject(violations, code, "reference_payload.parasitics", message);
+  };
+  if (delta.expected_size != current.nets.size())
+    fail(DualCsrViolationCode::kExpectedValue, "parasitic net count changed");
+  if (current.capacitance_unit.empty() || current.resistance_unit.empty())
+    fail(DualCsrViolationCode::kShape, "RC edits require a parasitic baseline with fixed units");
+  if (delta.appends.size() > current.nets.max_size() - current.nets.size())
+    fail(DualCsrViolationCode::kCapacity, "parasitic net capacity overflow");
+  std::set<std::size_t> changed_slots;
+  if (slots.size() != current.nets.size())
+    fail(DualCsrViolationCode::kShape, "parasitic net index extent differs");
+  std::set<std::string_view> names;
+  const auto check_net = [&](const csr::ParasiticNetModel& net) {
+    if (net.map_key.empty() || net.map_key != net.embedded_name)
+      fail(DualCsrViolationCode::kKey, "parasitic net identity mismatch");
+    std::vector<csr::CsrContractViolation> errors;
+    csr::detail::validateParasiticNet(net, errors);
+    appendReferenceViolations(errors, "reference_payload.", violations);
+  };
+  for (const auto& change : delta.changes) {
+    if (change.slot >= current.nets.size()) {
+      fail(DualCsrViolationCode::kId, "parasitic net slot out of range");
+      continue;
+    }
+    if (!changed_slots.insert(change.slot).second)
+      fail(DualCsrViolationCode::kConflict, "parasitic net slot changed twice");
+    const auto& old = current.nets[change.slot];
+    const auto indexed = slots.find(old.map_key);
+    if (indexed == slots.end() || indexed->second != change.slot)
+      fail(DualCsrViolationCode::kExpectedValue, "parasitic net index slot differs");
+    if (change.expected != old)
+      fail(DualCsrViolationCode::kExpectedValue, "parasitic net expected value differs");
+    if (change.replacement.map_key != old.map_key)
+      fail(DualCsrViolationCode::kKey, "parasitic net replacement cannot rename its slot");
+    check_net(change.replacement);
+  }
+  for (const auto& net : delta.appends) {
+    if (slots.contains(net.map_key) || !names.insert(net.map_key).second)
+      fail(DualCsrViolationCode::kConflict, "appended parasitic net name already exists");
+    check_net(net);
+  }
+}
+
+void validateStartSeedDelta(const std::optional<StartSeedDelta>& update,
+                            const DualCsrState& committed,
+                            const DualCsrBatchDescriptor& descriptor,
+                            DualCsrViolations& violations)
+{
+  if (!update) return;
+  const auto& delta = *update;
+  const auto& current = committed.reference_payload.start_seeds;
+  const auto fail = [&](DualCsrViolationCode code, const char* message) {
+    reject(violations, code, "reference_payload.start_seeds", message);
+  };
+  if (delta.expected_size != current.size())
+    fail(DualCsrViolationCode::kExpectedValue, "seed count changed");
+  if (delta.appends.size() > current.max_size() - current.size())
+    fail(DualCsrViolationCode::kCapacity, "seed capacity overflow");
+  const auto check_seed = [&](const csr::StartSeedModel& seed) {
+    if (seed.seed_node.value() >= descriptor.after.node_slots
+        || seed.path_start_node.value() >= descriptor.after.node_slots
+        || (seed.crpr_node && seed.crpr_node->value() >= descriptor.after.node_slots))
+      fail(DualCsrViolationCode::kId, "seed node out of range");
+    if (seed.availability != csr::StartSeedAvailability::kMaterialized
+        && seed.availability != csr::StartSeedAvailability::kDeferredSequential)
+      fail(DualCsrViolationCode::kShape, "unknown seed availability");
+    if (seed.path_source && *seed.path_source != csr::PathSource::kInput
+        && *seed.path_source != csr::PathSource::kRegister)
+      fail(DualCsrViolationCode::kShape, "unknown seed path source");
+    if (seed.crpr_node.has_value() != seed.crpr_transition.has_value()
+        || (seed.crpr_transition && *seed.crpr_transition != csr::Transition::kRise
+            && *seed.crpr_transition != csr::Transition::kFall))
+      fail(DualCsrViolationCode::kShape, "invalid seed CRPR identity");
+    for (const auto& row : seed.arrival)
+      for (const auto value : row)
+        if (value && !std::isfinite(*value))
+          fail(DualCsrViolationCode::kExpectedValue, "nonfinite seed arrival");
+    for (const auto& row : seed.slew)
+      for (const auto value : row)
+        if (value && (!std::isfinite(*value) || *value < 0.0))
+          fail(DualCsrViolationCode::kExpectedValue, "invalid seed slew");
+  };
+  std::set<std::uint64_t> slots;
+  for (const auto& change : delta.changes) {
+    if (change.slot >= current.size()) {
+      fail(DualCsrViolationCode::kId, "seed slot out of range");
+      continue;
+    }
+    if (!slots.insert(change.slot).second)
+      fail(DualCsrViolationCode::kConflict, "seed slot changed twice");
+    if (change.expected != current[change.slot])
+      fail(DualCsrViolationCode::kExpectedValue, "seed expected value differs");
+    check_seed(change.replacement);
+  }
+  for (const auto& seed : delta.appends)
+    check_seed(seed);
+}
+
 }  // namespace
 
 void validateReferenceDelta(const DualCsrState& committed,
@@ -497,10 +625,8 @@ void validateReferenceDelta(const DualCsrState& committed,
   validateAppend(delta.referenced_library_cells,
                    current.referenced_library_cells,
                    "reference_payload.referenced_library_cells", violations);
-  validateExpected(delta.parasitics, current.parasitics,
-                   "reference_payload.parasitics", violations);
-  validateExpected(delta.start_seeds, current.start_seeds,
-                   "reference_payload.start_seeds", violations);
+  validateParasiticDelta(delta.parasitics, committed, violations);
+  validateStartSeedDelta(delta.start_seeds, committed, descriptor, violations);
   validateExpected(delta.endpoint_required, current.endpoint_required,
                    "reference_payload.endpoint_required", violations);
   validateAppend(delta.cell_pin_capacitances,

@@ -6,6 +6,7 @@
 // iEDA is licensed under Mulan PSL v2.
 // ***************************************************************************************
 #include "StaTimingEditSessionProbeAccess.hpp"
+#include "StaEditOperation.hpp"
 
 #include <exception>
 #include <string>
@@ -42,37 +43,27 @@ StaStatus StaTimingEditSessionProbeAccess::runTimingOnlyBaseline(
 
 StaStatus StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(IncrementalStaSession& session, const GuardedMutation& mutation)
 {
-  const StaSessionState state = session._state.load(std::memory_order_acquire);
-  if (state != StaSessionState::kBaselineExecuted) {
-    return StaStatus::failure(StaSessionStatusCode::kInvalidState, state,
-                              "timing edit requires a baseline-executed incremental session");
-  }
-  const std::uint64_t token = session._token.load(std::memory_order_acquire);
-  if (token == 0 || session._context == nullptr) {
-    return StaStatus::failure(StaSessionStatusCode::kInvalidState, state,
-                              "timing edit session token/context is unavailable");
-  }
-  if (!mutation) {
-    return StaStatus::failure(StaSessionStatusCode::kInvalidState, state,
+  if (!mutation)
+    return StaStatus::failure(StaSessionStatusCode::kInvalidState, session.state(),
                               "timing edit guarded mutation callback is empty");
-  }
-
-  StaStatus failure;
-  auto guard = STAInterface::getInst().acquireUse(StaOwner::session(token), session._context.get(), true,
-                                                   StaSessionState::kBaselineExecuted, &failure);
-  if (!guard) {
-    return failure;
-  }
   try {
-    const timing_edit::NativeExecutionScopeViolationSignal violation_signal{
-        &session, &StaTimingEditSessionProbeAccess::poisonSessionOnScopeViolation};
-    const timing_edit::NativeExecutionAuthority authority{
-        timing_edit::TimingEditSessionToken{token}, violation_signal};
-    return mutation(token, *session._context, authority);
+    StaEditOperation operation(session);
+    return mutation(operation.token(), operation.context(), operation.authority());
+  } catch (const StaSessionException& error) {
+    return error.status();
   } catch (...) {
     return StaStatus::failure(StaSessionStatusCode::kRunFailed, session._state.load(std::memory_order_acquire),
                               "timing edit guarded mutation threw: " + exceptionMessage());
   }
+}
+
+void StaTimingEditSessionProbeAccess::inspectDatabase(std::uint64_t token, const std::function<void(const Database&)>& callback)
+{
+  STAInterface::getInst().inspectSessionDatabaseForTesting(token, callback);
+}
+std::unique_lock<std::mutex> StaTimingEditSessionProbeAccess::lockSessionApiForTesting(IncrementalStaSession& session)
+{
+  return std::unique_lock(session._api_mutex);
 }
 
 bool StaTimingEditSessionProbeAccess::snapshotReleasedForTesting(const StaCsrSessionContext& context) noexcept
@@ -112,11 +103,5 @@ StaCsrScatterAttempt StaTimingEditSessionProbeAccess::scatterForTesting(
   return context.scatter(database, result);
 }
 
-void StaTimingEditSessionProbeAccess::poisonSessionOnScopeViolation(
-    void* opaque_session) noexcept
-{
-  auto& session = *static_cast<IncrementalStaSession*>(opaque_session);
-  session._state.store(StaSessionState::kPoisoned, std::memory_order_release);
-}
 
 }  // namespace ista

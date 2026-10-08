@@ -186,6 +186,9 @@ CsrCpuReferenceStageStatus collectCsrInitialTimingSeeds(const TimingPayloadView&
 CsrCpuReferenceStageStatus initializeCsrCpuReferenceSeeds(const TimingPayloadView& payloads, CsrCpuReferenceWorkState& work)
 {
   work.node_count = payloads.nodeCount();
+  work.rc_nodes = payloads.nodeRecords();
+  work.rc_cells = payloads.referencedLibraryCells();
+  work.input_port_thresholds = payloads.inputPortRcThresholds();
   work.clock_tag_count = payloads.clockTags().size();
   if (!checkedMultiply(work.node_count, kAnalysisCount * kTransitionCount, work.node_lane_count)
       || !checkedMultiply(work.node_count, kAnalysisCount * kPathSourceCount * kTransitionCount, work.path_row_count)

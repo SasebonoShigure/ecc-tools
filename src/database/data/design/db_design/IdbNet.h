@@ -71,6 +71,8 @@ END NETS
 #include "IdbPins.h"
 #include "IdbRegularWire.h"
 
+namespace izh { class PreparedPhysicalBatch; }
+
 namespace idb {
 
 class IdbInstanceList;
@@ -78,6 +80,7 @@ class IdnInstance;
 
 class IdbNet : public IdbObject
 {
+  friend class izh::PreparedPhysicalBatch;
  public:
   IdbNet();
   ~IdbNet();
@@ -223,6 +226,7 @@ class IdbNet : public IdbObject
 
 class IdbNetList
 {
+  friend class izh::PreparedPhysicalBatch;
  public:
   IdbNetList();
   ~IdbNetList();

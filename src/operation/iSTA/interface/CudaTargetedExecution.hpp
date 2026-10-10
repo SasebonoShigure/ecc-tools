@@ -5,6 +5,13 @@
 #include "StaExecutionContract.hpp"
 
 namespace ista::csr::detail {
+class NativeLibraryModels;
+// Shared with the physical CSR transaction. Only the affected descriptor and
+// its live RC owners are copied; immutable load models remain session-borrowed.
+[[nodiscard]] CudaDualCsrPatch makeCudaTargetedPatch(
+    const timing_dual_csr::DualCsrState& before,
+    const timing_dual_csr::DualCsrBatchDescriptor& descriptor, NativeLibraryModels& models);
+
 // Shared production policy; the returned pending candidate still requires
 // common-owner qualification and publication. Detailed failed-attempt audit is ON only.
 [[nodiscard]] CudaDualCsrSession stageCudaTargetedBatch(

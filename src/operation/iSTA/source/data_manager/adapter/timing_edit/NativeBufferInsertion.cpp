@@ -152,18 +152,33 @@ void requireSupportedMovedSink(const Database& database, const Pin& pin)
   if (found_cell == database.get_timing_library().get_cell_map().end())
     invalid("moved sink cell does not exist in the timing library");
   const auto& cell = found_cell->second;
-  if (instance.get_is_clock_gating() || cell.get_is_clock_gating() || cell.get_is_macro())
+  if (instance.get_is_clock_gating())
+    invalid("clock-gating sink is outside the data-only boundary");
+  csr::NodeRecord node;
+  node.key.pin_name = pin.get_pin_name();
+  node.direction = csr::PinDirection::kInput;
+  node.is_sequential = instance.get_is_sequential();
+  node.is_clock_pin = pin.get_full_name() == instance.get_clock_pin_name();
+  node.is_data_pin = pin.get_full_name() == instance.get_data_pin_name();
+  requireSupportedMovedSink(node, cell);
+}
+
+void requireSupportedMovedSink(const csr::NodeRecord& pin, const TimingCell& cell)
+{
+  if (pin.is_port || pin.direction != csr::PinDirection::kInput)
+    invalid("moved CSR instance sink must be an input pin");
+  if (cell.get_is_clock_gating() || cell.get_is_macro())
     invalid("clock-gating and macro sinks are outside the data-only boundary");
-  if (instance.get_is_sequential() != cell.get_is_sequential())
+  if (pin.is_sequential != cell.get_is_sequential())
     invalid("moved sink instance/library sequential roles disagree");
-  const auto port = cell.get_port_map().find(pin.get_pin_name());
+  const auto port = cell.get_port_map().find(pin.key.pin_name);
   if (port == cell.get_port_map().end() || port->second.get_is_clock()
-      || pin.get_full_name() == instance.get_clock_pin_name())
+      || pin.is_clock_pin)
     invalid("clock or unresolved library sink is outside the data-only boundary");
   if (!port->second.get_is_input() || port->second.get_is_output())
     invalid("moved sink library direction is not an input");
   for (const auto& arc : cell.get_cell_arc_list()) {
-    if (arc.get_source_port() == pin.get_pin_name()
+    if (arc.get_source_port() == pin.key.pin_name
         && (arc.get_is_clear_preset_arc() || arc.get_is_clock_arc()))
       invalid("clock or clear/preset control sink is outside the data-only boundary");
   }
@@ -173,15 +188,15 @@ void requireSupportedMovedSink(const Database& database, const Pin& pin)
   // setup/hold data endpoint and reject contradictory control-check roles.
   bool ordinary_data_check = false;
   for (const auto& check : cell.get_check_arc_list()) {
-    if (check.get_clock_port() == pin.get_pin_name())
+    if (check.get_clock_port() == pin.key.pin_name)
       invalid("timing-check clock sink is outside the data-only boundary");
-    if (check.get_data_port() != pin.get_pin_name())
+    if (check.get_data_port() != pin.key.pin_name)
       continue;
     if (check.get_check_type() != TimingCheckType::kSetup && check.get_check_type() != TimingCheckType::kHold)
       invalid("sequential sink has a control timing-check role");
     ordinary_data_check = true;
   }
-  if (instance.get_data_pin_name() != pin.get_full_name() || !ordinary_data_check)
+  if (!pin.is_data_pin || !ordinary_data_check)
     invalid("moved sink is not an ordinary sequential data input");
 }
 

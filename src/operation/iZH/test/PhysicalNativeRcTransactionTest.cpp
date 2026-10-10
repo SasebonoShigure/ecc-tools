@@ -1,6 +1,9 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #include "PhysicalTimingEdit.hpp"
+#include "PhysicalSessionTestFixture.hpp"
+#include "PhysicalGreedySelection.hpp"
+#include "StaCsrSessionContext.hpp"
 #include "PhysicalStaBatchJson.hpp"
 #include "BenchmarkTimingConsumer.hpp"
 #include "json.hpp"
@@ -25,8 +28,11 @@
 #include <stdexcept>
 
 namespace ista {
+void physicalGreedyCandidateContract(bool with_cuda);
+void physicalFirstReportFailure();
 void physicalOutputFailureRetry(idb::IdbDesign& design);
 void physicalQueryAllocationRetry(IncrementalStaSession& session);
+void physicalColdViewRetry(IncrementalStaSession& session);
 #if ECC_INCREGPUSTA_DEBUG_CHECKS
 void physicalDiagnosticCanary(IncrementalStaSession& session, idb::IdbDesign& design);
 #endif
@@ -41,51 +47,8 @@ using namespace ista;
 using namespace ista::timing_edit;
 using namespace ista::timing_edit::test;
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
-struct PhysicalDesign
-{
-  std::unique_ptr<idb::IdbCellMaster> master;
-  idb::IdbLayout layout;
-  idb::IdbDefService service{&layout};
-  idb::IdbDesign& design{*service.get_design()};
-  idb::IdbDefService* previous{dmInst->get_idb_def_service()};
-  const izh::PreRouteRcTechnology rc{1000, {"M1", 0.2, 1.0, 0.002, 0.001}, {"M2", 0.4, 0.5, 0.004, 0.001}};
-  PhysicalDesign()
-  {
-    layout.set_units(new idb::IdbUnits());
-    layout.get_units()->set_microns_dbu(1000);
-    design.get_units()->set_microns_dbu(1000);
-    auto* site = layout.get_sites()->add_site_list("site");
-    site->set_width(1000); site->set_height(2000);
-    layout.get_rows()->createRow("row", site, 0, 7000, idb::IdbOrient::kN_R0, 20, 1, 1000, 0);
-    for (bool vertical : {false, true}) {
-      auto* layer = dynamic_cast<idb::IdbLayerRouting*>(layout.get_layers()->set_layer(vertical ? "M2" : "M1", "ROUTING"));
-      require(layer, "physical test layer missing");
-      layout.get_layers()->add_routing_layer(layer);
-      layer->set_direction(vertical ? idb::IdbLayerDirection::kVertical : idb::IdbLayerDirection::kHorizontal);
-      layer->set_width(vertical ? 400 : 200);
-      layer->set_resistance(0.2); layer->set_capacitance(0.01); layer->set_edge_capacitance(0.001);
-    }
-    master.reset(layout.get_cell_master_list()->set_cell_master("BUF_X1"));
-    master->set_site(site);
-    master->set_width(1000); master->set_height(2000); master->set_type(idb::CellMasterType::kCore);
-    for (bool output : {false, true}) {
-      auto* term = master->add_term(output ? "Y" : "A");
-      term->set_direction(output ? idb::IdbConnectDirection::kOutput : idb::IdbConnectDirection::kInput);
-      term->set_type(idb::IdbConnectType::kSignal);
-      term->set_average_position(output ? 800 : 200, output ? 1400 : 600);
-      term->set_bounding_box(0, 0, 1000, 2000);
-    }
-    auto* net = design.createOrFindNet("n0", idb::IdbConnectType::kSignal);
-    for (bool output : {false, true}) {
-      auto* pin = design.createOrFindIoPin(output ? "out" : "in");
-      pin->set_term()->set_direction(output ? idb::IdbConnectDirection::kOutput : idb::IdbConnectDirection::kInput);
-      pin->set_average_coordinate(output ? 15000 : 0, 0);
-      require(design.connectPinToNet(pin, net), "initial physical connection failed");
-    }
-    dmInst->set_idb_def_service(&service);
-  }
-  ~PhysicalDesign() { dmInst->set_idb_def_service(previous); design.get_io_pin_list()->reset(); delete design.get_units(); design.set_units(nullptr); }
-};
+using physical_test::PhysicalDesign;
+using physical_test::RecoveryDirectory;
 void recoveryRecordContract(const EditBatch& batch, std::span<const PhysicalBufferLocation> locations)
 {
   const std::string baseline_id(64, 'a');
@@ -139,23 +102,6 @@ void recoveryRecordContract(const EditBatch& batch, std::span<const PhysicalBuff
   }
   rejected("{\"schema_version\":\"duplicate\"," + bytes.substr(1));
 }
-struct RecoveryDirectory
-{
-  std::filesystem::path path;
-  RecoveryDirectory()
-  {
-    auto pattern = (std::filesystem::temp_directory_path() / "ista-physical-batch-XXXXXX").string();
-    auto* made = ::mkdtemp(pattern.data());
-    if (!made) throw std::runtime_error("physical recovery test directory failed");
-    path = made;
-    std::ofstream(path / "fixture.txt") << "native transaction fixture / IDB matching n0, in and out";
-  }
-  ~RecoveryDirectory() { std::error_code error; std::filesystem::remove_all(path, error); }
-  PhysicalStaConfig config() const
-  {
-    return {"M1", "M2", {}, {}, (path / "journal").string(), {{"component_fixture", (path / "fixture.txt").string()}}};
-  }
-};
 void cpuBaselineModes()
 {
   std::optional<PhysicalStaCurrentResult> expected;
@@ -268,7 +214,7 @@ void run()
   guarded([&](std::uint64_t token, StaCsrSessionContext& context, const NativeExecutionAuthority& authority) {
     auto& database = STADM.getDatabase();
     auto& owner = StaTimingEditSessionProbeAccess::physicalState(context);
-    require(owner.generation(context).value() == 0 && owner.cpu == nullptr && !owner.cpu_native,
+    require(owner.generation(context).value() == 0 && owner.cpu == nullptr,
             "CPU/full baseline installed a second backend");
     owner.prepareReport(database, context, authority);
     auto exported = csr::exportCsrReferenceInputCandidate(database, analysis, token);
@@ -559,8 +505,37 @@ void physicalBatches(bool with_cuda)
                     && physical.design.get_instance_list()->get_instance_list().size() == before,
                 "physical CUDA marker failure did not restore all participants");
         std::filesystem::remove(collision);
+        const auto native_before = csr::exportCsrGraphSnapshot(STADM.getDatabase());
         mode_check(session.session().applyPhysicalBatch(batch, locations), before + 1);
+        if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental)
+          require(csr::exportCsrGraphSnapshot(STADM.getDatabase()) == native_before,
+                  "CSR mode edited native timing before a query");
+        const auto selection = session.session().selectPhysicalBuffers(before + 1, {"BUF_X1"}, 100, 100);
+        require(selection == session.session().selectPhysicalBuffers(before + 1, {"BUF_X1"}, 100, 100),
+                "repeated candidate selection changed the committed result");
+        if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental) {
+          require(csr::exportCsrGraphSnapshot(STADM.getDatabase()) == native_before,
+                  "candidate selection materialized the native graph");
+          physicalColdViewRetry(session.session());
+        }
         const auto result = session.session().readPhysicalResult();
+        const auto candidate_status = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(session.session(),
+            [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority&) {
+          const auto& owner = StaTimingEditSessionProbeAccess::physicalState(context);
+          const auto& resolver = owner.full ? owner.full->resolver() : owner.cpu ? owner.cpu->committed().resolver
+#if ISTA_ENABLE_CUDA
+              : owner.cuda_graph->resolver
+#else
+              : throw std::logic_error("candidate test owner missing")
+#endif
+              ;
+          const std::array<std::string, 1> cells{"BUF_X1"};
+          require(selection == ista::selectPhysicalBuffers(STADM.getDatabase(), context.libraryModels(STADM.getDatabase()),
+                      resolver, before + 1, cells, 100, 100, physical.rc.dbu_per_um),
+                  "CSR candidate choice differs from the current native view");
+          return StaStatus::success(session.session().state());
+        });
+        require(candidate_status.ok(), "native candidate comparison guard failed");
         check(result);
         const auto cached = session.session().readPhysicalResult();
         require(cached.timing == result.timing && cached.qor_json == result.qor_json && cached.paths_json == result.paths_json,
@@ -584,6 +559,11 @@ void physicalBatches(bool with_cuda)
       auto analysis = editTestAnalysisContext(); analysis.rc_corner = "pre_route";
       GuardedTestSession session(request, analysis);
       mode_check(session.session().recoverPhysicalBaseline(recovery.config()), 2);
+      if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental)
+        require(STADM.getDatabase().get_instance_map().empty() && STADM.getDatabase().get_pin_map().size() == 2,
+                "CSR recovery materialized unrequested native timing");
+      if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental)
+        physicalColdViewRetry(session.session());
       check(session.session().readPhysicalResult());
       mode_check(session.session().applyPhysicalBatch(next, next_locations), 3);
       check(session.session().readPhysicalResult());
@@ -603,7 +583,8 @@ int main(int argc, char** argv)
     if (argc == 2) {
       require(incregpusta_cuda_enabled, "CUDA physical test needs a CUDA build");
       physicalBatches(true);
-    } else { baselineRejections(); cpuBaselineModes(); run(); run(); physicalBatches(false); }
+      physicalGreedyCandidateContract(true);
+    } else { baselineRejections(); cpuBaselineModes(); run(); run(); physicalBatches(false); physicalGreedyCandidateContract(false); physicalFirstReportFailure(); }
     std::cout << "physical/native RC multi-batch apply, rollback and commit passed\n";
   }
   catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

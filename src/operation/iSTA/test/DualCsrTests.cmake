@@ -160,9 +160,23 @@ if(ISTA_ENABLE_CUDA)
       ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle)
   target_link_libraries(ista_cuda_dual_csr_session_test PRIVATE
       ista_cuda_targeted_trace_runtime ${ISTA_TIMING_EDIT_PRODUCTION_ORACLE_LINKS})
+  if(ECC_INCREGPUSTA_DEBUG_CHECKS)
+    target_sources(ista_cuda_dual_csr_session_test PRIVATE CudaSemanticFaultTest.cpp)
+    target_link_libraries(ista_cuda_dual_csr_session_test PRIVATE ista_cuda_full_trace_runtime)
+    target_include_directories(ista_cuda_dual_csr_session_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
+    foreach(mode full targeted mixed)
+      add_test(NAME ista_cuda_semantic_fault_${mode}
+        COMMAND ista_cuda_dual_csr_session_test --semantic-context-fault ${mode}
+          "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json")
+      set_tests_properties(ista_cuda_semantic_fault_${mode} PROPERTIES
+        LABELS "ista_cuda;ista_hardware_fault" TIMEOUT 300 RUN_SERIAL TRUE)
+    endforeach()
+  endif()
   set(ISTA_CUDA_TRACE_PROBE_SOURCES ${ISTA_DUAL_CSR_FRESH_PROBE_SOURCES})
   list(REMOVE_ITEM ISTA_CUDA_TRACE_PROBE_SOURCES timing_dual_csr/DualCsrTraceProductionFreshProbe.cpp)
-  add_executable(ista_cuda_full_trace_probe CudaFullTraceProbe.cpp ${ISTA_CUDA_TRACE_PROBE_SOURCES})
+  add_executable(ista_cuda_full_trace_probe CudaFullTraceProbe.cpp
+      timing_dual_csr/CudaTargetedTimingProjection.cpp
+      timing_dual_csr/CudaTargetedDeviceComparison.cpp ${ISTA_CUDA_TRACE_PROBE_SOURCES})
   target_include_directories(ista_cuda_full_trace_probe PRIVATE
       ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
       ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)

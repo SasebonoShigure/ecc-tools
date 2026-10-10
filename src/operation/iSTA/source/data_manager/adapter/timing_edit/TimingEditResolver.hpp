@@ -15,6 +15,7 @@
 
 namespace ista {
 class Database;
+class CudaCsrEditState;
 }
 
 namespace ista::timing_edit {
@@ -64,6 +65,7 @@ class TimingEditResolverState final
   [[nodiscard]] static TimingEditResolverState bindReferenceBaseline(const Database& database, const csr::CsrReferenceInput& input);
   [[nodiscard]] TimingEditResolverState stageAssignments(const AppendOnlySlotPlan& plan, const std::vector<TokenMaterialization>& values) const;
   friend class NativeTargetedEditPreparer;
+  friend class ista::CudaCsrEditState;
   friend class NativeFullEditPreparer;
   friend struct detail::PreparedNativeTargetedMetadata;
   friend class TimingEditResolverView;

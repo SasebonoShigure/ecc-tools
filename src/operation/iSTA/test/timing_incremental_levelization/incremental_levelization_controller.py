@@ -43,7 +43,7 @@ from stage6_winner_equivalence import (  # noqa: E402
     compare_timing_with_admissible_winners,
 )
 
-WIRE_SCHEMA = "ista-stage6-trace-process/6.0.0"
+WIRE_SCHEMA = "ista-stage6-trace-process/7.0.0"
 LEVEL_FIELDS = {
     "level_offsets", "level_nodes", "node_to_level",
 }
@@ -452,7 +452,7 @@ def replay(args: argparse.Namespace) -> None:
         del targeted, fresh, targeted_functional, fresh_functional
         del targeted_levels, fresh_levels, target_source, fresh_source
     write_json(root / "controller-summary.json", {
-        "schema_version": "ista-stage6-differential-verdict/5.0.0",
+        "schema_version": "ista-stage6-differential-verdict/6.0.0",
         "trace": str(trace),
         "controller_pid": os.getpid(),
         "all_process_ids_distinct": True,

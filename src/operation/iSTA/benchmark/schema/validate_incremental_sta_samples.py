@@ -441,13 +441,13 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
-def consumer_statistics(samples: list[dict]) -> tuple[dict, dict]:
+def consumer_statistics(samples: list[dict], metric: str = "consumer_step_ms") -> tuple[dict, dict]:
     """Pair each full-trace repetition; never bootstrap individual edit batches."""
     import random
     import statistics
 
     values = {
-        mode: [sample["consumer_step_ms"] for sample in samples
+        mode: [sample[metric] for sample in samples
                if sample["mode"] == mode and not sample["warmup"]]
         for mode in MODES
     }

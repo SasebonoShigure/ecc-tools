@@ -10,6 +10,8 @@
 #include "FlatTimingPayloadView.hpp"
 #include "CudaDualCsrTestReader.hpp"
 #include "CsrRcTimingComparison.hpp"
+#include "DualCsrEdgeViewImpl.hpp"
+#include "DualCsrTimingPayloadViewImpl.hpp"
 
 namespace ista::csr {
 namespace {
@@ -267,6 +269,51 @@ void rcGrowth(CudaLevelizationMode mode)
           "full after RC capacity growth differs");
   require(owner.close(), "RC capacity growth close failed");
 }
+void directFullRc(CudaDualCsrSession& owner, const CsrReferenceInput& input)
+{
+  using namespace timing_dual_csr;
+  DualCsrState graph;
+  graph.session_token = timing_edit::TimingEditSessionToken{input.source_identity.session_token};
+  graph.generation = timing_edit::TransactionGeneration{owner.generation().value() + 1};
+  graph.nodes = input.nodes;
+  graph.reference_payload = makeDualCsrReferencePayload(input);
+  FlatCsrEdgeView flat(input);
+  for (const auto& arc : input.arcs)
+    graph.arc_slots.push_back({flat.arc(arc.id).value(), true});
+  // A retired RC owner must not conflict with the live driver's new model.
+  auto retired = graph.arc_slots.front();
+  retired.active = false;
+  retired.payload.parasitic.tree = std::make_shared<CsrParasiticTree>(*retired.payload.parasitic.tree);
+  graph.arc_slots.push_back(std::move(retired));
+  graph.high_water = {graph.nodes.size(), 0, graph.arc_slots.size()};
+  graph.base_out.row_offsets = input.out_row_offsets;
+  graph.base_in.row_offsets = input.in_row_offsets;
+  for (const auto id : input.out_arc_ids) graph.base_out.physical_slots.push_back(id);
+  for (const auto id : input.in_arc_ids) graph.base_in.physical_slots.push_back(id);
+  graph.aux_out.source_to_aux_row.assign(graph.nodes.size(), -1);
+  graph.telemetry.logical_edges_after = input.arcs.size();
+  // A newly referenced load cell is appended, not inserted into a sorted
+  // model array; use it on the existing component fixture's instance.
+  auto cell = graph.reference_payload.referenced_library_cells.front();
+  const auto old_name = cell.cell_name;
+  cell.cell_name = "0_appended_load_cell";
+  for (auto& node : graph.nodes)
+    if (node.instance_cell == old_name) node.instance_cell = cell.cell_name;
+  for (auto& instance : graph.reference_payload.instances)
+    if (instance.cell_name == old_name) instance.cell_name = cell.cell_name;
+  graph.reference_payload.referenced_library_cells.push_back(std::move(cell));
+  auto candidate = CudaDualCsrTestReader::stageFullCsr(owner, graph);
+  require(!candidate.computationCode() && candidate.telemetry().materialize_ms == 0.0,
+          "direct full RC rebuild failed or eagerly read timing");
+  if constexpr (incregpusta_debug_checks_enabled) {
+    const auto computed = detail::computeCsrCpuReferenceForStage(DualCsrEdgeViewImpl(graph), DualCsrTimingPayloadViewImpl(graph)).computation;
+    const auto* reference = std::get_if<CsrTimingResult>(&computed.outcome);
+    require(reference != nullptr, "direct full RC independent CPU computation failed");
+    test::compareRcTiming(candidate.timingValues(), *reference);
+  }
+  require(owner.publish(std::move(candidate)), "direct full RC publication failed");
+}
+
 void targetedRc()
 {
   for (auto mode : {CudaLevelizationMode::kFull, CudaLevelizationMode::kMixed})
@@ -357,6 +404,7 @@ void runCudaRcPropagationContracts()
         if (threads == 256)
           require(actual == previous, "RC full result changed with launch shape");
         previous = actual;
+        directFullRc(session, input);
         require(session.close(), "RC CUDA close failed");
       }
     }

@@ -11,20 +11,18 @@
 #include <string>
 #include <vector>
 
-#include "AffectedCapturePlan.hpp"
 #include "CommittedDualCsrAnalysisState.hpp"
 #include "DualCsrFunctionalProjection.hpp"
 
 namespace ista::timing_dual_csr {
 
 inline constexpr auto kDualCsrExactReceiptSchema
-    = "ista-dual-csr-exact-receipt/2.0.0";
+    = "ista-dual-csr-exact-receipt/3.0.0";
 
 enum class DualCsrReceiptPhase : std::uint8_t
 {
-  kPreCandidatePrepare,
-  kCandidateApplyExecute,
-  kPostCandidateCapture,
+  kPrepareBatch,
+  kDirectPrepare,
   kDualCsrUpdate,
   kFullLevelization,
   kMixedLevelization,
@@ -90,7 +88,6 @@ struct DualCsrOperationCounters
 struct DualCsrTransactionEvidence
 {
   std::vector<DualCsrReceiptPhase> phase_trace;
-  std::vector<NarrowCaptureAudit> capture_audits;
   DualCsrOperationCounters operation_counters;
   bool incremental_batch_executed{false};
   DualCsrPropagationScope propagation_scope{

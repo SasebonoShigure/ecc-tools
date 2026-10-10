@@ -15,17 +15,34 @@ double elapsed(Clock::time_point start)
 }
 
 }  // namespace
-CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before)
+CudaDualCsrSession::Impl::Impl(timing_edit::TimingEditSessionToken session_token, timing_edit::AppendOnlyHighWater water,
+                             std::shared_ptr<Impl> before)
     : storage(before ? before->storage : std::make_shared<DeviceStorage>(telemetry.cuda)), memory(storage->memory),
-      result_index(before ? 1 - before->result_index : 0), domain_index(before ? 1 - before->domain_index : 0), token(input.source_identity.session_token),
+      result_index(before ? 1 - before->result_index : 0), domain_index(before ? 1 - before->domain_index : 0), token(session_token),
       generation(before ? before->generation.value() + 1 : 0), high_water(water), runtime_owner(!before), origin(std::move(before))
 {
-  const auto start = Clock::now();
   describeDevice(telemetry.cuda);
-  auto packed = pack(input, storage->models);
-  host = std::make_shared<HostGraphState>();
-  telemetry.cuda.encode_ms = elapsed(start);
   memory.bindTelemetry(telemetry.cuda);
+}
+CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before)
+    : Impl(timing_edit::TimingEditSessionToken{input.source_identity.session_token}, water, std::move(before))
+{
+  const auto start = Clock::now();
+  auto packed = pack(input, storage->models);
+  telemetry.cuda.encode_ms = elapsed(start);
+  initializeFull(packed, input.parasitics.input_port_thresholds);
+}
+CudaDualCsrSession::Impl::Impl(const timing_dual_csr::DualCsrState& input, std::shared_ptr<Impl> before)
+    : Impl(input.session_token, input.high_water, std::move(before))
+{
+  const auto start = Clock::now();
+  auto packed = pack(input, storage->models);
+  telemetry.cuda.encode_ms = elapsed(start);
+  initializeFull(packed, input.reference_payload.parasitics.input_port_thresholds);
+}
+void CudaDualCsrSession::Impl::initializeFull(HostData& packed, const InputPortRcThresholds& thresholds)
+{
+  host = std::make_shared<HostGraphState>();
   host->layout = std::move(packed.layout);
   auto& paths = storage->domains[domain_index].host;
   paths = std::move(packed.paths);
@@ -45,10 +62,10 @@ CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::Appe
   view.path_count = paths.tags.size();
   view.clock_count = packed.clock_count;
   view.rc_net_count = packed.rc_nets.size();
-  view.rc_port_derate = input.parasitics.input_port_thresholds.slew_derate;
+  view.rc_port_derate = thresholds.slew_derate;
   for (unsigned output = 0; output < 2; ++output) {
-    view.rc_port_lower[output] = input.parasitics.input_port_thresholds.lower[output];
-    view.rc_port_upper[output] = input.parasitics.input_port_thresholds.upper[output];
+    view.rc_port_lower[output] = thresholds.lower[output];
+    view.rc_port_upper[output] = thresholds.upper[output];
   }
   view.root_count = host->roots.size();
   view.end_count = host->ends.size();
@@ -428,6 +445,35 @@ CudaDualCsrSession CudaDualCsrSession::stageFullNativeExport(const CsrReferenceI
   _impl->storage->pending = true;
   try {
     CudaDualCsrSession candidate(std::make_shared<Impl>(input, water, _impl));
+    candidate._impl->telemetry.cuda.end_to_end_ms = elapsed(start);
+    return candidate;
+  } catch (const CudaAllocationError&) {
+    _impl->restorePending();
+    throw;
+  } catch (const CudaError&) {
+    _impl->poisoned = true;
+    _impl->storage->poisoned = true;
+    _impl->restorePending();
+    throw;
+  } catch (...) {
+    _impl->restorePending();
+    throw;
+  }
+}
+CudaDualCsrSession CudaDualCsrSession::stageFullCsr(const timing_dual_csr::DualCsrState& input)
+{
+  const auto start = Clock::now();
+  requireCommitted();
+  demand(_impl->generation.value() != absent && input.session_token == _impl->token
+             && input.generation.value() == _impl->generation.value() + 1,
+         "CUDA full CSR rebuild session/generation mismatch");
+  demand(input.high_water.node_slots >= _impl->high_water.node_slots
+             && input.high_water.net_slots >= _impl->high_water.net_slots
+             && input.high_water.arc_slots >= _impl->high_water.arc_slots,
+         "CUDA full CSR rebuild cannot shrink stable slots");
+  _impl->storage->pending = true;
+  try {
+    CudaDualCsrSession candidate(std::make_shared<Impl>(input, _impl));
     candidate._impl->telemetry.cuda.end_to_end_ms = elapsed(start);
     return candidate;
   } catch (const CudaAllocationError&) {

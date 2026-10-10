@@ -79,11 +79,12 @@ Json telemetry(const csr::CudaTargetedTraceBatch& batch)
   result.update({{"generation_before", batch.generation_before},
                  {"generation_after", batch.generation_after},
                  {"node_count", batch.node_count},
-                 {"arc_count", batch.arc_count},
-                 {"native_prepare_ms", batch.native_prepare_ms},
+                 {"arc_slots", batch.arc_slots},
+                 {"direct_prepare_ms", batch.direct_prepare_ms},
                  {"commit_ms", batch.commit_ms},
-                 {"query_materialize_ms", batch.query_materialize_ms},
-                 {"report_ms", batch.report_ms},
+                 {"result_consumption", batch.results_consumed ? "completed" : "not_run"},
+                 {"query_materialize_ms", batch.results_consumed ? Json(batch.query_materialize_ms) : Json(nullptr)},
+                 {"report_ms", batch.results_consumed ? Json(batch.report_ms) : Json(nullptr)},
                  {"consumer_end_to_end_ms", batch.consumer_end_to_end_ms},
                  {"execution",
                   {{"requested_backend", toString(record.requested_backend)},
@@ -130,7 +131,7 @@ int main(int argc, char** argv)
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
     const bool replay_only = options.contains("--replay");
     const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
-    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/6.0.0" : "ista-cuda-targeted-trace/6.0.0"},
+    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/7.0.0" : "ista-cuda-targeted-trace/7.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
                 {"requested_backend", "cuda"},
@@ -163,6 +164,7 @@ int main(int argc, char** argv)
               }
               require(rejected, "second-batch native cell failure did not occur");
               if constexpr (incregpusta_debug_checks_enabled) {
+                view.session_context.materializeCudaTiming(view.database, view.authority);
                 auto exported = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
                 require(std::holds_alternative<csr::CsrReferenceInput>(exported), "post-failure graph export failed");
                 after_failure = csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(exported));

@@ -11,6 +11,7 @@ set(ISTA_TIMING_GRAPH_CSR_ADAPTER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatterValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatterPreparation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrNativeResultPreparation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatterPublish.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrConstraintExport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrClockSeedExport.cpp
@@ -36,6 +37,7 @@ target_link_libraries(ista_timing_graph_csr_adapter
     ista_timing_csr_snapshot_contract
     PRIVATE
     ista_timing_database_headers
+    ista_timing_dual_csr
 )
 
 target_compile_options(ista_timing_graph_csr_adapter PRIVATE

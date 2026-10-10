@@ -58,18 +58,12 @@ DualCsrViolationCode contractCode(const std::string& field)
   return DualCsrViolationCode::kShape;
 }
 
-void validateBaselineInput(const csr::CsrReferenceInput& input,
+void validateBaselineBinding(const csr::CsrReferenceInput& input,
                            timing_edit::TimingEditSessionToken token,
                            timing_edit::AppendOnlyHighWater high_water,
                            DualCsrViolations& violations)
 {
   using detail::reject;
-  const auto contract_errors
-      = csr::validateReferenceInputForSession(input, token.value());
-  for (const auto& error : contract_errors)
-    reject(violations, contractCode(error.field),
-           "input." + error.field, error.message);
-
   if (token.value() == 0)
     reject(violations, DualCsrViolationCode::kSession, "session_token",
            "session token must be nonzero");
@@ -104,25 +98,25 @@ void validateBaselineInput(const csr::CsrReferenceInput& input,
   }
 }
 
-}  // namespace
-
-std::uint64_t detail::currentBaselineFactoryCallCount() noexcept
+void validateBaselineInput(const csr::CsrReferenceInput& input,
+                           timing_edit::TimingEditSessionToken token,
+                           timing_edit::AppendOnlyHighWater high_water,
+                           DualCsrViolations& violations)
 {
-  return baseline_factory_calls;
+  using detail::reject;
+  const auto contract_errors
+      = csr::validateReferenceInputForSession(input, token.value());
+  for (const auto& error : contract_errors)
+    reject(violations, contractCode(error.field),
+           "input." + error.field, error.message);
+
+  validateBaselineBinding(input, token, high_water, violations);
 }
 
-DualCsrBaselineAttempt DualCsrBaselineFactory::create(
-    const csr::CsrReferenceInput& input,
-    timing_edit::TimingEditSessionToken session_token,
-    timing_edit::AppendOnlyHighWater high_water)
+DualCsrState buildBaselineState(const csr::CsrReferenceInput& input,
+                                timing_edit::TimingEditSessionToken session_token,
+                                timing_edit::AppendOnlyHighWater high_water)
 {
-  if (incregpusta_debug_checks_enabled && baseline_factory_calls != std::numeric_limits<std::uint64_t>::max())
-    ++baseline_factory_calls;
-  DualCsrBaselineAttempt attempt;
-  validateBaselineInput(input, session_token, high_water, attempt.violations);
-  if (!attempt.violations.empty())
-    return attempt;
-
   DualCsrState state;
   state.session_token = session_token;
   state.generation = timing_edit::TransactionGeneration{0};
@@ -165,9 +159,46 @@ DualCsrBaselineAttempt DualCsrBaselineFactory::create(
   state.telemetry.aux_rows = 0;
   state.telemetry.aux_edges = 0;
 
+  return state;
+}
+
+}  // namespace
+
+std::uint64_t detail::currentBaselineFactoryCallCount() noexcept
+{
+  return baseline_factory_calls;
+}
+
+DualCsrBaselineAttempt DualCsrBaselineFactory::create(
+    const csr::CsrReferenceInput& input,
+    timing_edit::TimingEditSessionToken session_token,
+    timing_edit::AppendOnlyHighWater high_water)
+{
+  if (incregpusta_debug_checks_enabled && baseline_factory_calls != std::numeric_limits<std::uint64_t>::max())
+    ++baseline_factory_calls;
+  DualCsrBaselineAttempt attempt;
+  validateBaselineInput(input, session_token, high_water, attempt.violations);
+  if (!attempt.violations.empty())
+    return attempt;
+
+  auto state = buildBaselineState(input, session_token, high_water);
   attempt.violations = validateDualCsrState(state);
   if (attempt.violations.empty())
     attempt.state = std::move(state);
+  return attempt;
+}
+
+DualCsrBaselineAttempt DualCsrBaselineFactory::fromNativeExport(
+    const csr::CsrReferenceInput& input,
+    timing_edit::TimingEditSessionToken session_token,
+    timing_edit::AppendOnlyHighWater high_water)
+{
+  if constexpr (incregpusta_debug_checks_enabled)
+    return create(input, session_token, high_water);
+  DualCsrBaselineAttempt attempt;
+  validateBaselineBinding(input, session_token, high_water, attempt.violations);
+  if (attempt.violations.empty())
+    attempt.state = buildBaselineState(input, session_token, high_water);
   return attempt;
 }
 

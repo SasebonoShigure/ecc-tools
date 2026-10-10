@@ -1,4 +1,6 @@
 #include "CsrCudaPacking.hpp"
+#include "DualCsrTimingPayloadViewImpl.hpp"
+#include "FlatTimingPayloadView.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -140,7 +142,9 @@ void finishRcNet(HostRcNet& net)
     }
 }
 
-void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& models)
+namespace {
+template <class ArcAt>
+void packRcGraph(const TimingPayloadView& input, std::size_t arc_count, ArcAt arc_at, HostData& data, ModelStorage& models)
 {
   std::map<Index, std::shared_ptr<const CsrParasiticTree>> owners;
   const auto retain = [&](const CsrParasiticBinding& binding) {
@@ -148,16 +152,20 @@ void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& m
     if (binding.tree->terminals.empty() || binding.terminal >= binding.tree->terminals.size())
       throw std::invalid_argument("CUDA RC binding outside tree");
     const auto driver = binding.tree->terminals.front().value();
-    if (driver >= input.nodes.size())
+    if (driver >= input.nodeRecords().size())
       throw std::invalid_argument("CUDA RC driver outside graph");
     const auto [found, added] = owners.emplace(driver, binding.tree);
     if (!added && found->second != binding.tree)
       throw std::invalid_argument("CUDA driver has inconsistent RC owner");
   };
-  for (const auto& arc : input.arcs) retain(arc.parasitic);
-  for (const auto& seed : input.start_seeds) retain(seed.parasitic);
+  for (std::size_t id = 0; id < arc_count; ++id)
+    if (const auto* arc = arc_at(id)) retain(arc->parasitic);
+  for (const auto& seed : input.startSeeds()) retain(seed.parasitic);
   if (owners.empty()) return;
-  data.rc.net_by_node.assign(input.nodes.size(), absent);
+  std::map<std::string_view, const ReferencedLibraryCellModel*, std::less<>> cells;
+  for (const auto& cell : input.referencedLibraryCells())
+    cells.emplace(cell.cell_name, &cell);
+  data.rc.net_by_node.assign(input.nodeRecords().size(), absent);
   data.rc_nets.reserve(owners.size());
   for (const auto& [driver, owner] : owners) {
     data.rc.net_by_node[driver] = data.rc_nets.size();
@@ -165,23 +173,23 @@ void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& m
     net.owner = owner;
     for (std::size_t terminal = 0; terminal < owner->terminals.size(); ++terminal) {
       const auto id = owner->terminals[terminal].value();
-      const auto& node = input.nodes.at(id);
+      const auto& node = input.nodeRecords().at(id);
       HostRcNode value{{owner, terminal}, node.is_port, absent};
       if (!node.is_port) {
-        const auto found = std::ranges::lower_bound(input.referenced_library_cells, node.instance_cell,
-            {}, &ReferencedLibraryCellModel::cell_name);
-        if (found == input.referenced_library_cells.end() || found->cell_name != node.instance_cell)
+        const auto found = cells.find(node.instance_cell);
+        if (found == cells.end())
           throw std::invalid_argument("CUDA RC terminal has no referenced cell");
-        if (found->present) value.load_cell = models.internLoadCell(*found);
+        if (found->second->present) value.load_cell = models.internLoadCell(*found->second);
       }
       if (!data.rc.nodes.emplace(id, std::move(value)).second)
         throw std::invalid_argument("CUDA RC terminal belongs to multiple nets");
     }
   }
 
-  for (std::size_t id = 0; id < input.arcs.size(); ++id) {
-    const auto& source = input.arcs[id];
-    if (!source.parasitic.tree) continue;
+  for (std::size_t id = 0; id < arc_count; ++id) {
+    const auto* active = arc_at(id);
+    if (!active || !active->parasitic.tree) continue;
+    const auto& source = *active;
     auto& arc = data.arcs.at(id);
     const auto driver = arc.net ? arc.source : arc.sink;
     if (!arc.net && source.parasitic.terminal != 0)
@@ -200,7 +208,7 @@ void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& m
     arc.rc_binding = data.rc.bindings.size();
     data.rc.bindings.push_back(binding);
   }
-  for (const auto& source : input.start_seeds) {
+  for (const auto& source : input.startSeeds()) {
     if (!source.parasitic.tree || source.availability != StartSeedAvailability::kDeferredSequential)
       continue;
     const auto found = std::ranges::lower_bound(data.node_seeds, source.seed_node.value(), {}, &NodeSeed::node);
@@ -217,11 +225,25 @@ void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& m
   for (std::size_t index = 0; index < data.rc_nets.size(); ++index) {
     auto& net = data.rc_nets[index];
     std::ranges::sort(net.initialize_arcs, [&](Index a, Index b) {
-      return std::pair{*input.arcs[a].native_cell_arc_ordinal, a}
-          < std::pair{*input.arcs[b].native_cell_arc_ordinal, b};
+      return std::pair{*arc_at(a)->native_cell_arc_ordinal, a}
+          < std::pair{*arc_at(b)->native_cell_arc_ordinal, b};
     });
     finishRcNet(net);
   }
+}
+
+}  // namespace
+
+void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& models)
+{
+  packRcGraph(FlatTimingPayloadView(input), input.arcs.size(),
+      [&](std::size_t id) { return &input.arcs[id]; }, data, models);
+}
+
+void packRcGraph(const timing_dual_csr::DualCsrState& input, HostData& data, ModelStorage& models)
+{
+  packRcGraph(timing_dual_csr::DualCsrTimingPayloadViewImpl(input), input.arc_slots.size(),
+      [&](std::size_t id) { return input.arc_slots[id].active ? &input.arc_slots[id].payload : nullptr; }, data, models);
 }
 
 }  // namespace ista::csr::cuda_detail

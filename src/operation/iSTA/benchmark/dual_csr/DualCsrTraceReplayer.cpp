@@ -21,17 +21,14 @@
 #include "CpuIncrementalLevelizationRunner.hpp"
 #include "CsrReferenceInputAdapterInternal.hpp"
 #include "DualCsrBaselineFactoryInstrumentationInternal.hpp"
-#include "NativeTargetedEditPreparer.hpp"
-#include "NativeCandidateExecutor.hpp"
 #include "DualCsrStructuredBatchPreparer.hpp"
 #include "CpuDualCsrBaseline.hpp"
 #include "DualCsrTransactionCoordinator.hpp"
-#include "DualSemanticReadView.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
-#include "NarrowTimingRecordReader.hpp"
 #include "TimingEditDualCsrDescriptorBuilder.hpp"
-#include "TimingResultScatterInternal.hpp"
 #include "StaProductionLifecycle.hpp"
+#include "SemanticCsrNativeView.hpp"
+#include "NativeCandidateExecutor.hpp"
 #include "DelayCalculator.hpp"
 #include "TimingAnalyzer.hpp"
 
@@ -45,111 +42,6 @@ double elapsedMilliseconds(SteadyClock::time_point start)
   return std::chrono::duration<double, std::milli>(
              SteadyClock::now() - start)
       .count();
-}
-
-const char* narrowCaptureErrorToken(NarrowCaptureError error) noexcept
-{
-  switch (error) {
-    case NarrowCaptureError::kBatchBindingMismatch:
-      return "batch_binding_mismatch";
-    case NarrowCaptureError::kInvalidGeneration:
-      return "invalid_generation";
-    case NarrowCaptureError::kInvalidHighWater:
-      return "invalid_high_water";
-    case NarrowCaptureError::kUnsupportedPolicy:
-      return "unsupported_policy";
-    case NarrowCaptureError::kParasiticModeMismatch:
-      return "parasitic_mode_mismatch";
-    case NarrowCaptureError::kDuplicateRequest:
-      return "duplicate_request";
-    case NarrowCaptureError::kUnplannedDependency:
-      return "unplanned_dependency";
-    case NarrowCaptureError::kNativeNodeNotFound:
-      return "native_node_not_found";
-    case NarrowCaptureError::kNativeInstanceNotFound:
-      return "native_instance_not_found";
-    case NarrowCaptureError::kNativeNetNotFound:
-      return "native_net_not_found";
-    case NarrowCaptureError::kArcMultiplicityMismatch:
-      return "arc_multiplicity_mismatch";
-    case NarrowCaptureError::kArcOrdinalMismatch:
-      return "arc_ordinal_mismatch";
-    case NarrowCaptureError::kArcKeyMismatch:
-      return "arc_key_mismatch";
-    case NarrowCaptureError::kMalformedNativeRecord:
-      return "malformed_native_record";
-    case NarrowCaptureError::kFullExportObserved:
-      return "full_export_observed";
-  }
-  return "unknown";
-}
-
-void appendCaptureCounts(std::string& message, std::string_view label,
-                         std::uint64_t requested, std::uint64_t reads,
-                         std::uint64_t accepted)
-{
-  message += label;
-  message += '=';
-  message += std::to_string(requested);
-  message += '/';
-  message += std::to_string(reads);
-  message += '/';
-  message += std::to_string(accepted);
-}
-
-std::string narrowCaptureFailureMessage(const CandidateBoundCapture& capture)
-{
-  std::string message{"candidate-bound narrow capture failed: error="};
-  const std::optional<NarrowCaptureError> error = capture.error();
-  if (error.has_value()) {
-    message += narrowCaptureErrorToken(*error);
-    message += '(';
-    message += std::to_string(static_cast<unsigned>(*error));
-    message += ')';
-  } else {
-    message += "missing";
-  }
-
-  const NarrowCaptureAudit* audit = capture.audit();
-  if (audit == nullptr)
-    return message + " audit=missing";
-
-  message += " audit{requested/reads/accepted ";
-  appendCaptureCounts(message, "nodes", audit->requested_nodes,
-                      audit->node_reads, audit->accepted_nodes);
-  message += " instances=";
-  appendCaptureCounts(message, "", audit->requested_instances,
-                      audit->instance_reads, audit->accepted_instances);
-  message += " arcs=";
-  appendCaptureCounts(message, "", audit->requested_arcs,
-                      audit->native_arc_candidate_reads,
-                      audit->accepted_arcs);
-  message += " deactivations=";
-  appendCaptureCounts(message, "", audit->requested_deactivations,
-                      audit->deactivated_arc_before_reads,
-                      audit->accepted_deactivations);
-  message += " load_nets=";
-  appendCaptureCounts(message, "", audit->requested_load_nets,
-                      audit->net_reads, audit->accepted_load_nets);
-  message += " library_cells=";
-  appendCaptureCounts(message, "", audit->requested_library_cells,
-                      audit->library_cell_reads,
-                      audit->accepted_library_cells);
-  message += " cell_pin_capacitances=";
-  appendCaptureCounts(message, "", audit->requested_cell_pin_capacitances,
-                      audit->cell_pin_capacitance_reads,
-                      audit->accepted_cell_pin_capacitances);
-  message += " node_roles=";
-  appendCaptureCounts(message, "", audit->requested_node_roles,
-                      audit->node_role_reads, audit->accepted_node_roles);
-  message += " captured_arc_records="
-             + std::to_string(audit->captured_arc_records);
-  message += " rejected_reads=" + std::to_string(audit->rejected_reads);
-  message += " native_full_graph_exports="
-             + std::to_string(audit->native_full_graph_exports);
-  message += " native_full_reference_exports="
-             + std::to_string(audit->native_full_reference_exports) + '}';
-  return message;
 }
 
 [[noreturn]] void fail(DualCsrTraceFailureCode code,
@@ -359,8 +251,7 @@ DualCsrTraceRunResult replayPrefixWithMode(
 
   const auto full_before = incregpusta_debug_checks_enabled ? csr::detail::currentNativeFullExportCounters() : csr::detail::NativeFullExportCounters{};
   DualCsrTransactionCoordinator coordinator(std::move(baseline));
-  auto native_state = timing_edit::NativeTargetedEditPreparer::bindBaseline(
-      context.baseline_database, context.baseline_reference_input, program.baseline(), context.models);
+  SemanticCsrNativeView native_view(session_token);
   std::vector<DualCsrPublishedObservation> observations;
   if constexpr (incregpusta_debug_checks_enabled)
     observations.reserve(prefix_batches);
@@ -382,39 +273,19 @@ DualCsrTraceRunResult replayPrefixWithMode(
         fail(DualCsrTraceFailureCode::kInvalidProgram,
              "semantic batch generation is not contiguous");
       const auto prepare_started = SteadyClock::now();
-      DualSemanticReadView committed_view(committed.graph);
       PendingStructuredBatch pending
           = coordinator.prepareBatch(trace_batches[index]);
-      batch_timing.pre_candidate_prepare_ms
+      batch_timing.prepare_batch_ms
           = elapsedMilliseconds(prepare_started);
       if constexpr (incregpusta_debug_checks_enabled)
-        evidence.phase_trace.push_back(DualCsrReceiptPhase::kPreCandidatePrepare);
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kPrepareBatch);
 
-      const auto candidate_started = SteadyClock::now();
-      auto native_batch = timing_edit::NativeTargetedEditPreparer::prepare(
-          context.baseline_database, context.authority, trace_batches[index], native_state);
-      batch_timing.candidate_apply_execute_ms
-          = elapsedMilliseconds(candidate_started);
+      const auto direct_started = SteadyClock::now();
+      VerifiedStructuredBatch verified = TimingEditDualCsrDescriptorBuilder::buildDirect(
+          std::move(pending), context.authority, context.models);
+      batch_timing.direct_prepare_ms = elapsedMilliseconds(direct_started);
       if constexpr (incregpusta_debug_checks_enabled)
-        evidence.phase_trace.push_back(DualCsrReceiptPhase::kCandidateApplyExecute);
-
-      const auto capture_started = SteadyClock::now();
-      CandidateBoundCapture capture = NarrowTimingRecordReader{context.models, &native_batch}.read(
-          native_batch.transaction.database(), committed_view,
-          committed.arc_group_index, pending.stagedResolver(),
-          pending.preparedBatch(), pending.capturePlan());
-      if (!capture.success())
-        fail(DualCsrTraceFailureCode::kCaptureRejected,
-             narrowCaptureFailureMessage(capture));
-      VerifiedStructuredBatch verified
-          = TimingEditDualCsrDescriptorBuilder::build(
-              std::move(pending), std::move(capture));
-      batch_timing.post_candidate_capture_ms
-          = elapsedMilliseconds(capture_started);
-      if constexpr (incregpusta_debug_checks_enabled)
-        evidence.capture_audits.push_back(verified.captureAudit());
-      if constexpr (incregpusta_debug_checks_enabled)
-        evidence.phase_trace.push_back(DualCsrReceiptPhase::kPostCandidateCapture);
+        evidence.phase_trace.push_back(DualCsrReceiptPhase::kDirectPrepare);
 
       std::optional<DualCsrVerifiedStage> verified_stage;
       DualCsrStageTimings stage_timings;
@@ -460,38 +331,28 @@ DualCsrTraceRunResult replayPrefixWithMode(
       if (!status.ok() || !status.published || status.poisoned)
         fail(DualCsrTraceFailureCode::kPublishRejected,
              "atomic aggregate publish rejected the verified stage");
-      native_batch.transaction.commit();
       batch_timing.session_step_ms = elapsedMilliseconds(prepare_started);
-      // This runner requests current timing and summary/path analysis each batch.
-      // Publication has completed; a consumer failure cannot undo that commit.
-      const auto& current = coordinator.committed();
-      if (!context.authority.readyForQuery() || native_state.generation != current.generation
-          || native_state.session_token != current.graph.session_token)
-        fail(DualCsrTraceFailureCode::kPublishRejected, "CPU consumer lost its committed generation binding");
-      const auto materialize_started = SteadyClock::now();
-      const auto& layout = context.baseline_reference_input;
-      {
-        auto prepared_timing = csr::detail::prepareStableTimingResult(
-            context.baseline_database, native_state.node_names, native_state.arc_native_ranks,
-            {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, current.timing.values);
-        auto* timing = std::get_if<csr::detail::PreparedTimingResult>(&prepared_timing);
-        if (!timing)
-          fail(DualCsrTraceFailureCode::kPublishRejected, "CPU committed timing cannot be mapped to native state");
-        csr::detail::publishPreparedTimingResult(*timing);
+      // Explicit consumers retain per-batch results; ordinary replay materializes only its final prefix.
+      if (context.consume_results || index + 1 == prefix_batches) {
+        const auto& current = coordinator.committed();
+        const auto materialize_started = SteadyClock::now();
+        native_view.materialize(context.baseline_database, context.authority, current.graph, current.resolver,
+                                std::span(trace_batches).first(index + 1), current.timing.values);
+        batch_timing.query_materialization_ms = elapsedMilliseconds(materialize_started);
+        const auto report_started = SteadyClock::now();
+        const auto report = executeStaLifecyclePipeline(
+            {{"TimingAnalyzer", [] { TimingAnalyzer::initInst(); },
+              [] { STATA.analyzePropagatedTiming(); }, [] { TimingAnalyzer::destroyInst(); }}},
+            StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+        if (report.cleanup_failed)
+          context.authority.poison();
+        if (!report.succeeded)
+          fail(DualCsrTraceFailureCode::kPublishRejected, "CPU propagated timing report failed: " + report.message);
+        if (context.consume_results)
+          context.consume_results();
+        batch_timing.report_ms = elapsedMilliseconds(report_started);
+        batch_timing.results_consumed = true;
       }
-      batch_timing.query_materialization_ms = elapsedMilliseconds(materialize_started);
-      const auto report_started = SteadyClock::now();
-      const auto report = executeStaLifecyclePipeline(
-          {{"TimingAnalyzer", [] { TimingAnalyzer::initInst(); },
-            [] { STATA.analyzePropagatedTiming(); }, [] { TimingAnalyzer::destroyInst(); }}},
-          StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
-      if (report.cleanup_failed)
-        context.authority.poison();
-      if (!report.succeeded)
-        fail(DualCsrTraceFailureCode::kPublishRejected, "CPU propagated timing report failed: " + report.message);
-      if (context.consume_results)
-        context.consume_results();
-      batch_timing.report_ms = elapsedMilliseconds(report_started);
       batch_timing.consumer_step_ms = elapsedMilliseconds(prepare_started);
       if constexpr (incregpusta_debug_checks_enabled)
         evidence.phase_trace.push_back(DualCsrReceiptPhase::kPublish);

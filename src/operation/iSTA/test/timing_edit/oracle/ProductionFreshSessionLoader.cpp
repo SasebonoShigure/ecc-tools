@@ -99,11 +99,12 @@ void requireFullRecord(const StaExecutionRecord& record, StaBackend backend)
 class TimingOnlySessionOperations final : public StaSessionOperations
 {
  public:
-  explicit TimingOnlySessionOperations(StaBackend backend) : _backend(backend) {}
+  TimingOnlySessionOperations(StaBackend backend, csr::CsrReferenceInput& baseline_input)
+      : _backend(backend), _baseline_input(baseline_input) {}
   StaStatus initialize(std::uint64_t token, std::map<std::string, std::any>& config) override
   { return STAI.initializeSession(token, config); }
   StaStatus runFullBaseline(std::uint64_t token, StaCsrSessionContext* context) override
-  { return StaTimingEditSessionProbeAccess::runTimingOnlyBaseline(token, context, _backend); }
+  { return StaTimingEditSessionProbeAccess::runTimingOnlyBaseline(token, context, _backend, _baseline_input); }
   StaStatus close(std::uint64_t token, StaCsrSessionContext* context,
                   std::unique_ptr<csr::CsrSnapshotObservation>* released) override
   { return STAI.closeSession(token, context, released); }
@@ -117,6 +118,7 @@ class TimingOnlySessionOperations final : public StaSessionOperations
   { return STAI.scatterSessionCsrTimingResultForTesting(token, context, result); }
  private:
   StaBackend _backend;
+  csr::CsrReferenceInput& _baseline_input;
 };
 
 void loadArtifacts(const FreshBaselineArtifacts& artifacts)
@@ -179,9 +181,10 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
       artifact_evidence.push_back(evidence(file));
 
   loadArtifacts(artifacts);
+  csr::CsrReferenceInput baseline_input;
   IncrementalStaSession session(
       {backend, StaUpdateStrategy::kFull, StaFallbackPolicy::kError},
-      std::make_unique<TimingOnlySessionOperations>(backend));
+      std::make_unique<TimingOnlySessionOperations>(backend, baseline_input));
   throwOnStaFailure(session.initialize(artifacts.analysis_context, makeConfig(artifacts.run_directory, artifacts.threads)),
                     session.request());
   const auto token = session.sessionToken();
@@ -198,15 +201,20 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
     const StaStatus guarded = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
         session, [&](std::uint64_t guarded_token, StaCsrSessionContext& context,
                      const NativeExecutionAuthority& authority) {
-          csr::CsrReferenceInputExportResult exported = csr::exportCsrReferenceInputCandidate(
-              STADM.getDatabase(), artifacts.analysis_context, guarded_token, context.libraryModels(STADM.getDatabase()));
-          const auto* reference = std::get_if<csr::CsrReferenceInput>(&exported);
-          if (reference == nullptr || reference->source_identity.session_token != guarded_token
-              || reference->source_identity.graph_generation != 0
-              || !reference->unsupported_reasons.empty()) {
+          if (backend == StaBackend::kCpu) {
+            auto exported = csr::exportCsrReferenceInputCandidate(
+                STADM.getDatabase(), artifacts.analysis_context, guarded_token, context.libraryModels(STADM.getDatabase()));
+            auto* reference = std::get_if<csr::CsrReferenceInput>(&exported);
+            if (!reference)
+              fail("fresh native baseline CSR export failed");
+            baseline_input = std::move(*reference);
+          }
+          if (baseline_input.source_identity.session_token != guarded_token
+              || baseline_input.source_identity.graph_generation != 0
+              || !baseline_input.unsupported_reasons.empty()) {
             fail("fresh analyzed baseline is not a supported generation-zero CSR reference input");
           }
-          work(ProductionFreshSessionView{session, context, STADM.getDatabase(), *reference,
+          work(ProductionFreshSessionView{session, context, STADM.getDatabase(), baseline_input,
                                           authority, guarded_token, artifact_evidence});
           return StaStatus::success(StaSessionState::kBaselineExecuted);
         });

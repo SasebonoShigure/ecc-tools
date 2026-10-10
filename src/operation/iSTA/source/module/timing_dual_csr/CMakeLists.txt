@@ -63,6 +63,9 @@ if(BUILD_TESTING)
     endfunction()
 
     ista_add_timing_dual_csr_test(
+        ista_timing_dual_csr_index_group_patch_test
+        DualCsrIndexGroupPatchTest.cpp)
+    ista_add_timing_dual_csr_test(
         ista_timing_dual_csr_baseline_view_test
         DualCsrBaselineAndViewTest.cpp)
     ista_add_timing_dual_csr_test(

@@ -120,7 +120,7 @@ void StaCsrSessionContext::materializeCudaTiming(Database& database, const timin
   if (!authority.readyForQuery() || &database != &STADM.getDatabase())
     throw std::logic_error("CUDA query requires a committed canonical Database");
   try {
-    cudaState(authority).materialize(database);
+    cudaState(authority).materialize(database, authority);
   } catch (...) {
     if (_cuda && (_cuda->_poisoned || _cuda->device.poisoned())) authority.poison();
     throw;
@@ -133,7 +133,7 @@ void StaCsrSessionContext::prepareCudaReport(Database& database, const timing_ed
   if (state._report_generation == state.device.generation())
     return;
   const auto result = executeStaLifecyclePipeline(
-      {{"CUDA report preparation", [] {}, [&] { state.prepareReport(database); }, [] {}}},
+      {{"CUDA report preparation", [] {}, [&] { state.prepareReport(); }, [] {}}},
       StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
   if (result.cleanup_failed) state._poisoned = true;
   if (state._poisoned || state.device.poisoned()) authority.poison();
@@ -145,7 +145,7 @@ void StaCsrSessionContext::prepareCudaReport(Database& database, const timing_ed
 
 StaCsrCaptureAttempt StaCsrSessionContext::capture(const Database& database)
 {
-  if (_substate != StaCsrSessionSubstate::kAwaitingCapture)
+  if (_physical || _substate != StaCsrSessionSubstate::kAwaitingCapture)
     return invalidCaptureAttempt();
 
   _substate = StaCsrSessionSubstate::kCaptureFailed;
@@ -165,7 +165,7 @@ StaCsrCaptureAttempt StaCsrSessionContext::capture(const Database& database)
 
 StaCsrReferenceAttempt StaCsrSessionContext::computeReference()
 {
-  if (_substate != StaCsrSessionSubstate::kReady || !_snapshot)
+  if (_physical || _substate != StaCsrSessionSubstate::kReady || !_snapshot)
     return invalidReferenceAttempt();
 
   csr::CsrComputationResult result = csr::computeCsrSessionReference(*_snapshot);
@@ -175,7 +175,7 @@ StaCsrReferenceAttempt StaCsrSessionContext::computeReference()
 
 StaCsrScatterAttempt StaCsrSessionContext::scatter(Database& database, const csr::CsrTimingResult& result)
 {
-  if (_substate != StaCsrSessionSubstate::kReady || !_snapshot)
+  if (_physical || _substate != StaCsrSessionSubstate::kReady || !_snapshot)
     return invalidScatterAttempt();
 
   csr::CsrTimingResultScatterAttempt result_attempt = csr::scatterCsrSessionTimingResult(database, *_snapshot, result, _analysis_context, _session_token);
@@ -212,7 +212,7 @@ bool StaCsrSessionContext::release(std::unique_ptr<csr::CsrSnapshotObservation>*
 
 bool StaCsrSessionContext::copyObservation(std::unique_ptr<csr::CsrSnapshotObservation>* detached_out)
 {
-  if (detached_out == nullptr || *detached_out)
+  if (_physical || detached_out == nullptr || *detached_out)
     return false;
   if constexpr (!incregpusta_debug_checks_enabled)
     return true;

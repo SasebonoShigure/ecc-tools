@@ -10,6 +10,8 @@
 
 #include "DualCsrStateValidation.hpp"
 
+namespace ista { class CudaCsrEditState; }
+
 namespace ista::timing_dual_csr {
 
 struct DualCsrBaselineAttempt
@@ -27,6 +29,14 @@ class DualCsrBaselineFactory final
 {
  public:
   [[nodiscard]] static DualCsrBaselineAttempt create(
+      const csr::CsrReferenceInput& input,
+      timing_edit::TimingEditSessionToken session_token,
+      timing_edit::AppendOnlyHighWater high_water);
+
+ private:
+  friend class ista::CudaCsrEditState;
+  // Session-owned exports already enforce their input contract while constructing the graph.
+  [[nodiscard]] static DualCsrBaselineAttempt fromNativeExport(
       const csr::CsrReferenceInput& input,
       timing_edit::TimingEditSessionToken session_token,
       timing_edit::AppendOnlyHighWater high_water);

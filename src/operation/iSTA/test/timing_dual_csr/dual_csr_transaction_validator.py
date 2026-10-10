@@ -449,69 +449,6 @@ def normalize_plan(value: dict[str, Any]) -> dict[str, Any]:
     return plan
 
 
-def _validate_audit(value: object, descriptor: dict[str, Any], label: str,
-                    require: Require) -> None:
-    keys = {"requested_nodes", "node_reads", "accepted_nodes",
-        "requested_instances", "instance_reads", "accepted_instances",
-        "requested_arcs", "native_arc_candidate_reads", "accepted_arcs",
-        "requested_deactivations", "deactivated_arc_before_reads",
-        "accepted_deactivations", "captured_arc_records", "requested_load_nets",
-        "net_reads", "accepted_load_nets", "requested_library_cells",
-        "library_cell_reads", "accepted_library_cells",
-        "requested_cell_pin_capacitances", "cell_pin_capacitance_reads",
-        "accepted_cell_pin_capacitances", "requested_node_roles",
-        "node_role_reads", "accepted_node_roles", "index_group_lookups",
-        "native_arc_candidate_upper_bound", "arc_identity_tie_breaks",
-        "rejected_reads", "full_export_guard_active", "full_export_observed",
-        "native_full_graph_exports", "native_full_reference_exports"}
-    item = _object(value, keys, label, require)
-    counts = {key: _count(item[key], f"{label}.{key}", require)
-              for key in keys if key not in {"full_export_guard_active",
-                                             "full_export_observed"}}
-    require(item["full_export_guard_active"] is True
-            and item["full_export_observed"] is False,
-            f"{label} full-export guard evidence differs")
-    for field in ("native_full_graph_exports", "native_full_reference_exports",
-                  "rejected_reads"):
-        require(counts[field] == 0, f"{label}.{field} must be zero")
-    require(counts["captured_arc_records"]
-            == counts["accepted_arcs"] + counts["accepted_deactivations"],
-            f"{label} captured arc count differs")
-    require(counts["requested_nodes"] == counts["accepted_nodes"]
-            <= counts["node_reads"] <= descriptor["after"]["node_slots"],
-            f"{label} node reads are not bounded")
-    for requested, reads, accepted in (
-        ("requested_instances", "instance_reads", "accepted_instances"),
-        ("requested_load_nets", "net_reads", "accepted_load_nets"),
-        ("requested_library_cells", "library_cell_reads", "accepted_library_cells"),
-        ("requested_cell_pin_capacitances", "cell_pin_capacitance_reads",
-         "accepted_cell_pin_capacitances"),
-        ("requested_node_roles", "node_role_reads", "accepted_node_roles")):
-        require(counts[requested] == counts[reads] == counts[accepted],
-                f"{label}.{requested} capture is not exact")
-    require(counts["requested_arcs"] == counts["accepted_arcs"]
-            <= counts["native_arc_candidate_reads"]
-            <= counts["native_arc_candidate_upper_bound"]
-            <= 2 * descriptor["after"]["arc_slots"],
-            f"{label} arc candidate reads are not bounded")
-    require(counts["requested_deactivations"]
-            == counts["deactivated_arc_before_reads"]
-            == counts["accepted_deactivations"]
-            == len(descriptor["logical_deactivations"]),
-            f"{label} deactivation capture is not exact")
-    requests = counts["requested_arcs"] + counts["requested_deactivations"]
-    if requests == 0:
-        require(counts["index_group_lookups"] == 0
-                and counts["native_arc_candidate_reads"] == 0
-                and counts["native_arc_candidate_upper_bound"] == 0,
-                f"{label} empty group lookup audit differs")
-    else:
-        require(0 < counts["index_group_lookups"] <= requests,
-                f"{label} group lookup count is not bounded")
-    require(counts["arc_identity_tie_breaks"] <= counts["accepted_arcs"],
-            f"{label} arc tie-break count differs")
-
-
 def _validate_execution_trace(value: object, generation: int,
                               descriptor_node_bounds: list[tuple[int, int, int]],
                               final_node_count: int,
@@ -645,23 +582,16 @@ def validate_transaction(value: object, generation: int,
     validate_resolver_semantics(item["resolver"], functional, structural,
         item["baseline_reference_input"], semantic,
         f"{label}.resolver_semantics", require)
-    evidence = _object(item["evidence"], {"phase_trace", "capture_audits",
+    evidence = _object(item["evidence"], {"phase_trace",
         "operation_counters", "incremental_batch_executed", "propagation_scope"},
         f"{label}.evidence", require)
     expected_phases: list[str] = []
     for mode in execution_modes:
         expected_phases.extend([
-            "pre_candidate_prepare", "candidate_apply_execute",
-            "post_candidate_capture", "dual_csr_update",
+            "prepare_batch", "direct_prepare", "dual_csr_update",
             "mixed_levelization" if mode == "mixed_stage6" else "full_levelization",
             "full_propagation", "intrinsic_verify", "publish"])
     require(evidence["phase_trace"] == expected_phases, f"{label}.evidence phase trace differs")
-    audits = _array(evidence["capture_audits"],
-                    f"{label}.evidence.capture_audits", require)
-    require(len(audits) == generation, f"{label} audit count differs")
-    for index, audit in enumerate(audits):
-        _validate_audit(audit, descriptors[index],
-                        f"{label}.evidence.capture_audits[{index}]", require)
     counter_keys = {"native_full_graph_exports", "native_full_reference_exports",
         "host_snapshot_rebuilds", "baseline_factory_calls", "fallback_calls"}
     counters = _object(evidence["operation_counters"], counter_keys,

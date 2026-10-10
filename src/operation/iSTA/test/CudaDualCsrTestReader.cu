@@ -5,6 +5,20 @@
 #include "CudaDualCsrTestReader.hpp"
 #include "timing_edit/BufferTraceCsrJson.hpp"
 namespace ista::csr {
+#if ECC_INCREGPUSTA_DEBUG_CHECKS
+namespace {
+__global__ void invalidSemanticDeviceAddress()
+{
+  *static_cast<volatile int*>(nullptr) = 1;
+}
+}
+void CudaDualCsrTestReader::corruptContext()
+{
+  invalidSemanticDeviceAddress<<<1, 1>>>();
+  cuda_detail::demand(cudaGetLastError() == cudaSuccess, "semantic fault kernel did not launch");
+  cuda_detail::demand(cudaDeviceSynchronize() == cudaErrorIllegalAddress, "semantic device fault did not synchronize");
+}
+#endif
 CudaDualCsrSession CudaDualCsrTestReader::computeRc(const CsrReferenceInput& input, unsigned threads,
     std::optional<timing_edit::AppendOnlyHighWater> high_water)
 {
@@ -20,6 +34,10 @@ CudaDualCsrSession CudaDualCsrTestReader::computeRc(const CsrReferenceInput& inp
 CudaDualCsrSession CudaDualCsrTestReader::stageRc(CudaDualCsrSession& owner, const CsrReferenceInput& input)
 {
   return owner.stageFullNativeExport(input, {input.nodes.size(), 0, input.arcs.size()});
+}
+CudaDualCsrSession CudaDualCsrTestReader::stageFullCsr(CudaDualCsrSession& owner, const timing_dual_csr::DualCsrState& input)
+{
+  return owner.stageFullCsr(input);
 }
 void CudaDualCsrTestReader::setKernelThreads(CudaDualCsrSession& session, unsigned threads)
 {
@@ -43,6 +61,13 @@ const CsrTimingValues& CudaDualCsrTestReader::materializeWithLevelOwnershipCheck
   if constexpr (incregpusta_debug_checks_enabled)
     demand(nodes == result.level_nodes.data(), "materialization copied diagnostic level order");
   demand(result.level_nodes.size() == result.node_to_level.size(), "query did not materialize the full level order");
+  return result;
+}
+const std::vector<BufferCandidateTiming>& CudaDualCsrTestReader::readCandidateTiming(const CudaDualCsrSession& session)
+{
+  cuda_detail::demand(session._impl && !session._impl->values, "candidate check requires no full timing cache");
+  const auto& result = session.candidateTiming();
+  cuda_detail::demand(!session._impl->values, "candidate query materialized full timing");
   return result;
 }
 void CudaDualCsrTestReader::omitAuxAndRecompute(CudaDualCsrSession& candidate)

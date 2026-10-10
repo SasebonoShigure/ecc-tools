@@ -7,6 +7,9 @@
 #include "BufferTraceReplayInput.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "CudaFullTraceReplayer.hpp"
+#include "CudaTargetedTimingProjection.hpp"
+#include "CudaTargetedDeviceComparison.hpp"
+#include "StaCsrSessionContext.hpp"
 #include "DualCsrBaselineFactory.hpp"
 #include "DualCsrFunctionalReceiptJson.hpp"
 #include "DualCsrTargetedArtifactSupport.hpp"
@@ -53,13 +56,13 @@ Json telemetry(const csr::CudaFullTraceBatch& batch)
   return {{"generation_before", batch.generation_before},
           {"generation_after", batch.generation_after},
           {"node_count", batch.node_count},
-          {"arc_count", batch.arc_count},
-          {"prepare_ms", batch.prepare_ms},
-          {"native_graph_ms", batch.native_graph_ms},
-          {"export_ms", batch.export_ms},
+          {"arc_slots", batch.arc_slots},
+          {"direct_prepare_ms", batch.direct_prepare_ms},
+          {"host_apply_ms", batch.host_apply_ms},
           {"commit_ms", batch.commit_ms},
-          {"query_materialize_ms", batch.query_materialize_ms},
-          {"report_ms", batch.report_ms},
+          {"result_consumption", batch.results_consumed ? "completed" : "not_run"},
+          {"query_materialize_ms", batch.results_consumed ? Json(batch.query_materialize_ms) : Json(nullptr)},
+          {"report_ms", batch.results_consumed ? Json(batch.report_ms) : Json(nullptr)},
           {"consumer_end_to_end_ms", batch.consumer_end_to_end_ms},
           {"encode_ms", c.encode_ms},
           {"h2d_ms", c.h2d_ms},
@@ -120,7 +123,7 @@ int main(int argc, char** argv)
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
     const bool replay_only = options.contains("--replay");
     const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
-    Json output{{"schema_version", "ista-cuda-full-trace/5.0.0"},
+    Json output{{"schema_version", "ista-cuda-full-trace/6.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
                 {"requested_backend", (mode == "fresh" || mode == "native-transactions") ? "cpu" : "cuda"},
@@ -160,18 +163,19 @@ int main(int argc, char** argv)
         timing_edit::oracle::ProductionFreshSessionLoader::run(artifacts.artifacts(), [&](const auto& view) {
           bool rejected = false;
           try {
-            static_cast<void>(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input,
+            static_cast<void>(csr::CudaFullTraceReplayer::run(view.session_context, view.database, view.reference_input,
                                                            view.authority, rejected_program, prefix));
           } catch (const std::exception& error) {
             rejected = std::string(error.what()).find("CUDA_MISSING_SECOND_BATCH_CELL") != std::string::npos;
           }
           require(rejected, "second-batch native cell failure did not occur");
+          view.session_context.materializeCudaTiming(view.database, view.authority);
           auto restored = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
           require(std::holds_alternative<csr::CsrReferenceInput>(restored), "rollback graph export failed");
           restored_input = csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(restored));
         }, StaBackend::kCuda);
         timing_edit::oracle::ProductionFreshSessionLoader::run(artifacts.artifacts(), [&](const auto& view) {
-          static_cast<void>(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input, view.authority, program, 1));
+          static_cast<void>(csr::CudaFullTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority, program, 1));
           auto expected = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
           require(std::holds_alternative<csr::CsrReferenceInput>(expected)
                       && restored_input == csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(expected)),
@@ -183,7 +187,7 @@ int main(int argc, char** argv)
           [&](const auto& view) {
             const auto physical_before
                 = incregpusta_debug_checks_enabled ? timing_dual_csr::test::captureTargetedSourcePhysical() : buffer_trace::SourcePhysicalFunctionalReceipt{};
-            result.emplace(csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input, view.authority, program, prefix));
+            result.emplace(csr::CudaFullTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority, program, prefix));
             // Explicit cross-build consumer test; ordinary performance does not serialize public results.
             if (mode == "public") {
               ista::test::requireTimingOnlyFiles(artifacts.artifacts().run_directory);
@@ -204,8 +208,13 @@ int main(int argc, char** argv)
         output["batch_timings"].push_back(telemetry(batch));
       if constexpr (incregpusta_debug_checks_enabled) {
         output["batches"] = Json::array();
-        for (const auto& batch : result->batches)
-          output["batches"].push_back(functional(batch.diagnostic_input.value(), batch.diagnostic_timing.value()));
+        for (const auto& batch : result->batches) {
+          const auto& observation = batch.diagnostic.value();
+          csr::test::requireCudaDeviceMatchesCanonical(observation);
+          auto values = csr::test::projectCudaTargetedTiming(observation.canonical_input, observation.values,
+                                                            observation.node_names, observation.arc_native_ranks);
+          output["batches"].push_back(functional(observation.canonical_input, values));
+        }
       }
     }
     std::ofstream file(options.at("--output"));

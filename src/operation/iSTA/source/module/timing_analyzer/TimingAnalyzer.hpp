@@ -17,6 +17,7 @@
 
 #include "Database.hpp"
 #include "TAModel.hpp"
+#include <optional>
 
 namespace ista {
 
@@ -31,6 +32,8 @@ class TimingAnalyzer
   // function
   void analyze();
   void analyzePropagatedTiming();
+  // Required times and slack are computation; path grouping is an explicit consumer.
+  void propagateRequired();
 
  private:
   // self
@@ -42,6 +45,18 @@ class TimingAnalyzer
   ~TimingAnalyzer() = default;
   TimingAnalyzer& operator=(const TimingAnalyzer& other) = delete;
   TimingAnalyzer& operator=(TimingAnalyzer&& other) = delete;
+  // Report diversion is temporary; retain only entries actually changed.
+  struct ReportPathUndo {
+    TimingPoint* point;
+    AnalysisType analysis;
+    PathSourceType source;
+    TransType transition;
+    std::string tag;
+    std::optional<TimingPathState> previous;
+    bool had_analysis, had_source, had_transition;
+  };
+  std::vector<ReportPathUndo> _report_paths;
+  void restoreReportPaths() noexcept;
   // function
   TAModel initTAModel();
   bool isDisableArc(Arc& arc);
@@ -66,7 +81,6 @@ class TimingAnalyzer
   TransType getEndPointTransType(TimingPoint& timing_point, AnalysisType analysis_type, PathSourceType source_type);
   bool isBetterArrival(double candidate_arrival, double current_arrival, AnalysisType analysis_type);
   bool isFinite(double value);
-  void propagateRequired();
   double resolveRequiredTime();
   void seedEndPointRequired(double required_time);
   double getEndPointRequired(std::string& end_point, double default_required_time, AnalysisType analysis_type);

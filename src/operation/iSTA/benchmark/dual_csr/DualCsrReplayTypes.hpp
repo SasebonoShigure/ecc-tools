@@ -44,9 +44,8 @@ struct DualCsrBatchPhaseTimings
 {
   std::uint64_t generation_before{0};
   std::uint64_t generation_after{0};
-  double pre_candidate_prepare_ms{0.0};
-  double candidate_apply_execute_ms{0.0};
-  double post_candidate_capture_ms{0.0};
+  double prepare_batch_ms{0.0};
+  double direct_prepare_ms{0.0};
   double dual_csr_update_ms{0.0};
   double full_levelization_ms{0.0};
   double mixed_build_ms{0.0};
@@ -57,6 +56,7 @@ struct DualCsrBatchPhaseTimings
   double verify_ms{0.0};
   double publish_ms{0.0};
   double session_step_ms{0.0};
+  bool results_consumed{false};
   double query_materialization_ms{0.0};
   double report_ms{0.0};
   double consumer_step_ms{0.0};

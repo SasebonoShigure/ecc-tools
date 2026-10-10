@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <limits>
+#include <utility>
 
 #include "AllocationFailureSupport.hpp"
 #include "CsrModelTestMutation.hpp"
@@ -14,7 +16,10 @@
 #include "CudaDualCsrTestSupport.hpp"
 #include "timing_dual_csr/DualCsrTestSupport.hpp"
 
+extern thread_local bool ista_test_fail_cuda_allocation;
+
 namespace ista::csr::test {
+void runCudaDualFullContracts();
 using namespace timing_dual_csr;
 using namespace timing_dual_csr::test;
 namespace {
@@ -389,6 +394,53 @@ void persistentFullRebuild()
           "incremental commit after full rollback used stale graph storage");
 }
 
+void candidateReadback(CudaLevelizationMode mode)
+{
+  const auto input = csr::test::makeCpuReferencePropertyFixture(2);
+  const timing_edit::AppendOnlyHighWater water{input.nodes.size(), input.nodes.size(), input.arcs.size()};
+  CudaDualCsrSession owner(input, water);
+  const auto compare = [&](const std::vector<BufferCandidateTiming>& actual, const CsrTimingValues& timing) {
+    require(actual.size() == input.nodes.size(), "candidate timing shape changed");
+    for (std::size_t id = 0; id < actual.size(); ++id) {
+      const auto expected = bufferCandidateTiming(timing, NodeId{id});
+      const auto equal = [](double a, double b) { return a == b || (std::isfinite(a) && std::isfinite(b) && std::abs(a-b) <= 1e-9); };
+      require(actual[id].clock_point == expected.clock_point && equal(actual[id].setup_slack, expected.setup_slack)
+                  && equal(actual[id].data_slew, expected.data_slew) && equal(actual[id].clock_slew, expected.clock_slew),
+              "candidate scalars differ from the full result");
+    }
+  };
+  for (std::uint64_t generation = 0; generation < 3; ++generation) {
+    const auto before = owner.telemetry().cuda;
+    if constexpr (incregpusta_debug_checks_enabled) {
+      if (generation == 0) {
+        ista_test_fail_cuda_allocation = true;
+        bool rejected = false;
+        try { (void) CudaDualCsrTestReader::readCandidateTiming(owner); }
+        catch (const std::runtime_error&) { rejected = true; }
+        require(rejected && !ista_test_fail_cuda_allocation && !owner.poisoned()
+                    && owner.generation().value() == generation && owner.telemetry().cuda.d2h_bytes == before.d2h_bytes,
+                "candidate allocation failure poisoned the committed generation");
+      }
+    }
+    const auto& values = CudaDualCsrTestReader::readCandidateTiming(owner);
+    const auto after = owner.telemetry().cuda;
+    require(after.d2h_bytes - before.d2h_bytes == values.size() * sizeof(BufferCandidateTiming),
+            "candidate query downloaded more than scalar results");
+    require(&CudaDualCsrTestReader::readCandidateTiming(owner) == &values
+                && owner.telemetry().cuda.d2h_bytes == after.d2h_bytes
+                && owner.telemetry().cuda.kernel_launches == after.kernel_launches,
+            "same-generation candidate query recomputed or transferred results");
+    if (generation) require(after.allocations == before.allocations, "candidate device capacity was not reused");
+    compare(values, owner.timingValues());
+    auto candidate = owner.stage(patchFor(input, generation, water, water), mode);
+    bool rejected = false;
+    try { (void) CudaDualCsrTestReader::readCandidateTiming(candidate); }
+    catch (const std::logic_error&) { rejected = true; }
+    require(rejected, "pending candidate exposed production query");
+    require(owner.publish(std::move(candidate)), "candidate query prevented the next commit");
+  }
+}
+
 }  // namespace
 
 void runCudaLazySequence(CudaLevelizationMode mode)
@@ -429,7 +481,9 @@ void runCudaDualCsrStorageContracts(CudaLevelizationMode mode)
 {
   runCudaParallelPatchContracts(mode);
   persistentFullRebuild();
+  runCudaDualFullContracts();
   runCudaLazySequence(mode);
+  candidateReadback(mode);
   auxReuseAndUndo(mode);
   sharedModelLoads(mode);
   payloadFailures(mode);

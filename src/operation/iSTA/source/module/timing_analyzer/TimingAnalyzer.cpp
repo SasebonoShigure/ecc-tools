@@ -15,6 +15,8 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include "TimingAnalyzer.hpp"
+#include <memory>
+#include <type_traits>
 
 #include "DataManager.hpp"
 #include "DelayCalculator.hpp"
@@ -61,6 +63,8 @@ void TimingAnalyzer::analyze()
 
 void TimingAnalyzer::analyzePropagatedTiming()
 {
+  const auto restore = [](TimingAnalyzer* analyzer) noexcept { analyzer->restoreReportPaths(); };
+  std::unique_ptr<TimingAnalyzer, decltype(restore)> path_undo(this, restore);
   TAModel ta_model = initTAModel();
   analyzeEndPointList(ta_model);
   // Allocate every report object before publishing either paths or summary.
@@ -1141,6 +1145,23 @@ void TimingAnalyzer::buildPathDiversionState(AnalysisType analysis_type, PathSou
   }
 }
 
+void TimingAnalyzer::restoreReportPaths() noexcept
+{
+  static_assert(std::is_nothrow_move_assignable_v<TimingPathState>);
+  for (auto iter = _report_paths.rbegin(); iter != _report_paths.rend(); ++iter) {
+    auto& paths = iter->point->get_path_state_map();
+    if (!iter->had_analysis) { paths.erase(iter->analysis); continue; }
+    auto& sources = paths.at(iter->analysis);
+    if (!iter->had_source) { sources.erase(iter->source); continue; }
+    auto& transitions = sources.at(iter->source);
+    if (!iter->had_transition) { transitions.erase(iter->transition); continue; }
+    auto& row = transitions.at(iter->transition);
+    if (iter->previous) row.at(iter->tag) = std::move(*iter->previous);
+    else row.erase(iter->tag);
+  }
+  _report_paths.clear();
+}
+
 bool TimingAnalyzer::isOutputTransType(Arc& arc, AnalysisType analysis_type, TransType input_trans_type, TransType output_trans_type)
 {
   for (TransType arc_output_trans_type : getOutputTransTypeList(arc, analysis_type, input_trans_type)) {
@@ -1158,11 +1179,23 @@ bool TimingAnalyzer::updateDiversionPathState(std::string& pin_name, AnalysisTyp
   Database& database = STADM.getDatabase();
   TimingPoint& timing_point = database.get_timing_point_map()[pin_name];
   const std::string& path_state_tag = source_path_state.get_clock_name();
-  std::map<std::string, TimingPathState>& path_state_map = getPathStateMap(timing_point, analysis_type, source_type, trans_type);
-  if (path_state_map.count(path_state_tag) > 0 && !isBetterArrival(arrival, path_state_map[path_state_tag].get_arrival(), analysis_type)) {
-    return false;
+  auto& paths = timing_point.get_path_state_map();
+  const bool had_analysis = paths.contains(analysis_type);
+  const bool had_source = had_analysis && paths.at(analysis_type).contains(source_type);
+  const bool had_transition = had_source && paths.at(analysis_type).at(source_type).contains(trans_type);
+  std::optional<TimingPathState> previous;
+  if (had_transition) {
+    const auto& row = paths.at(analysis_type).at(source_type).at(trans_type);
+    const auto found = row.find(path_state_tag);
+    if (found != row.end()) {
+      if (!isBetterArrival(arrival, found->second.get_arrival(), analysis_type)) return false;
+      previous = found->second;
+    }
   }
-  TimingPathState& path_state = path_state_map[path_state_tag];
+  // All undo allocations precede even creation of an empty path row.
+  _report_paths.push_back({&timing_point, analysis_type, source_type, trans_type, path_state_tag,
+                          std::move(previous), had_analysis, had_source, had_transition});
+  TimingPathState& path_state = getPathStateMap(timing_point, analysis_type, source_type, trans_type)[path_state_tag];
   path_state.set_arrival(arrival);
   path_state.set_slew(getDataSlew(timing_point, analysis_type, trans_type));
   path_state.set_start_point(source_path_state.get_start_point());

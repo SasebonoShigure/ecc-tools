@@ -16,6 +16,7 @@
 #include "DualCsrArcGroupIndexValidation.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "DualCsrUpdaterInternal.hpp"
+#include "DualCsrIndexGroupPatchInternal.hpp"
 #include <type_traits>
 #include "TimingSemanticKey.hpp"
 
@@ -355,74 +356,6 @@ DualCsrArcGroupIndexAttempt buildDualCsrArcGroupIndex(
 }
 
 namespace detail {
-namespace {
-
-template <typename T>
-struct GroupEdit
-{
-  std::size_t position;
-  bool existed;
-  bool replacement_present;
-  T value;
-};
-
-template <typename T, typename Less, typename Key>
-void prepareGroupEdit(const std::vector<T>& groups, T replacement, Less less, Key key,
-                      std::vector<GroupEdit<T>>& edits)
-{
-  const auto& wanted = replacement.*key;
-  const auto found = std::ranges::lower_bound(groups, wanted, less, key);
-  const bool existed = found != groups.end() && !less(wanted, (*found).*key) && !less((*found).*key, wanted);
-  const bool present = !replacement.active_arc_ids.empty();
-  if (existed || present)
-    edits.push_back({static_cast<std::size_t>(found - groups.begin()), existed, present, std::move(replacement)});
-}
-
-template <typename T>
-void reserveGroupEdits(std::vector<T>& groups, std::vector<GroupEdit<T>>& edits)
-{
-  std::ranges::reverse(edits);
-  std::ranges::stable_sort(edits, [](const auto& lhs, const auto& rhs) { return lhs.position > rhs.position; });
-  const auto additions = std::ranges::count_if(edits, [](const auto& value) { return !value.existed; });
-  if (static_cast<std::size_t>(additions) > groups.max_size() - groups.size())
-    throw std::length_error("Dual-CSR index group capacity exhausted");
-  const auto required = groups.size() + additions;
-  if (required > groups.capacity())
-    groups.reserve(std::max(required, groups.capacity() > groups.max_size() / 2
-                                         ? groups.max_size() : std::max<std::size_t>(1, groups.capacity() * 2)));
-}
-
-template <typename T>
-void applyGroups(std::vector<T>& groups, std::vector<GroupEdit<T>>& edits) noexcept
-{
-  static_assert(std::is_nothrow_move_constructible_v<T> && std::is_nothrow_move_assignable_v<T>);
-  for (auto& edit : edits) {
-    auto position = groups.begin() + edit.position;
-    if (edit.existed) {
-      std::swap(*position, edit.value);
-      if (!edit.replacement_present)
-        groups.erase(position);
-    } else {
-      groups.insert(position, std::move(edit.value));
-    }
-  }
-}
-
-template <typename T>
-void undoGroups(std::vector<T>& groups, std::vector<GroupEdit<T>>& edits) noexcept
-{
-  for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
-    auto position = groups.begin() + it->position;
-    if (!it->existed)
-      groups.erase(position);
-    else if (!it->replacement_present)
-      groups.insert(position, std::move(it->value));
-    else
-      std::swap(*position, it->value);
-  }
-}
-
-}  // namespace
 
 struct PreparedDualCsrIndexPatch::Data
 {

@@ -20,6 +20,8 @@
 
 #include "CsrCpuReferenceBackend.hpp"
 #include "DataManager.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
+#include "StaTimingEditSessionProbeAccess.hpp"
 #include "DualCsrArcGroupIndexValidation.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrExactReceipt.hpp"
@@ -116,12 +118,9 @@ VerifiedStructuredBatch captureOwnedBatch(timing_edit::test::GuardedTestSession&
 DualCsrVerifiedStage verifiedStage(
     timing_edit::test::GuardedTestSession& session,
     const StructuredFixture& fixture,
-    DualCsrTransactionCoordinator& coordinator,
-    NarrowCaptureAudit* audit = nullptr)
+    DualCsrTransactionCoordinator& coordinator)
 {
   auto verified = captureOwnedBatch(session, fixture, coordinator);
-  if (audit != nullptr)
-    *audit = verified.captureAudit();
   auto attempt = makeStagedDualCsrAnalysisState(
       coordinator, std::move(verified));
   require(attempt.success(),
@@ -141,20 +140,17 @@ DualCsrVerifiedStage verifiedStage(
   return std::move(*attempt.staged);
 }
 
-DualCsrTransactionEvidence successfulEvidence(
-    NarrowCaptureAudit capture)
+DualCsrTransactionEvidence successfulEvidence()
 {
   DualCsrTransactionEvidence evidence;
   evidence.phase_trace = {
-      DualCsrReceiptPhase::kPreCandidatePrepare,
-      DualCsrReceiptPhase::kCandidateApplyExecute,
-      DualCsrReceiptPhase::kPostCandidateCapture,
+      DualCsrReceiptPhase::kPrepareBatch,
+      DualCsrReceiptPhase::kDirectPrepare,
       DualCsrReceiptPhase::kDualCsrUpdate,
       DualCsrReceiptPhase::kFullLevelization,
       DualCsrReceiptPhase::kFullPropagation,
       DualCsrReceiptPhase::kIntrinsicVerify,
       DualCsrReceiptPhase::kPublish};
-  evidence.capture_audits = {std::move(capture)};
   evidence.incremental_batch_executed = true;
   return evidence;
 }
@@ -557,9 +553,19 @@ void splitReceiptContracts()
           STADM.getDatabase(), session.token());
   const auto initial = initialAggregate(fixture);
   DualCsrTransactionCoordinator coordinator(initial);
-  NarrowCaptureAudit capture;
-  const auto published = coordinator.publish(
-      verifiedStage(session, fixture, coordinator, &capture));
+  csr::detail::NativeLibraryModels models(STADM.getDatabase());
+  std::optional<DualCsrVerifiedStage> stage;
+  const auto prepared = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
+      session.session(), [&](std::uint64_t, StaCsrSessionContext&, const timing_edit::NativeExecutionAuthority& authority) {
+        auto direct = TimingEditDualCsrDescriptorBuilder::buildDirect(
+            coordinator.prepareBatch({fixture.plan.expected_generation, fixture.plan.edits}), authority, models);
+        auto attempt = makeStagedDualCsrAnalysisState(coordinator, std::move(direct));
+        require(attempt.success(), "direct receipt fixture did not stage");
+        stage.emplace(std::move(*attempt.staged));
+        return StaStatus::success(session.session().state());
+      });
+  require(prepared.ok() && stage.has_value(), "direct receipt fixture preparation failed");
+  const auto published = coordinator.publish(std::move(*stage));
   require(published.ok() && published.published,
           "receipt fixture did not publish");
 
@@ -574,7 +580,7 @@ void splitReceiptContracts()
                .empty(),
           "structural receipt accepted a forged high-water mark");
 
-  auto evidence = successfulEvidence(capture);
+  auto evidence = successfulEvidence();
   auto exact = finalizeDualCsrExactReceipt(
       coordinator.committed(), *observation.observation,
       fixture.baseline_reference_input, evidence);

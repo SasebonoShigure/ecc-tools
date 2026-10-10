@@ -17,6 +17,7 @@ add_library(ista_timing_csr_core
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrReferenceNativeModelValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrTimingResultValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrTimingResultArcValidator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrBufferCandidateTiming.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrTableLookup.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrParasiticModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrParasiticTree.cpp

@@ -20,7 +20,7 @@ from dual_csr_trace_controller import (
     write_json,
 )
 
-SCHEMA = "ista-dual-csr-timing-smoke/3.0.0"
+SCHEMA = "ista-dual-csr-timing-smoke/4.0.0"
 
 
 def _cpu_model() -> str:
@@ -78,7 +78,7 @@ def _run_sample(
         probe, "performance", trace, len(batches), root / name / "performance.json", timeout
     )
     require(
-        result["schema_version"] == "ista-incregpusta-performance-process/3.0.0",
+        result["schema_version"] == "ista-incregpusta-performance-process/4.0.0",
         f"{name} unsupported performance output",
     )
     require(
@@ -95,11 +95,18 @@ def _run_sample(
     )
     require(result["diagnostics"] == "not_run", f"{name} unexpectedly collected diagnostics")
     require(result["result_requirements"] == {
+        "scope": "final_prefix",
         "timing_values": True, "summary": True, "timing_paths": True, "file_artifacts": False,
     }, f"{name} did not execute the requested consumers")
     timings = validate_batch_phase_timings(
         result["run"]["batch_phase_timings"], len(batches), name, require, debug_checks=False,
     )
+    require(all(phase["result_consumption"] == "not_run"
+                for phase in timings[:-1]),
+            f"{name} performed an unrequested intermediate materialization/report")
+    require(timings[-1]["result_consumption"] == "completed"
+            and timings[-1]["query_materialization_ms"] > 0 and timings[-1]["report_ms"] > 0,
+            f"{name} did not prepare final results")
     return {
         "targeted_pid": result["run"]["child_pid"],
         "targeted_wall_ms": duration_ms(wall_ms, f"{name}.wall_ms", require, positive=True),

@@ -33,11 +33,12 @@ std::string exceptionMessage()
 }  // namespace
 
 StaStatus StaTimingEditSessionProbeAccess::runTimingOnlyBaseline(
-    std::uint64_t token, StaCsrSessionContext* context, StaBackend backend)
+    std::uint64_t token, StaCsrSessionContext* context, StaBackend backend,
+    csr::CsrReferenceInput& baseline_input)
 {
   auto& interface = STAInterface::getInst();
   return backend == StaBackend::kCuda
-      ? interface.runOwnedCudaBaseline(token, context, false)
+      ? interface.runOwnedCudaBaseline(token, context, false, &baseline_input)
       : interface.runOwned(StaOwner::session(token), context, false);
 }
 

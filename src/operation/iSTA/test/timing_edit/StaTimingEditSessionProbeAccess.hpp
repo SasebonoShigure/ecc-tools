@@ -51,7 +51,8 @@ class StaTimingEditSessionProbeAccess final
 
   // Timing-only test workloads reuse production authorization and failure handling.
   [[nodiscard]] static StaStatus runTimingOnlyBaseline(
-      std::uint64_t token, StaCsrSessionContext* context, StaBackend backend);
+      std::uint64_t token, StaCsrSessionContext* context, StaBackend backend,
+      csr::CsrReferenceInput& baseline_input);
   [[nodiscard]] static StaStatus runWithSingleOperationGuard(IncrementalStaSession& session, const GuardedMutation& mutation);
   [[nodiscard]] static bool snapshotReleasedForTesting(const StaCsrSessionContext& context) noexcept;
   static void releaseSnapshotForMutation(StaCsrSessionContext& context,

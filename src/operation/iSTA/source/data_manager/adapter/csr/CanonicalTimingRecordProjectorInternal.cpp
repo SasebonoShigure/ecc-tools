@@ -7,6 +7,7 @@
 // ***************************************************************************************
 #include "CanonicalTimingRecordProjectorInternal.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <set>
 #include <stdexcept>
@@ -304,6 +305,49 @@ void applyCanonicalNodeLibraryRoles(
                        && node.key.pin_name == cell.output_pin_name;
 }
 
+CellPinCapacitanceModel projectCanonicalCellPinCapacitance(
+    const ReferencedLibraryCellModel& cell, NodeId node, const std::string& port_name)
+{
+  CellPinCapacitanceModel result;
+  result.node = node;
+  const auto found = std::ranges::find(cell.ports, port_name, &LibraryPortModel::name);
+  if (cell.present && found != cell.ports.end()) {
+    result.default_capacitance = found->default_capacitance;
+    result.transition_capacitance = found->transition_capacitance;
+  }
+  return result;
+}
+
+void addCanonicalLoad(const CanonicalLoadPinFacts& pin, ArcOutputLoadMatrix& result)
+{
+  if (pin.is_port) {
+    if (pin.cell_pin_capacitance
+        || (!isOutputLike(pin.direction)
+            && pin.port_output_load))
+      malformedReferenceInput();
+    if (!pin.port_output_load)
+      return;
+    for (auto& analysis : result)
+      for (double& transition : analysis)
+        addCheckedLoad(*pin.port_output_load, transition);
+    return;
+  }
+
+  if (pin.port_output_load
+      || !pin.cell_pin_capacitance)
+    malformedReferenceInput();
+  const auto& capacitance = *pin.cell_pin_capacitance;
+  for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis) {
+    for (std::size_t transition = 0; transition < kTransitionCount;
+         ++transition) {
+      addCheckedLoad(
+          capacitance.transition_capacitance[analysis][transition]
+              .value_or(capacitance.default_capacitance),
+          result[analysis][transition]);
+    }
+  }
+}
+
 ArcOutputLoadMatrix projectCanonicalNoParasiticNetLoad(
     const ista::Database& database, const std::string& net_name,
     const std::map<std::string, CanonicalLoadPinFacts>& load_pin_facts)
@@ -330,32 +374,7 @@ ArcOutputLoadMatrix projectCanonicalNoParasiticNetLoad(
                != convertPinDirection(native_pin->second.get_direction()))
       malformedReferenceInput();
 
-    if (facts->second.is_port) {
-      if (facts->second.cell_pin_capacitance
-          || (!isOutputLike(facts->second.direction)
-              && facts->second.port_output_load))
-        malformedReferenceInput();
-      if (!facts->second.port_output_load)
-        continue;
-      for (auto& analysis : result)
-        for (double& transition : analysis)
-          addCheckedLoad(*facts->second.port_output_load, transition);
-      continue;
-    }
-
-    if (facts->second.port_output_load
-        || !facts->second.cell_pin_capacitance)
-      malformedReferenceInput();
-    const auto& capacitance = *facts->second.cell_pin_capacitance;
-    for (std::size_t analysis = 0; analysis < kAnalysisCount; ++analysis) {
-      for (std::size_t transition = 0; transition < kTransitionCount;
-           ++transition) {
-        addCheckedLoad(
-            capacitance.transition_capacitance[analysis][transition]
-                .value_or(capacitance.default_capacitance),
-            result[analysis][transition]);
-      }
-    }
+    addCanonicalLoad(facts->second, result);
   }
   return result;
 }

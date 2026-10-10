@@ -255,6 +255,7 @@ struct DeviceStorage
   DeviceBuffer<Child> children;
   DeviceBuffer<RcLoadCell> rc_load_cells;
   DeviceBuffer<double> tables;
+  DeviceBuffer<BufferCandidateTiming> candidate_timing;
   ResultBuffers results[2];
   PathDomainBuffers domains[2];
   DeviceBuffer<SlotPatch> removes, changes, reverse_changes;
@@ -295,7 +296,11 @@ struct CudaDualCsrSession::Impl
   std::optional<CsrComputationCode> code;
   CsrFifoLevelization levels;
   std::optional<CsrTimingValues> values;
+  std::optional<std::vector<BufferCandidateTiming>> candidate_timing;
 
+  Impl(timing_edit::TimingEditSessionToken token, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before);
+  Impl(const timing_dual_csr::DualCsrState& input, std::shared_ptr<Impl> before);
+  void initializeFull(cuda_detail::HostData& packed, const InputPortRcThresholds& thresholds);
   Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before = {});
   Impl(std::shared_ptr<Impl> before, const CudaDualCsrPatch& patch, CudaLevelizationMode mode);
   static void validatePatch(const Impl& before, const CudaDualCsrPatch& patch);
@@ -317,6 +322,7 @@ struct CudaDualCsrSession::Impl
   void propagate();
   void execute(CudaLevelizationMode mode = CudaLevelizationMode::kFull);
   const CsrTimingValues& materialize();
+  const std::vector<BufferCandidateTiming>& readCandidateTiming();
   std::optional<CsrFifoLevelization> reconstructMixed();
   void transferPatch(const Impl& before, const CudaDualCsrPatch& patch, cuda_detail::PackedPatch& packed);
 };

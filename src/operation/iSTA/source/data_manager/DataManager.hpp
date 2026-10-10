@@ -40,6 +40,7 @@ class DataManager
   const Database& getDatabase() const { return *_database; }
 
  private:
+  friend class PhysicalStaSessionState;
   static DataManager* _dm_instance;
 
   // config & database

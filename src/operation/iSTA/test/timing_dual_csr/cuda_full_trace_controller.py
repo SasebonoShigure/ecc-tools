@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import pathlib
 import subprocess
 
@@ -17,10 +18,23 @@ def require_cuda_telemetry(timing: dict) -> None:
     require("kernel_launches" not in timing, "ambiguous CUDA total launch count")
 
 
+
+def require_final_consumption(timing: dict, *, final: bool) -> None:
+    require(timing["result_consumption"] == ("completed" if final else "not_run"),
+            "ordinary CUDA replay must consume full results only at the final prefix")
+    for field in ("query_materialize_ms", "report_ms"):
+        value = timing[field]
+        require(
+            type(value) in (int, float) and math.isfinite(value) and value >= 0
+            if final else value is None,
+            f"{field} must reflect actual result consumption",
+        )
+
+
 def require_performance_result(result: dict, prefix: int, build: dict) -> None:
     require(not any(key in result for key in ("functional", "batches", "device_checks")),
             "performance child generated a diagnostic receipt")
-    require(result["schema_version"] == "ista-cuda-full-trace/5.0.0"
+    require(result["schema_version"] == "ista-cuda-full-trace/6.0.0"
             and result["build"] == build and result["debug_checks_enabled"] is False
             and result["correctness_comparison"] == "not_run"
             and result["requested_backend"] == result["executed_backend"] == "cuda"
@@ -31,6 +45,7 @@ def require_performance_result(result: dict, prefix: int, build: dict) -> None:
             "performance child omitted the declared full workload or lifecycle")
     for ordinal, timing in enumerate(result["batch_timings"]):
         require_cuda_telemetry(timing)
+        require_final_consumption(timing, final=ordinal + 1 == prefix)
         require(timing["generation_before"] == ordinal
                 and timing["generation_after"] == ordinal + 1,
                 "performance generation is not contiguous")
@@ -105,7 +120,7 @@ def run(args: argparse.Namespace) -> int:
         write_json(
             root / "performance.json",
             {
-                "schema_version": "ista-cuda-full-performance/4.0.0",
+                "schema_version": "ista-cuda-full-performance/5.0.0",
                 "debug_checks_enabled": False,
                 "correctness_comparison": "not_run",
                 "build": build,
@@ -141,8 +156,8 @@ def run(args: argparse.Namespace) -> int:
             input_flag=input_flag,
         )
         require(
-            gpu["schema_version"] == "ista-cuda-full-trace/5.0.0"
-            and cpu["schema_version"] == "ista-cuda-full-trace/5.0.0",
+            gpu["schema_version"] == "ista-cuda-full-trace/6.0.0"
+            and cpu["schema_version"] == "ista-cuda-full-trace/6.0.0",
             "unexpected full trace schema",
         )
         difference = first_difference(gpu["batches"][-1], cpu["functional"])
@@ -196,7 +211,7 @@ def run(args: argparse.Namespace) -> int:
         )
     write_json(
         root / "verdict.json",
-        {"schema_version": "ista-cuda-full-verdict/5.0.0", "build": build, "prefixes": verdicts},
+        {"schema_version": "ista-cuda-full-verdict/6.0.0", "build": build, "prefixes": verdicts},
     )
     return 0
 

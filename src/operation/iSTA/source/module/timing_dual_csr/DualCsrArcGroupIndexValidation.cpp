@@ -23,8 +23,7 @@ struct ArcBaseLess
   bool operator()(const csr::ArcKeyBase& lhs,
                   const csr::ArcKeyBase& rhs) const
   {
-    return csr::arcKeyLess(csr::ArcKey{lhs, 0},
-                           csr::ArcKey{rhs, 0});
+    return csr::arcKeyBaseLess(lhs, rhs);
   }
 };
 

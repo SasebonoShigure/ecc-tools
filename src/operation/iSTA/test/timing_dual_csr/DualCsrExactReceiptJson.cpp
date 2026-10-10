@@ -40,12 +40,10 @@ Overloaded(Visitors...) -> Overloaded<Visitors...>;
 std::string_view phaseToken(DualCsrReceiptPhase value)
 {
   switch (value) {
-    case DualCsrReceiptPhase::kPreCandidatePrepare:
-      return "pre_candidate_prepare";
-    case DualCsrReceiptPhase::kCandidateApplyExecute:
-      return "candidate_apply_execute";
-    case DualCsrReceiptPhase::kPostCandidateCapture:
-      return "post_candidate_capture";
+    case DualCsrReceiptPhase::kPrepareBatch:
+      return "prepare_batch";
+    case DualCsrReceiptPhase::kDirectPrepare:
+      return "direct_prepare";
     case DualCsrReceiptPhase::kDualCsrUpdate:
       return "dual_csr_update";
     case DualCsrReceiptPhase::kFullLevelization:
@@ -222,50 +220,6 @@ Json arcGroupIndex(const DualCsrArcGroupIndex& value)
            arrayOf(value.active_net_sink_groups, net_sink_group)}};
 }
 
-Json audit(const NarrowCaptureAudit& value)
-{
-  return {{"requested_nodes", value.requested_nodes},
-          {"node_reads", value.node_reads},
-          {"accepted_nodes", value.accepted_nodes},
-          {"requested_instances", value.requested_instances},
-          {"instance_reads", value.instance_reads},
-          {"accepted_instances", value.accepted_instances},
-          {"requested_arcs", value.requested_arcs},
-          {"native_arc_candidate_reads",
-           value.native_arc_candidate_reads},
-          {"accepted_arcs", value.accepted_arcs},
-          {"requested_deactivations", value.requested_deactivations},
-          {"deactivated_arc_before_reads",
-           value.deactivated_arc_before_reads},
-          {"accepted_deactivations", value.accepted_deactivations},
-          {"captured_arc_records", value.captured_arc_records},
-          {"requested_load_nets", value.requested_load_nets},
-          {"net_reads", value.net_reads},
-          {"accepted_load_nets", value.accepted_load_nets},
-          {"requested_library_cells", value.requested_library_cells},
-          {"library_cell_reads", value.library_cell_reads},
-          {"accepted_library_cells", value.accepted_library_cells},
-          {"requested_cell_pin_capacitances",
-           value.requested_cell_pin_capacitances},
-          {"cell_pin_capacitance_reads",
-           value.cell_pin_capacitance_reads},
-          {"accepted_cell_pin_capacitances",
-           value.accepted_cell_pin_capacitances},
-          {"requested_node_roles", value.requested_node_roles},
-          {"node_role_reads", value.node_role_reads},
-          {"accepted_node_roles", value.accepted_node_roles},
-          {"index_group_lookups", value.index_group_lookups},
-          {"native_arc_candidate_upper_bound",
-           value.native_arc_candidate_upper_bound},
-          {"arc_identity_tie_breaks", value.arc_identity_tie_breaks},
-          {"rejected_reads", value.rejected_reads},
-          {"full_export_guard_active", value.full_export_guard_active},
-          {"full_export_observed", value.full_export_observed},
-          {"native_full_graph_exports", value.native_full_graph_exports},
-          {"native_full_reference_exports",
-           value.native_full_reference_exports}};
-}
-
 Json counters(const DualCsrOperationCounters& value)
 {
   return {{"native_full_graph_exports", value.native_full_graph_exports},
@@ -352,7 +306,6 @@ Json evidence(const DualCsrTransactionEvidence& value)
                                   [](DualCsrReceiptPhase item) {
                                     return Json(phaseToken(item));
                                   })},
-          {"capture_audits", arrayOf(value.capture_audits, audit)},
           {"operation_counters", counters(value.operation_counters)},
           {"incremental_batch_executed",
            value.incremental_batch_executed},

@@ -86,6 +86,15 @@ void baselineFactoryContracts()
                                        invalid.arcs.size()});
   require(!rejected.success() && !rejected.violations.empty(),
           "factory accepted a full-reference semantic violation");
+
+  auto wrong_identity = input;
+  auto& digit = wrong_identity.source_identity.topology_fingerprint.front();
+  digit = digit == '0' ? '1' : '0';
+  const auto identity_rejected = DualCsrBaselineFactory::create(
+      wrong_identity, timing_edit::TimingEditSessionToken{kSessionValue},
+      timing_edit::AppendOnlyHighWater{input.nodes.size(), 0, input.arcs.size()});
+  require(!identity_rejected.success() && !identity_rejected.violations.empty(),
+          "public factory accepted a valid-shaped input with a false identity");
 }
 
 

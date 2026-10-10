@@ -151,10 +151,12 @@ class NativeCandidateExecutor final
   static void executeFull(NativeEditTransaction& transaction,
                          NativeExecutionFailpoint failpoint = NativeExecutionFailpoint::kNone,
                          NativeRollbackFailpoint rollback_failpoint = NativeRollbackFailpoint::kNone);
+  static void executeFullTiming(NativeEditTransaction& transaction);
   static void prepareFullGraph(NativeEditTransaction& transaction);
 
  private:
-  static void runTransaction(NativeEditTransaction& transaction, bool cpu_timing,
+  enum class Work { kStructure, kTiming, kReport };
+  static void runTransaction(NativeEditTransaction& transaction, Work work,
                              NativeExecutionFailpoint failpoint, NativeRollbackFailpoint rollback_failpoint);
 
 };

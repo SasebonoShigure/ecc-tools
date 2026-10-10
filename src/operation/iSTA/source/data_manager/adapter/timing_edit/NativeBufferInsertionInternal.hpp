@@ -3,6 +3,7 @@
 // Copyright (c) 2023-2025 Beijing Institute of Open Source Chip
 // Licensed under Mulan PSL v2.
 #pragma once
+#include "CsrReferenceNativeModels.hpp"
 #include <span>
 #include "Database.hpp"
 #include "TimingEditResolver.hpp"
@@ -12,6 +13,7 @@ class Pin;
 namespace ista::timing_edit::detail {
 void requireDataOnlyNet(const Database& database, const std::string& name);
 void requireSupportedMovedSink(const Database& database, const Pin& pin);
+void requireSupportedMovedSink(const csr::NodeRecord& pin, const TimingCell& cell);
 [[nodiscard]] std::uint64_t nextNativeInstanceId(const Database& database);
 // Prepared map nodes and replacement strings/vectors. Apply and undo only
 // transfer ownership; all validation and allocation happen during preparation.

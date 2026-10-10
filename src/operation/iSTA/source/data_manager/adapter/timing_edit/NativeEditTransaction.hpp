@@ -11,6 +11,7 @@
 
 namespace ista {
 class Database;
+class SemanticCsrNativeView;
 namespace timing_edit {
 class NativeExecutionAuthority;
 class NativeExecutionScopeState;
@@ -48,6 +49,7 @@ class NativeEditTransaction final
 
  private:
   friend class NativeFullEditPreparer;
+  friend class ista::SemanticCsrNativeView;
   static NativeEditTransaction prepareFull(const NativeExecutionAuthority& authority,
       std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver, std::uint64_t first_instance_id,
       std::map<std::string, ParasiticNet> prepared_rc = {});

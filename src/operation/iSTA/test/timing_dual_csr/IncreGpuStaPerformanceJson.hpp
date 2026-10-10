@@ -25,12 +25,12 @@ inline nlohmann::json performanceResultToJson(const DualCsrTraceRunResult& repla
   }
   const auto& actual = replay.result;
   const char* mode = actual.executed_mode == LevelizationExecutionMode::kMixedStage6 ? "mixed-stage6" : "full-stage5";
-  return {{"schema_version", "ista-incregpusta-performance-process/3.0.0"},
+  return {{"schema_version", "ista-incregpusta-performance-process/4.0.0"},
           {"build", incregpustaBuildInfo()},
           {"debug_checks_enabled", incregpusta_debug_checks_enabled},
           {"correctness_comparison", "not_run"},
           {"diagnostics", "not_run"},
-          {"result_requirements", {{"timing_values", true}, {"summary", true}, {"timing_paths", true}, {"file_artifacts", false}}},
+          {"result_requirements", {{"scope", "final_prefix"}, {"timing_values", true}, {"summary", true}, {"timing_paths", true}, {"file_artifacts", false}}},
           {"prefix_batches", prefix},
           {"requested_mode", actual.requested_mode == LevelizationExecutionMode::kMixedStage6 ? "mixed-stage6" : "full-stage5"},
           {"input", {{"node_slots", actual.input_node_slots}, {"arc_slots", actual.input_arc_slots}, {"batches", prefix}}},

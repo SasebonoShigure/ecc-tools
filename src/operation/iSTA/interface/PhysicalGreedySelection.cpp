@@ -1,7 +1,7 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #include "PhysicalGreedySelection.hpp"
-#include "BufferInsertionGain.hpp"
+#include "PhysicalGreedyScoring.hpp"
 #include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "CsrTableLookup.hpp"
 #include "Database.hpp"
@@ -19,56 +19,16 @@
 namespace ista {
 namespace {
 using namespace timing_edit;
-using Bytes = std::vector<std::uint8_t>;
-struct Buffer {
-  LibraryCellRef reference;
-  const csr::CellTransferModel* model;
-  double capacitance;
-  Bytes key;
-};
-double pinCapacitance(const csr::LibraryPortModel& pin)
-{
-  double value = 0.0;
-  for (const auto& transition : pin.transition_capacitance[0])
-    value = std::max(value, transition.value_or(pin.default_capacitance));
-  if (!std::isfinite(value) || value < 0.0) throw std::runtime_error("greedy: invalid pin capacitance");
-  return value;
-}
+using physical_greedy::Bytes;
+using physical_greedy::pinCapacitance;
+using physical_greedy::buffers;
+using physical_greedy::estimate;
 const csr::LibraryPortModel& pinModel(const Database& database, csr::detail::NativeLibraryModels& models, const Pin& pin)
 {
   const auto& cell = models.cell(database.get_instance_map().at(pin.get_instance_name()).get_cell_name());
   const auto port = std::ranges::find(cell.ports, pin.get_pin_name(), &csr::LibraryPortModel::name);
   if (port == cell.ports.end()) throw std::runtime_error("greedy: missing library pin");
   return *port;
-}
-std::vector<Buffer> buffers(const Database& database, csr::detail::NativeLibraryModels& models,
-                            std::span<const std::string> names)
-{
-  std::vector<Buffer> result;
-  std::set<std::string> seen;
-  for (const auto& name : names) {
-    if (!seen.insert(name).second) throw std::invalid_argument("greedy: duplicate buffer cell");
-    const auto& cell = models.cell(name);
-    if (!cell.present || cell.ports.size() != 2) throw std::invalid_argument("greedy: invalid buffer cell");
-    const auto input = std::ranges::find(cell.ports, csr::PinDirection::kInput, &csr::LibraryPortModel::direction);
-    const auto output = std::ranges::find(cell.ports, csr::PinDirection::kOutput, &csr::LibraryPortModel::direction);
-    if (input == cell.ports.end() || output == cell.ports.end())
-      throw std::invalid_argument("greedy: buffer ports are not input/output");
-    const csr::CellTransferModel* model = nullptr;
-    for (const auto& arc : cell.cell_arcs)
-      if (!arc.transfer.is_disabled && !arc.transfer.is_clock_arc && !arc.transfer.is_clear_or_preset) {
-        if (model || arc.source_port != input->name || arc.sink_port != output->name)
-          throw std::invalid_argument("greedy: buffer has ambiguous arcs");
-        model = &arc.transfer;
-      }
-    if (!model) throw std::invalid_argument("greedy: buffer arc is missing");
-    LibraryCellRef reference{cell.library_name, name, input->name, output->name, {}};
-    for (const auto& child : model->children()) reference.ordered_arc_signatures.push_back(child.signature);
-    (void) requireLegalNativeBufferCell(database, reference);
-    auto key = canonicalLibraryCellRefBytes(reference);
-    result.push_back({std::move(reference), model, pinCapacitance(*input), std::move(key)});
-  }
-  return result;
 }
 std::optional<double> slew(const TimingPoint& point, bool clock)
 {
@@ -99,32 +59,6 @@ std::optional<double> setupSlack(const TimingPoint& point)
     }
   }
   return std::nullopt;
-}
-struct DriverEstimate { double delay, resistance; };
-std::optional<DriverEstimate> estimate(const csr::CellTransferModel& model, double input_slew, double load)
-{
-  std::optional<DriverEstimate> result;
-  for (const auto& child : model.children()) {
-    for (std::size_t transition = 0; transition < csr::kTransitionCount; ++transition) {
-      const auto lookup = [&](double cap) {
-        return csr::lookupCsrTimingTableRawLoad(child.delay_tables[transition], input_slew, cap,
-            child.time_unit_scale, child.capacitance_unit_scale);
-      };
-      const auto delay = lookup(load), next = lookup(load + 1E-3);
-      if (!delay || !next) continue;
-      double threshold = child.output_threshold_pct[transition];
-      if (threshold > 1.0) threshold *= 0.01;
-      // Same Liberty slope convention as native DMP; these are gain estimates,
-      // never inputs to the selected STA backend or acceptance timing.
-      const double resistance = -std::log(threshold) * std::abs(*next - *delay) / ((load + 1E-3) - load);
-      if (!std::isfinite(*delay) || *delay < 0.0 || !std::isfinite(resistance) || resistance < 0.0
-          || threshold <= 0.0 || threshold >= 1.0)
-        throw std::runtime_error("greedy: invalid Liberty driver estimate");
-      if (!result) result = DriverEstimate{*delay, resistance};
-      else { result->delay = std::max(result->delay, *delay); result->resistance = std::max(result->resistance, resistance); }
-    }
-  }
-  return result;
 }
 std::optional<double> driverResistance(const Database& database, csr::detail::NativeLibraryModels& models,
                                        const Pin& driver, double load)
@@ -252,51 +186,27 @@ PhysicalGreedySelection selectPhysicalBuffers(const Database& database, csr::det
     if (!resistance || !input_slew) continue;
     const auto driver_key = canonicalStableNodeRefBytes(resolver.stableNodeForNativeName(driver.get_full_name()));
     if (accepted_nodes.contains(driver_key)) continue;
-    std::optional<PhysicalGreedyCandidate> best;
-    Bytes best_pin, best_buffer;
+    physical_greedy::Net candidate_net{critical.identity, {driver.get_x(), driver.get_y()}, *input_slew, *resistance, {}};
     for (const auto& name : net.get_load_pin_list()) {
       const auto& pin = database.get_pin_map().at(name);
       const auto slack = setupSlack(database.get_timing_point_map().at(name));
       if (!dataSink(database, pin) || !slack) continue;
       auto stable_pin = resolver.stableNodeForNativeName(name);
-      const auto pin_key = canonicalStableNodeRefBytes(stable_pin);
-      if (accepted_nodes.contains(pin_key)) continue;
+      if (accepted_nodes.contains(canonicalStableNodeRefBytes(stable_pin))) continue;
       const auto path = paths.at(name);
-      const double load = pinCapacitance(pinModel(database, models, pin)) + path.capacitance_pf;
-      for (const auto& buffer : choices) {
-        const auto cell = estimate(*buffer.model, *input_slew, load);
-        if (!cell) continue;
-        const auto gain = bufferInsertionGain(*resistance + path.resistance_kohm, load, buffer.capacitance,
-                                               cell->resistance, cell->delay);
-        if (!gain || gain->gain_ns <= 0.0) continue;
-        if (best && (gain->gain_ns < best->predicted_gain_ns
-            || (gain->gain_ns == best->predicted_gain_ns && !(pin_key != best_pin ? timing_edit::detail::canonicalBytesLess(pin_key, best_pin)
-                                              : timing_edit::detail::canonicalBytesLess(buffer.key, best_buffer))))) continue;
-        std::array<std::int32_t, 2> target;
-        const std::array midpoint{(driver.get_x() + pin.get_x()) * 0.5, (driver.get_y() + pin.get_y()) * 0.5};
-        for (std::size_t axis = 0; axis < target.size(); ++axis) {
-          if (!std::isfinite(midpoint[axis]) || midpoint[axis] < std::numeric_limits<std::int32_t>::min()
-              || midpoint[axis] > std::numeric_limits<std::int32_t>::max())
-            throw std::runtime_error("greedy: invalid physical target");
-          target[axis] = static_cast<std::int32_t>(std::llround(midpoint[axis]));
-        }
-        CreationToken token{.case_id = database.get_design_name(), .profile_id = "physical-greedy",
-            .batch_ordinal = generation + 1, .accepted_ordinal = result.candidates.size()};
-        BufferInsertionMutation edit{critical.identity, {stable_pin}, buffer.reference,
-            PlacedInputs{target[0] / static_cast<double>(dbu_per_um), target[1] / static_cast<double>(dbu_per_um)},
-            ParasiticRcInputs{ParasiticEditPolicy::kPreRouteTree}, std::move(token)};
-        best = PhysicalGreedyCandidate{std::move(edit), target, gain->gain_ns, *slack};
-        best_pin = pin_key;
-        best_buffer = buffer.key;
-      }
+      candidate_net.sinks.push_back({std::move(stable_pin), {pin.get_x(), pin.get_y()}, *slack,
+          pinCapacitance(pinModel(database, models, pin)) + path.capacitance_pf, path.resistance_kohm});
     }
+    const CreationToken token{.case_id = database.get_design_name(), .profile_id = "physical-greedy",
+        .batch_ordinal = generation + 1, .accepted_ordinal = result.candidates.size()};
+    auto best = physical_greedy::score(candidate_net, choices, token, dbu_per_um);
     if (best) {
       const auto names = defaultTokenMaterialization(best->edit.creation_token, best->edit.library_cell);
       if (database.get_instance_map().contains(names.instance_name) || database.get_net_map().contains(names.output_net_name)
           || database.get_pin_map().contains(names.input_pin_name) || database.get_pin_map().contains(names.output_pin_name))
         throw std::runtime_error("greedy: materialized name collision");
       accepted_nodes.insert(driver_key);
-      accepted_nodes.insert(best_pin);
+      accepted_nodes.insert(canonicalStableNodeRefBytes(best->edit.moved_sinks.front()));
       result.candidates.push_back(std::move(*best));
     }
   }

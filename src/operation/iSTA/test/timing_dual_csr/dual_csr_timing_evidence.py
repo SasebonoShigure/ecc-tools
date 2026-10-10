@@ -9,14 +9,15 @@ from typing import Any
 Require = Callable[[bool, str], None]
 
 PHASE_TIMING_KEYS = {
-    "generation_before", "generation_after", "pre_candidate_prepare_ms",
-    "candidate_apply_execute_ms", "post_candidate_capture_ms",
+    "generation_before", "generation_after", "prepare_batch_ms",
+    "direct_prepare_ms",
     "dual_csr_update_ms", "full_levelization_ms", "full_propagation_ms",
     "mixed_build_ms", "mixed_kahn_ms", "reconstruct_ms",
     "invariant_ms", "verify_ms", "publish_ms",
-    "session_step_ms", "query_materialization_ms", "report_ms", "consumer_step_ms",
+    "session_step_ms", "result_consumption", "query_materialization_ms",
+    "report_ms", "consumer_step_ms",
 }
-DURATION_KEYS = PHASE_TIMING_KEYS - {"generation_before", "generation_after"}
+DURATION_KEYS = PHASE_TIMING_KEYS - {"generation_before", "generation_after", "result_consumption"}
 BUFFER_ORDER = [
     "nodes", "arc_slots", "base_out_offsets", "base_out_slots",
     "base_in_offsets", "base_in_slots", "aux_rows", "aux_sources",
@@ -67,9 +68,15 @@ def validate_batch_phase_timings(
         require(item.get("generation_before") == index
                 and item.get("generation_after") == index + 1,
                 f"{label}[{index}] generation chain differs")
+        consumption = item["result_consumption"]
+        require(consumption in {"completed", "not_run"},
+                f"{label}[{index}] has an unknown consumption status")
         durations = {}
         for key in DURATION_KEYS:
-            if not debug_checks and key in {"invariant_ms", "verify_ms"}:
+            if consumption == "not_run" and key in {"query_materialization_ms", "report_ms"}:
+                require(item[key] is None, f"{label}[{index}].{key} must be null when not_run")
+                durations[key] = 0.0
+            elif not debug_checks and key in {"invariant_ms", "verify_ms"}:
                 require(item.get(key) == "not_run",
                         f"{label}[{index}].{key} must be not_run in performance output")
             else:
@@ -190,7 +197,7 @@ def validate_resource_observations(
 
 
 def run_timing_evidence_self_test(require: Require) -> None:
-    valid = [{"generation_before": 0, "generation_after": 1,
+    valid = [{"generation_before": 0, "generation_after": 1, "result_consumption": "completed",
               **{key: 0.0 for key in DURATION_KEYS}}]
     errors: list[str] = []
     validate_batch_phase_timings(

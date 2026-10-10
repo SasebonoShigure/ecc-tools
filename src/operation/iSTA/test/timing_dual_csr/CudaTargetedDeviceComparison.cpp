@@ -44,7 +44,7 @@ void appendRow(std::vector<Index>& result, const std::vector<Index>& offsets, co
 }
 }  // namespace
 
-void requireCudaDeviceMatchesCanonical(const CudaTargetedTraceObservation& observation)
+void requireCudaDeviceMatchesCanonical(const CudaTraceObservation& observation)
 {
   const auto& input = observation.canonical_input;
   const auto& device = observation.device;

@@ -105,19 +105,7 @@ PhysicalGreedySelection IncrementalStaSession::selectPhysicalBuffers(
     auto& physical = *context._physical;
     if (physical.generation(context).value() != expected_generation)
       throw std::invalid_argument("greedy selection generation is stale");
-    auto& database = STADM.getDatabase();
-    physical.prepareReport(database, context, operation.authority());
-    const auto& resolver = [&]() -> const timing_edit::TimingEditResolverState& {
-      if (physical.full) return physical.full->resolver();
-      if (physical.cpu_native) return physical.cpu_native->resolver;
-#if ISTA_ENABLE_CUDA
-      auto& cuda = context.cudaState(operation.authority());
-      if (cuda.native) return cuda.native->resolver;
-#endif
-      throw std::logic_error("greedy selection has no committed resolver");
-    }();
-    return ista::selectPhysicalBuffers(database, context.libraryModels(database), resolver,
-        expected_generation, cell_names, top_k, max_buffers, physical.technology.dbu_per_um);
+    return physical.selectBuffers(STADM.getDatabase(), context, operation.authority(), cell_names, top_k, max_buffers);
   } catch (const std::exception& error) {
     throw StaSessionException(StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), error.what()), request());
   }

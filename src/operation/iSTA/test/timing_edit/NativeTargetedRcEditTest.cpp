@@ -6,6 +6,12 @@
 #include "../CsrReferenceInputTestSupport.hpp"
 #include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "DataManager.hpp"
+#include "DualCsrBaselineFactory.hpp"
+#include "DualCsrSemanticIdentity.hpp"
+#include "DualCsrStateValidation.hpp"
+#include "DualCsrArcGroupIndexValidation.hpp"
+#include "DualCsrUpdaterInternal.hpp"
+#include "TimingEditDualCsrDescriptorBuilder.hpp"
 #include "NativeTargetedEditPreparer.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "TimingEditRcFixture.hpp"
@@ -15,6 +21,7 @@
 #ifdef ISTA_RC_CUDA_TRANSACTION_TEST
 #include <iostream>
 #include "CudaDualCsrTestReader.hpp"
+#include "CudaTargetedExecution.hpp"
 #include "CsrRcTimingComparison.hpp"
 #include "CsrCpuReferenceBackendInternal.hpp"
 #include "CsrFifoLevelizationValidation.hpp"
@@ -118,6 +125,30 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
         const BaselineSemanticIdentity baseline{database.get_design_name(), identity.current_fingerprints, identity.canonical_pre_state};
         csr::detail::NativeLibraryModels models(database);
         auto state = NativeTargetedEditPreparer::bindBaseline(database, input, baseline, models);
+        namespace dual = ista::timing_dual_csr;
+        auto graph_attempt = dual::DualCsrBaselineFactory::create(input, state.session_token, state.resolver.highWater());
+        require(graph_attempt.success(), "direct RC baseline rejected");
+        auto direct_graph = std::move(*graph_attempt.state);
+        auto direct_resolver = state.resolver;
+        std::vector<dual::DualCsrArcGroupIndexBinding> bindings;
+        for (const auto& [ref, binding] : direct_resolver.arcBindings())
+          bindings.push_back({csr::ArcId{binding.slot.value()}, ref});
+        auto index_attempt = dual::buildDualCsrArcGroupIndex(direct_graph, bindings);
+        require(index_attempt.success(), "direct RC index rejected");
+        auto direct_index = std::move(*index_attempt.index);
+        const auto prepare_direct = [&](const DesignEditPlan& edit_plan, const std::map<std::string, ParasiticNet>& trees) {
+          std::optional<CommittedEditIdentity> current_identity;
+          if constexpr (incregpusta_debug_checks_enabled)
+            current_identity = dual::deriveDualCsrCommittedIdentity(direct_graph, direct_resolver);
+          else if (direct_graph.generation.value() == 0)
+            current_identity = identity;
+          auto pending = dual::DualCsrStructuredBatchPreparer::prepare(edit_plan, direct_resolver,
+              dual::DualSemanticReadView(direct_graph), direct_graph, current_identity, direct_index);
+          std::vector<csr::ParasiticNetModel> raw;
+          for (const auto& [name, tree] : trees)
+            raw.push_back(csr::detail::projectCanonicalParasiticNet(name, tree));
+          return dual::TimingEditDualCsrDescriptorBuilder::buildDirect(std::move(pending), authority, models, raw);
+        };
 #ifdef ISTA_RC_CUDA_TRANSACTION_TEST
         auto device = csr::CudaDualCsrTestReader::computeRc(input, 64, state.resolver.highWater());
         require(!device.computationCode(), "native RC CUDA baseline failed");
@@ -151,6 +182,12 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
               static_cast<void>(name);
               node.set_capacitance(std::numeric_limits<double>::max());
             }
+            bool direct_rejected = false;
+            try { static_cast<void>(prepare_direct(plan, trees)); }
+            catch (const std::overflow_error&) { direct_rejected = true; }
+            require(direct_rejected && direct_graph.generation == state.generation
+                        && &rc_library.get_net_map().at(source) == old_native,
+                    "direct RC reduction failure mutated committed state");
             bool rejected = false;
             try {
               auto batch = NativeTargetedEditPreparer::prepare(database, authority,
@@ -171,6 +208,22 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
               wire(trees, source, driver, names.input_pin_name, 75.0);
               if (source == "n0") retainedSink(trees);
               wire(trees, names.output_net_name, names.output_pin_name, "out", 50.0);
+              auto direct = prepare_direct(plan, trees);
+              require(!direct.captureAudit(), "direct RC edit invented native capture");
+#ifdef ISTA_RC_CUDA_TRANSACTION_TEST
+              auto foreign = makeNativeEditFixture();
+              csr::detail::NativeLibraryModels foreign_models(foreign.database());
+              bool foreign_rejected = false;
+              try { static_cast<void>(csr::detail::makeCudaTargetedPatch(direct_graph, direct.descriptor(), foreign_models)); }
+              catch (const std::invalid_argument& error) {
+                foreign_rejected = std::string(error.what()).find("another Database") != std::string::npos;
+              }
+              require(foreign_rejected, "direct CUDA patch accepted a foreign load model owner");
+              const auto direct_patch = csr::detail::makeCudaTargetedPatch(direct_graph, direct.descriptor(), models);
+#endif
+              dual::detail::PreparedDualCsrGraphPatch graph_patch(direct_graph, direct.descriptor());
+              dual::detail::PreparedDualCsrIndexPatch index_patch(direct_graph, direct_index, direct.descriptor());
+              PreparedTimingEditResolverPatch resolver_patch(direct_resolver, direct_resolver.prepare(direct.preparedBatch()));
               auto batch = NativeTargetedEditPreparer::prepare(database, authority,
                   {plan.expected_generation, plan.edits}, state, std::move(trees));
               require(!batch.patch.rc_bindings.empty(), "targeted RC edit omitted binding changes");
@@ -205,8 +258,33 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
               };
               for (const auto& arc : batch.patch.arc_appends) compare(arc.payload);
               for (const auto& arc : batch.patch.payload_changes) compare(arc.replacement);
+              for (const auto& arc : direct.descriptor().arc_appends) compare(arc.payload);
+              for (const auto& arc : direct.descriptor().payload_changes) compare(arc.replacement);
+              graph_patch.apply();
+              index_patch.apply();
+              resolver_patch.apply();
+              const auto graph_failures = dual::validateDualCsrState(direct_graph);
+              if (!graph_failures.empty())
+                throw std::runtime_error("direct RC graph: " + graph_failures.front().field + ": " + graph_failures.front().message);
+              require(dual::validateDualCsrArcGroupIndex(direct_graph, direct_index).empty(),
+                      "direct RC edit left an invalid index");
+              for (const auto& tree : direct_graph.reference_payload.parasitics.nets) {
+                const auto found = std::ranges::find(exported.parasitics.nets, tree.map_key, &csr::ParasiticNetModel::map_key);
+                require(found != exported.parasitics.nets.end() && *found == tree, "direct RC raw model differs from native");
+              }
+              if (sequential && generation == 0) {
+                const auto& seeds = direct_graph.reference_payload.start_seeds;
+                const auto seed = std::ranges::find(seeds, q, [](const auto& value) { return value.seed_node; });
+                require(seed != seeds.end() && seed->parasitic.tree
+                            && seed->parasitic.tree->net_name == source && seed->parasitic.terminal == 0,
+                        "direct RC edit omitted deferred Q seed");
+                for (std::size_t lane = 0; lane < seed->parasitic.tree->lanes.size(); ++lane)
+                  require(*seed->parasitic.tree->lanes[lane] == *state.parasitics.at(q).tree->lanes[lane],
+                          "direct deferred Q RC differs from native");
+              }
               #ifdef ISTA_RC_CUDA_TRANSACTION_TEST
-              auto candidate = device.stage(batch.patch, level_mode);
+              auto candidate = mixed ? device.stage(direct_patch, level_mode)
+                                     : csr::CudaDualCsrTestReader::stageFullCsr(device, direct_graph);
               require(device.canPublish(candidate) && !candidate.canPublish(device) && !candidate.computationCode() && candidate.telemetry().materialize_ms == 0.0,
                       "native RC patch failed or forced full materialization");
               if constexpr (incregpusta_debug_checks_enabled) {
@@ -229,9 +307,19 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
               }
               if (commit) require(device.publish(std::move(candidate)), "native RC device commit failed");
 #endif
-              if (commit) batch.transaction.commit();
+              if (commit) {
+                graph_patch.commit();
+                index_patch.commit();
+                resolver_patch.commit();
+                batch.transaction.commit();
+              }
             }
             require(authority.readyForQuery(), "targeted RC transaction retained pending state");
+            require(direct_graph.generation == state.generation && direct_resolver == state.resolver,
+                    "direct/native RC commit or rollback identities diverged");
+            require(dual::validateDualCsrState(direct_graph).empty()
+                        && dual::validateDualCsrArcGroupIndex(direct_graph, direct_index).empty(),
+                    "direct RC commit or rollback damaged committed state");
 #ifdef ISTA_RC_CUDA_TRANSACTION_TEST
             if (!commit) {
               csr::CudaDualCsrPatch noop;

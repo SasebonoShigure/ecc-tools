@@ -23,6 +23,7 @@
 #include "PublicTimingJson.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "StaCudaSessionState.hpp"
+#include "TimingEditDualCsrDescriptorBuilder.hpp"
 #include "TimingResultScatterInternal.hpp"
 #include "timing_edit/BufferTraceReplayInput.hpp"
 #include "timing_dual_csr/DualCsrTargetedArtifactSupport.hpp"
@@ -30,6 +31,9 @@
 #include "DualCsrTimingPayloadViewImpl.hpp"
 #include "timing_dual_csr/DualCsrTestSupport.hpp"
 
+namespace ista::csr::test {
+void checkCudaSemanticFault(const std::filesystem::path&, const std::string&);
+}
 namespace {
 using namespace ista;
 using namespace csr;
@@ -435,8 +439,9 @@ void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mo
           if (!recovering)
             original_session = loaded.session_token;
           auto& owned = loaded.session_context.cudaState(loaded.authority);
-          owned.bindEdits(loaded.database, loaded.reference_input, program.baseline(), loaded.session_context.libraryModels(loaded.database));
-          auto& state = *owned.native;
+          owned.bindEdits(loaded.database, loaded.reference_input, program.baseline());
+          auto& state = *owned.host;
+          owned.history.reserve(plans.size());
           auto& owner = owned.device;
           require(!owner.computationCode(), "cross-build CUDA baseline failed");
           // Recovery repeats the real clock/CTQ/check workload with a different launch shape.
@@ -446,24 +451,30 @@ void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mo
           const auto requested = mode == CudaLevelizationMode::kMixed ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull;
           for (std::size_t index = 0; index < plans.size(); ++index) {
             const auto strategy = recovering && index == 0 ? persisted.front().executed_update_strategy : requested;
-            auto prepared = timing_edit::NativeTargetedEditPreparer::prepare(
-                loaded.database, loaded.authority, plans[index], state);
+            auto record = plans[index];
+            auto& models = loaded.session_context.libraryModels(loaded.database);
+            auto direct = timing_dual_csr::TimingEditDualCsrDescriptorBuilder::buildDirect(
+                state.prepareBatch(plans[index]), loaded.authority, models);
+            auto device_patch = csr::detail::makeCudaTargetedPatch(state.graph, direct.descriptor(), models);
+            CudaCsrEditState::Patch prepared(state, std::move(direct));
+            prepared.apply();
             bool pending_rejected = false;
             try {
               loaded.session_context.materializeCudaTiming(loaded.database, loaded.authority);
             } catch (const std::logic_error&) {
               pending_rejected = true;
             }
-            require(pending_rejected, "native pending transaction served cached timing");
+            require(pending_rejected, "CSR pending transaction served cached timing");
             CudaTargetedTraceBatch batch;
-            auto candidate = csr::detail::stageCudaTargetedBatch(owner, prepared.patch, strategy, StaFallbackPolicy::kError, batch.execution, batch.rejected_mixed_attempt);
+            auto candidate = csr::detail::stageCudaTargetedBatch(owner, device_patch, strategy, StaFallbackPolicy::kError, batch.execution, batch.rejected_mixed_attempt);
             require(!candidate.computationCode() && !candidate.poisoned()
                         && batch.execution.executed_update_strategy == strategy && !batch.execution.fallback_to_full,
                     "cross-build replay did not execute the requested CUDA mode");
             require(owner.publish(std::move(candidate)), "cross-build CUDA publication failed");
-            prepared.transaction.commit();
+            prepared.commit();
+            owned.history.push_back(std::move(record));
             owned.committed();
-            require(owner.generation() == state.generation, "cross-build native/device generation differs");
+            require(owner.generation() == state.graph.generation, "cross-build host/device generation differs");
             if (index == 0)
               queryAllocationRetry(loaded);
             observations.push_back({
@@ -596,6 +607,14 @@ void multiBlockReconstruction()
 int main(int argc, char** argv)
 {
   try {
+    if (argc == 4 && std::string(argv[1]) == "--semantic-context-fault") {
+      if constexpr (incregpusta_debug_checks_enabled)
+        csr::test::checkCudaSemanticFault(argv[3], argv[2]);
+      else
+        throw std::invalid_argument("semantic fault tests require checks ON");
+      std::cout << "semantic CUDA session poison passed\n";
+      return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--lazy-sequence") {
       csr::test::runCudaLazySequence(CudaLevelizationMode::kMixed);
       std::cout << "CUDA lazy commit/query sequence passed\n";

@@ -119,7 +119,7 @@ inline nlohmann::json runStage12Benchmark(const std::map<std::string, std::strin
                              {"consumer_step_ms", t.consumer_step_ms}, {"fallback", result.result.fallback_count != 0},
                              {"executed_backend", "cpu"}, {"executed_strategy", "incremental"}});
       } else if (strategy == "full") {
-        const auto result = csr::replayCudaFullTracePrefix(view.session_context, view.database, view.reference_input,
+        const auto result = csr::CudaFullTraceReplayer::run(view.session_context, view.database, view.reference_input,
             view.authority, program, prefix, [&] { consumer(); });
         timings = Json::array();
         backend_setup_ms = result.backend_setup_ms;

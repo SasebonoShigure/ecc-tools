@@ -21,6 +21,8 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "CsrFifoLevelization.hpp"
@@ -101,7 +103,7 @@ struct CsrCpuReferenceWorkState
   CsrCpuRcCache rc;
   // Borrowed only for this propagation; session ownership cannot change mid-batch.
   std::span<const NodeRecord> rc_nodes;
-  std::span<const ReferencedLibraryCellModel> rc_cells;
+  std::unordered_map<std::string_view, const ReferencedLibraryCellModel*> rc_cells;
   InputPortRcThresholds input_port_thresholds;
   std::vector<std::vector<CsrCpuReferencePathState>> path_rows;
   std::size_t node_count{0};

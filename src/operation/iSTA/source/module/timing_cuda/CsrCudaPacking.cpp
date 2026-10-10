@@ -148,15 +148,14 @@ NodeState& seedNode(HostData& data, Index node)
   return found->state;
 }
 
-void packSeeds(const CsrReferenceInput& input, HostData& data)
+void packSeeds(const TimingPayloadView& input, HostData& data)
 {
   CsrInitialTimingSeeds seeds;
-  const FlatTimingPayloadView payloads(input);
-  if (collectCsrInitialTimingSeeds(payloads, seeds) != CsrCpuReferenceStageStatus::kSuccess)
+  if (collectCsrInitialTimingSeeds(input, seeds) != CsrCpuReferenceStageStatus::kSuccess)
     throw std::invalid_argument("CUDA timing seed initialization failed");
-  data.tag_count = input.clock_tags.size();
-  data.clock_count = input.clocks.size();
-  data.node_count = input.nodes.size();
+  data.tag_count = input.clockTags().size();
+  data.clock_count = input.clocks().size();
+  data.node_count = input.nodeRecords().size();
   for (const auto& source : seeds.nodes) {
     const auto i = source.node.value();
     auto& node = seedNode(data, i);
@@ -164,11 +163,11 @@ void packSeeds(const CsrReferenceInput& input, HostData& data)
     node.launch = source.launch;
     node.clock_name = intern(data.layout.clock_names, source.clock_name);
     node.clock_point = source.clock_point;
-    if (input.clock_owner_by_node[i]) {
-      const auto owner = std::ranges::find(input.clocks, *input.clock_owner_by_node[i], &ClockConstraintModel::map_key);
-      if (owner == input.clocks.end())
+    if (input.clockOwners()[i]) {
+      const auto owner = std::ranges::find(input.clocks(), *input.clockOwners()[i], &ClockConstraintModel::map_key);
+      if (owner == input.clocks().end())
         throw std::invalid_argument("CUDA clock owner has no constraint");
-      node.clock_owner = owner - input.clocks.begin();
+      node.clock_owner = owner - input.clocks().begin();
       node.propagated_clock = owner->propagated;
     }
     for (std::size_t lane = 0; lane < 4; ++lane) {
@@ -191,22 +190,22 @@ void packSeeds(const CsrReferenceInput& input, HostData& data)
     path.launch = source.launch;
     path.start = source.start_node.value();
   }
-  data.layout.clock_tags = input.clock_tags;
-  data.schema = input.schema_version;
-  data.identity = input.source_identity;
+  data.layout.clock_tags = input.clockTags();
+  data.schema = input.schemaVersion();
+  data.identity = input.sourceIdentity();
 }
 
-void packSequential(const CsrReferenceInput& input, HostData& data, ModelStorage& models)
+void packSequential(const TimingPayloadView& input, HostData& data, ModelStorage& models)
 {
-  if (input.timing_check_endpoints.empty() && std::ranges::none_of(input.start_seeds, [](const StartSeedModel& seed) {
+  if (input.timingCheckEndpoints().empty() && std::ranges::none_of(input.startSeeds(), [](const StartSeedModel& seed) {
         return seed.availability == StartSeedAvailability::kDeferredSequential;
       }))
     return;
   std::map<std::string, const ReferencedLibraryCellModel*, std::less<>> cells;
-  for (const auto& cell : input.referenced_library_cells)
+  for (const auto& cell : input.referencedLibraryCells())
     cells.emplace(cell.cell_name, &cell);
   std::map<std::string, Index, std::less<>> nodes;
-  for (const auto& node : input.nodes)
+  for (const auto& node : input.nodeRecords())
     nodes.emplace(node.key.full_name, node.id.value());
   const auto cellFor = [&](const NodeRecord& node) -> const ReferencedLibraryCellModel& {
     const auto found = cells.find(node.instance_cell);
@@ -220,12 +219,12 @@ void packSequential(const CsrReferenceInput& input, HostData& data, ModelStorage
     const auto found = nodes.find(node.key.instance_name + ":" + cell.clock_pin_name);
     return found == nodes.end() ? absent : found->second;
   };
-  for (const auto& source : input.start_seeds) {
+  for (const auto& source : input.startSeeds()) {
     if (source.availability != StartSeedAvailability::kDeferredSequential)
       continue;
     if (source.seed_node.value() >= data.node_count)
       throw std::invalid_argument("CUDA sequential seed node out of range");
-    const auto& node = input.nodes[source.seed_node.value()];
+    const auto& node = input.nodeRecords()[source.seed_node.value()];
     const auto& cell = cellFor(node);
     const auto selected = std::ranges::find_if(cell.cell_arcs, [](const LibraryCellArcModel& arc) { return arc.transfer.is_clock_arc; });
     const CellTransferModel* ctq = selected == cell.cell_arcs.end() ? nullptr : &selected->transfer;
@@ -241,12 +240,12 @@ void packSequential(const CsrReferenceInput& input, HostData& data, ModelStorage
     seed.trigger = ctq != nullptr && !ctq->children().empty() && ctq->children().front().signature.trigger_transition == Transition::kFall ? 1 : 0;
     state.clock_name = intern(data.layout.clock_names, source.clock_tag);
     if (source.path_source) {
-      const auto tag = std::ranges::find(input.clock_tags, source.clock_tag);
-      if (*source.path_source != PathSource::kRegister || tag == input.clock_tags.end() || source.path_start_node.value() >= data.node_count
+      const auto tag = std::ranges::find(input.clockTags(), source.clock_tag);
+      if (*source.path_source != PathSource::kRegister || tag == input.clockTags().end() || source.path_start_node.value() >= data.node_count
           || seed.clock_node == absent || source.crpr_node != NodeId{seed.clock_node}
           || source.crpr_transition != static_cast<Transition>(seed.trigger) || seed.kind == SeedKind::scalar)
         throw std::invalid_argument("CUDA sequential path identity is malformed");
-      seed.path_tag = tag - input.clock_tags.begin();
+      seed.path_tag = tag - input.clockTags().begin();
       seed.path_start = source.path_start_node.value();
       for (Index analysis = 0; analysis < 2; ++analysis)
         for (Index transition = 0; transition < 2; ++transition)
@@ -260,14 +259,14 @@ void packSequential(const CsrReferenceInput& input, HostData& data, ModelStorage
       seed.child_count = ctq->children().size();
     }
   }
-  std::vector<bool> selected(input.nodes.size(), false);
-  for (const auto& source : input.timing_check_endpoints) {
+  std::vector<bool> selected(input.nodeRecords().size(), false);
+  for (const auto& source : input.timingCheckEndpoints()) {
     if (!source.resolved_data_node || (source.check_kind != TimingCheckKind::kSetup && source.check_kind != TimingCheckKind::kRecovery))
       continue;
     const auto id = source.resolved_data_node->value();
-    if (id >= input.nodes.size())
+    if (id >= input.nodeRecords().size())
       throw std::invalid_argument("CUDA check endpoint node out of range");
-    const auto& node = input.nodes[id];
+    const auto& node = input.nodeRecords()[id];
     if (selected[id] || node.is_port || !node.is_sequential || !node.is_endpoint)
       continue;
     selected[id] = true;
@@ -283,14 +282,14 @@ void packSequential(const CsrReferenceInput& input, HostData& data, ModelStorage
     endpoint.check_time = check.check_time;
     endpoint.child_begin = models.intern(check.childrenOwner());
     endpoint.child_count = check.children().size();
-    const auto* clock = input.clocks.empty() ? nullptr : &input.clocks.front();
+    const auto* clock = input.clocks().empty() ? nullptr : &input.clocks().front();
     if (endpoint.clock_node != absent) {
       const auto found_seed = std::ranges::lower_bound(data.node_seeds, endpoint.clock_node, {}, &NodeSeed::node);
       const auto name = found_seed == data.node_seeds.end() || found_seed->node != endpoint.clock_node
                             ? absent : found_seed->state.clock_name;
       if (name != absent) {
-        const auto found = std::ranges::find(input.clocks, data.layout.clock_names[name], &ClockConstraintModel::map_key);
-        if (found != input.clocks.end())
+        const auto found = std::ranges::find(input.clocks(), data.layout.clock_names[name], &ClockConstraintModel::map_key);
+        if (found != input.clocks().end())
           clock = &*found;
       }
     }
@@ -546,22 +545,19 @@ Arc packArc(const ArcSemanticPayload& source, ModelStorage& models)
   return packArcFields(source, models);
 }
 
-HostData pack(const CsrReferenceInput& input, ModelStorage& models)
+void packTimingPayload(const TimingPayloadView& input, HostData& data, ModelStorage& models)
 {
-  HostData data;
-  packArcs(input, data, models);
   packSeeds(input, data);
-  data.out_offsets = input.out_row_offsets;
-  data.in_offsets = input.in_row_offsets;
-  data.out_arcs = indices(input.out_arc_ids);
-  data.in_arcs = indices(input.in_arc_ids);
-  data.roots = indices(input.ordered_root_ids);
-  data.ends = indices(input.ordered_end_ids);
-  for (const auto& source : input.endpoint_required)
+  data.roots = indices(input.orderedRootIds());
+  data.ends = indices(input.orderedEndIds());
+  for (const auto& source : input.endpointRequired())
     data.endpoints.push_back({source.node.value(), source.clock_period,
                               {source.output_delay[0].value_or(0.0), source.output_delay[0].has_value()}});
   packSequential(input, data, models);
-  packRcGraph(input, data, models);
+}
+
+void finishPacking(HostData& data)
+{
   std::stable_sort(data.path_seeds.begin(), data.path_seeds.end(), [](const PathSeed& a, const PathSeed& b) {
     return std::pair{a.row, a.tag} < std::pair{b.row, b.tag};
   });
@@ -576,14 +572,28 @@ HostData pack(const CsrReferenceInput& input, ModelStorage& models)
     first = end;
   }
   data.path_seeds.resize(retained);
+  for (std::size_t id = 0; id < data.bindings.size(); ++id)
+    data.bindings[id].rc_binding = data.arcs.at(id).rc_binding;
+  data.adjacency = buildPathAdjacency(data.node_count, data.bindings);
+  data.paths = buildPathDomain(data.bindings, data.adjacency, data.path_seeds);
+}
+
+HostData pack(const CsrReferenceInput& input, ModelStorage& models)
+{
+  HostData data;
+  packArcs(input, data, models);
+  packTimingPayload(FlatTimingPayloadView(input), data, models);
+  data.out_offsets = input.out_row_offsets;
+  data.in_offsets = input.in_row_offsets;
+  data.out_arcs = indices(input.out_arc_ids);
+  data.in_arcs = indices(input.in_arc_ids);
+  packRcGraph(input, data, models);
   data.bindings.reserve(input.arcs.size());
-  for (const auto& arc : input.arcs) {
+  for (const auto& arc : input.arcs)
     data.bindings.push_back({arc.source.value(), arc.sink.value(), true, arc.eligibility.levelization,
                         EdgeStorageKind::kBaseOut, pathTransitions(arc.kind, arc.transfer, arc.eligibility.data_arrival),
                         data.arcs.at(arc.id.value()).rc_binding});
-  }
-  data.adjacency = buildPathAdjacency(input.nodes.size(), data.bindings);
-  data.paths = buildPathDomain(data.bindings, data.adjacency, data.path_seeds);
+  finishPacking(data);
   return data;
 }
 

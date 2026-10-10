@@ -405,6 +405,111 @@ void buildIncoming(const PendingStructuredBatch& pending,
 
 }  // namespace
 
+DualCsrBatchDescriptor basicDescriptor(
+    const PendingStructuredBatch& pending,
+    const NarrowTimingRecords& records)
+{
+  const auto& batch = pending.preparedBatch();
+  const auto& before = pending.expectedBefore().graph();
+  DualCsrBatchDescriptor descriptor;
+  descriptor.session_token = batch.sessionToken();
+  descriptor.expected_generation = batch.expectedGeneration();
+  descriptor.target_generation = batch.targetGeneration();
+  descriptor.before = batch.slotPlan().before;
+  descriptor.after = batch.slotPlan().after;
+
+  for (const auto& captured : records.nodes) {
+    if (captured.id.value() >= descriptor.before.node_slots) {
+      descriptor.node_appends.push_back(
+          {captured.id, captured.record.key, captured.record});
+      continue;
+    }
+    const auto& expected = before.nodes[captured.id.value()];
+    auto only_net_changed = expected;
+    only_net_changed.net_name = captured.record.net_name;
+    if (only_net_changed != captured.record)
+      invalid("existing node changed outside the reconnect net field");
+    if (expected.net_name != captured.record.net_name)
+      descriptor.node_payload_changes.push_back(
+          {captured.id, expected.key, expected.net_name,
+           captured.record.net_name});
+  }
+  std::ranges::sort(descriptor.node_appends,
+                    [](const auto& lhs, const auto& rhs) {
+                      return lhs.id.value() < rhs.id.value();
+                    });
+  std::ranges::sort(descriptor.node_payload_changes,
+                    [](const auto& lhs, const auto& rhs) {
+                      return lhs.id.value() < rhs.id.value();
+                    });
+
+  for (const auto& captured : records.arcs) {
+    if (!captured.active) {
+      descriptor.logical_deactivations.push_back(
+          {captured.id, captured.payload.key, captured.payload.source,
+           captured.payload.sink, LogicalArcDeactivateReason::kRemoved,
+           true});
+      continue;
+    }
+    if (captured.id.value() >= descriptor.before.arc_slots) {
+      descriptor.arc_appends.push_back(
+          {captured.id, captured.payload.key, captured.payload.source,
+           captured.payload.sink, captured.payload});
+      continue;
+    }
+    const auto& expected = before.arc_slots[captured.id.value()];
+    if (!expected.active)
+      invalid("capture attempts to reactivate a logical ArcId");
+    if (expected.payload != captured.payload)
+      descriptor.payload_changes.push_back(
+          {captured.id, expected.payload, captured.payload});
+  }
+  std::map<timing_edit::StableArcRef, const AffectedArcCapture*> requests;
+  for (const auto& request : pending.capturePlan().arcs)
+    if (!requests.emplace(request.ref, &request).second)
+      invalid("arc_index_requests has duplicate records");
+  for (const auto& captured : records.arcs) {
+    const auto found = requests.find(captured.ref);
+    if (found == requests.end())
+      invalid("arc_index_requests is missing a planned record");
+    const auto& request = *found->second;
+    const std::optional<csr::ArcKey> replacement
+        = captured.active
+              ? std::optional<csr::ArcKey>{captured.payload.key}
+              : std::nullopt;
+    if (request.expected_current_key != replacement)
+      descriptor.arc_group_index_delta.push_back(
+          {captured.id, captured.ref, request.expected_current_key,
+           replacement});
+  }
+  std::ranges::sort(descriptor.arc_appends,
+                    [](const auto& lhs, const auto& rhs) {
+                      return lhs.id.value() < rhs.id.value();
+                    });
+  std::ranges::sort(descriptor.payload_changes,
+                    [](const auto& lhs, const auto& rhs) {
+                      return lhs.id.value() < rhs.id.value();
+                    });
+  std::ranges::sort(descriptor.logical_deactivations,
+                    [](const auto& lhs, const auto& rhs) {
+                      return lhs.id.value() < rhs.id.value();
+                    });
+  std::ranges::sort(descriptor.arc_group_index_delta,
+                    [](const auto& lhs, const auto& rhs) {
+                      return lhs.id.value() < rhs.id.value();
+                    });
+
+  descriptor.reference_payload = records.reference_payload;
+  auto identity = before.reference_payload.source_identity;
+  identity.session_token = descriptor.session_token.value();
+  identity.graph_generation = descriptor.target_generation.value();
+  descriptor.reference_payload.source_identity
+      = ValueReplacement<csr::CsrSnapshotIdentity>{
+          before.reference_payload.source_identity,
+          std::move(identity)};
+  return descriptor;
+}
+
 void buildStructuredPhysicalDelta(
     const PendingStructuredBatch& pending,
     const NarrowTimingRecords& records,

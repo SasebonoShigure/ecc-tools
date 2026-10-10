@@ -25,6 +25,10 @@ class TimingPathState
 {
  public:
   TimingPathState() = default;
+  TimingPathState(const TimingPathState&) = default;
+  TimingPathState& operator=(const TimingPathState&) = default;
+  TimingPathState(TimingPathState&&) noexcept = default;
+  TimingPathState& operator=(TimingPathState&&) noexcept = default;
   ~TimingPathState() = default;
   // getter
   double get_arrival() const { return _arrival; }

@@ -15,6 +15,7 @@ struct AllocationState
   std::size_t allocation_count{0};
   bool (*condition)(void*) noexcept {nullptr};
   void* context{nullptr};
+  bool failure_injected{false};
 };
 
 thread_local AllocationState state;
@@ -25,6 +26,7 @@ void beforeAllocation()
     return;
   const std::size_t ordinal = state.allocation_count++;
   if ((state.inject_failure && ordinal == state.failure_ordinal) || (state.condition && state.condition(state.context))) {
+    state.failure_injected = true;
     state.inject_failure = false;
     state.condition = nullptr;
     throw std::bad_alloc{};
@@ -50,6 +52,8 @@ void armFailureWhen(bool (*condition)(void*) noexcept, void* context) noexcept
   state.condition = condition;
   state.context = context;
 }
+
+[[nodiscard]] bool failureInjected() noexcept { return state.failure_injected; }
 
 [[nodiscard]] std::size_t disable() noexcept
 {

@@ -288,7 +288,7 @@ void runStage(NativeExecutionFailpoint armed, NativeExecutionFailpoint before_in
   destroy();
 }
 
-void runFourTimingStages(NativeExecutionFailpoint failpoint)
+void runFourTimingStages(NativeExecutionFailpoint failpoint, bool report)
 {
   runStage(failpoint, NativeExecutionFailpoint::kBeforeGraphBuilderInit, NativeExecutionFailpoint::kBeforeGraphBuilderWork,
            NativeExecutionFailpoint::kBeforeGraphBuilderDestroy, [] { GraphBuilder::initInst(); }, [] { STAGB.build(); },
@@ -300,7 +300,8 @@ void runFourTimingStages(NativeExecutionFailpoint failpoint)
            NativeExecutionFailpoint::kBeforeTimingPropagatorDestroy, [] { TimingPropagator::initInst(); }, [] { STATP.propagate(); },
            [] { TimingPropagator::destroyInst(); });
   runStage(failpoint, NativeExecutionFailpoint::kBeforeTimingAnalyzerInit, NativeExecutionFailpoint::kBeforeTimingAnalyzerWork,
-           NativeExecutionFailpoint::kBeforeTimingAnalyzerDestroy, [] { TimingAnalyzer::initInst(); }, [] { STATA.analyze(); },
+           NativeExecutionFailpoint::kBeforeTimingAnalyzerDestroy, [] { TimingAnalyzer::initInst(); },
+           report ? +[] { STATA.analyze(); } : +[] { STATA.propagateRequired(); },
            [] { TimingAnalyzer::destroyInst(); });
 }
 
@@ -435,13 +436,17 @@ void NativeCandidateExecutor::executeFull(NativeEditTransaction& transaction,
                                           NativeExecutionFailpoint failpoint,
                                           NativeRollbackFailpoint rollback_failpoint)
 {
-  runTransaction(transaction, true, failpoint, rollback_failpoint);
+  runTransaction(transaction, Work::kReport, failpoint, rollback_failpoint);
+}
+void NativeCandidateExecutor::executeFullTiming(NativeEditTransaction& transaction)
+{
+  runTransaction(transaction, Work::kTiming, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
 }
 void NativeCandidateExecutor::prepareFullGraph(NativeEditTransaction& transaction)
 {
-  runTransaction(transaction, false, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
+  runTransaction(transaction, Work::kStructure, NativeExecutionFailpoint::kNone, NativeRollbackFailpoint::kNone);
 }
-void NativeCandidateExecutor::runTransaction(NativeEditTransaction& transaction, bool cpu_timing,
+void NativeCandidateExecutor::runTransaction(NativeEditTransaction& transaction, Work work,
                                              NativeExecutionFailpoint failpoint,
                                              NativeRollbackFailpoint rollback_failpoint)
 {
@@ -458,8 +463,8 @@ void NativeCandidateExecutor::runTransaction(NativeEditTransaction& transaction,
     inject(failpoint, NativeExecutionFailpoint::kAfterInstall);
     inject(failpoint, NativeExecutionFailpoint::kBeforeDelayRuntimeInit);
     STADC.init();
-    if (cpu_timing) {
-      runFourTimingStages(failpoint);
+    if (work != Work::kStructure) {
+      runFourTimingStages(failpoint, work == Work::kReport);
     } else {
       runStage(failpoint, NativeExecutionFailpoint::kBeforeGraphBuilderInit, NativeExecutionFailpoint::kBeforeGraphBuilderWork,
                NativeExecutionFailpoint::kBeforeGraphBuilderDestroy, [] { GraphBuilder::initInst(); }, [] { STAGB.buildStructure(); },
@@ -467,7 +472,7 @@ void NativeCandidateExecutor::runTransaction(NativeEditTransaction& transaction,
     }
     inject(failpoint, NativeExecutionFailpoint::kBeforeValidation);
     if constexpr (incregpusta_debug_checks_enabled)
-      if (cpu_timing)
+      if (work != Work::kStructure)
         requireValidNativeDatabase(transaction.database());
     inject(failpoint, NativeExecutionFailpoint::kBeforeDelayRuntimeDestroy);
     STADC.destroy();

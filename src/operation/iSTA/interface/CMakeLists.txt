@@ -7,7 +7,11 @@ add_library(ista_interface
     ${ISTA_INTERFACE}/PhysicalStaJournal.cpp
     ${ISTA_INTERFACE}/PhysicalStaArtifacts.cpp
     ${ISTA_INTERFACE}/PhysicalGreedySelection.cpp
+    ${ISTA_INTERFACE}/PhysicalGreedyScoring.cpp
+    ${ISTA_INTERFACE}/PhysicalGreedyCsrSelection.cpp
     ${ISTA_INTERFACE}/PhysicalStaSessionState.cpp
+    ${ISTA_INTERFACE}/PhysicalStaNativeView.cpp
+    ${ISTA_INTERFACE}/SemanticCsrNativeView.cpp
     ${ISTA_INTERFACE}/PhysicalStaSessionRecovery.cpp
     ${ISTA_INTERFACE}/PhysicalStaSessionBatch.cpp
     ${ISTA_INTERFACE}/STAInterfacePhysical.cpp
@@ -39,11 +43,11 @@ target_include_directories(ista_interface
 )
 
 if(ISTA_ENABLE_CUDA)
-  target_sources(ista_interface PRIVATE StaCudaSessionState.cpp CudaTargetedExecution.cpp CudaFullExecution.cpp)
+  target_sources(ista_interface PRIVATE CudaCsrEditState.cpp StaCudaSessionState.cpp CudaTargetedExecution.cpp)
   target_link_libraries(ista_interface PRIVATE ista_cuda ista_timing_edit_native)
 endif()
 
 set_source_files_properties(
-    CudaTargetedExecution.cpp CudaFullExecution.cpp StaEditOperation.cpp PhysicalTimingEdit.cpp PhysicalStaSessionState.cpp PhysicalStaJournal.cpp PhysicalStaBatchJson.cpp
-    PhysicalStaArtifacts.cpp PhysicalGreedySelection.cpp STAInterfacePhysical.cpp IncrementalStaSessionPhysical.cpp PhysicalStaSessionRecovery.cpp PhysicalStaSessionBatch.cpp
+    CudaCsrEditState.cpp CudaTargetedExecution.cpp StaEditOperation.cpp PhysicalTimingEdit.cpp PhysicalStaSessionState.cpp PhysicalStaJournal.cpp PhysicalStaBatchJson.cpp
+    PhysicalStaArtifacts.cpp PhysicalStaNativeView.cpp SemanticCsrNativeView.cpp PhysicalGreedySelection.cpp PhysicalGreedyScoring.cpp PhysicalGreedyCsrSelection.cpp STAInterfacePhysical.cpp IncrementalStaSessionPhysical.cpp PhysicalStaSessionRecovery.cpp PhysicalStaSessionBatch.cpp
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-pedantic;-ffp-contract=off")

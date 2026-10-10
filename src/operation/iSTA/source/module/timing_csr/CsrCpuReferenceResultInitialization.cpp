@@ -187,7 +187,10 @@ CsrCpuReferenceStageStatus initializeCsrCpuReferenceSeeds(const TimingPayloadVie
 {
   work.node_count = payloads.nodeCount();
   work.rc_nodes = payloads.nodeRecords();
-  work.rc_cells = payloads.referencedLibraryCells();
+  work.rc_cells.clear();
+  work.rc_cells.reserve(payloads.referencedLibraryCells().size());
+  for (const auto& cell : payloads.referencedLibraryCells())
+    work.rc_cells.emplace(cell.cell_name, &cell);
   work.input_port_thresholds = payloads.inputPortRcThresholds();
   work.clock_tag_count = payloads.clockTags().size();
   if (!checkedMultiply(work.node_count, kAnalysisCount * kTransitionCount, work.node_lane_count)

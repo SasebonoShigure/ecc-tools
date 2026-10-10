@@ -15,7 +15,6 @@
 #include <utility>
 
 #include "CsrReferenceValidator.hpp"
-#include "NarrowCaptureAuditValidation.hpp"
 namespace ista::timing_dual_csr {
 namespace {
 
@@ -52,10 +51,9 @@ DualCsrStructuralReceipt structuralReceipt(
   return receipt;
 }
 
-constexpr std::array<DualCsrReceiptPhase, 8> kBatchPhases{
-    DualCsrReceiptPhase::kPreCandidatePrepare,
-    DualCsrReceiptPhase::kCandidateApplyExecute,
-    DualCsrReceiptPhase::kPostCandidateCapture,
+constexpr std::array<DualCsrReceiptPhase, 7> kBatchPhases{
+    DualCsrReceiptPhase::kPrepareBatch,
+    DualCsrReceiptPhase::kDirectPrepare,
     DualCsrReceiptPhase::kDualCsrUpdate,
     DualCsrReceiptPhase::kFullLevelization,
     DualCsrReceiptPhase::kFullPropagation,
@@ -66,21 +64,10 @@ DualCsrReceiptPhase expectedBatchPhase(
     const CommittedDualCsrAnalysisState& committed,
     std::size_t batch, std::size_t phase)
 {
-  if (phase == 4 && committed.execution_trace.at(batch).mode()
+  if (phase == 3 && committed.execution_trace.at(batch).mode()
                         == LevelizationExecutionMode::kMixedStage6)
     return DualCsrReceiptPhase::kMixedLevelization;
   return kBatchPhases.at(phase);
-}
-
-bool auditMatches(const NarrowCaptureAudit& audit,
-                  const DualCsrBatchDescriptor& descriptor)
-{
-  return validateNarrowCaptureAudit(
-      audit,
-      NarrowCaptureAuditExpectation{
-          .after = descriptor.after,
-          .logical_deactivations
-              = descriptor.logical_deactivations.size()});
 }
 
 DualCsrViolations validateEvidence(
@@ -115,20 +102,6 @@ DualCsrViolations validateEvidence(
                  "transaction.phase_trace",
                  "batch phase order or levelization mode differs from the committed execution trace");
   }
-  if (evidence.capture_audits.size() != generation)
-    reject(errors, DualCsrViolationCode::kGeneration,
-           "transaction.capture_audits",
-           "one exact narrow-capture audit is required per batch");
-  else
-    for (std::size_t index = 0;
-         index < evidence.capture_audits.size(); ++index)
-      if (!auditMatches(evidence.capture_audits[index],
-                        committed.descriptor_trace[index]))
-        reject(errors, DualCsrViolationCode::kExpectedValue,
-               "transaction.capture_audits["
-                   + std::to_string(index) + "]",
-               "capture audit is not an exact guarded local-read proof");
-
   const auto& counters = evidence.operation_counters;
   if (counters.native_full_graph_exports != 0
       || counters.native_full_reference_exports != 0

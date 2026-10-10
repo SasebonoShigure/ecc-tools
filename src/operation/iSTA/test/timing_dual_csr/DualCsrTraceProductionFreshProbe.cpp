@@ -126,7 +126,7 @@ void fresh(const Options& options)
   auto receipt = timing_dual_csr::test::runProductionFreshSemanticPrefix(
       artifact.replay, static_cast<std::size_t>(prefix));
   Json envelope{
-      {"schema_version", "ista-dual-csr-trace-process/5.0.0"},
+      {"schema_version", "ista-dual-csr-trace-process/6.0.0"},
       {"role", "fresh-oracle"},
       {"prefix_batches", prefix},
       {"functional",
@@ -150,9 +150,8 @@ Json phaseTimings(const std::vector<timing_dual_csr::DualCsrBatchPhaseTimings>& 
     result.push_back({
         {"generation_before", value.generation_before},
         {"generation_after", value.generation_after},
-        {"pre_candidate_prepare_ms", value.pre_candidate_prepare_ms},
-        {"candidate_apply_execute_ms", value.candidate_apply_execute_ms},
-        {"post_candidate_capture_ms", value.post_candidate_capture_ms},
+        {"prepare_batch_ms", value.prepare_batch_ms},
+        {"direct_prepare_ms", value.direct_prepare_ms},
         {"dual_csr_update_ms", value.dual_csr_update_ms},
         {"full_levelization_ms", value.full_levelization_ms},
         {"mixed_build_ms", value.mixed_build_ms},
@@ -163,8 +162,9 @@ Json phaseTimings(const std::vector<timing_dual_csr::DualCsrBatchPhaseTimings>& 
         {"verify_ms", value.verify_ms},
         {"publish_ms", value.publish_ms},
         {"session_step_ms", value.session_step_ms},
-        {"query_materialization_ms", value.query_materialization_ms},
-        {"report_ms", value.report_ms},
+        {"result_consumption", value.results_consumed ? "completed" : "not_run"},
+        {"query_materialization_ms", value.results_consumed ? Json(value.query_materialization_ms) : Json(nullptr)},
+        {"report_ms", value.results_consumed ? Json(value.report_ms) : Json(nullptr)},
         {"consumer_step_ms", value.consumer_step_ms}});
   }
   return result;
@@ -199,7 +199,7 @@ void targeted(const Options& options)
           timing_dual_csr::test::structuralReceiptToJson(
               observation.structural)}});
   }
-  Json envelope{{"schema_version", "ista-dual-csr-trace-process/5.0.0"},
+  Json envelope{{"schema_version", "ista-dual-csr-trace-process/6.0.0"},
                 {"role", "targeted-under-test"},
                 {"prefix_batches", prefix},
                 {"receipt_validated", true},

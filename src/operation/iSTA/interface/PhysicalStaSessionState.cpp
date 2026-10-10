@@ -1,6 +1,7 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #include "PhysicalStaSessionState.hpp"
+#include "PhysicalGreedySelection.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "CpuDualCsrBaseline.hpp"
 #include "NativeTimingEditPreparer.hpp"
@@ -25,32 +26,33 @@ izh::PhysicalPlacementRows& PhysicalStaSessionState::placementRows()
 void PhysicalStaSessionState::bindBaseline(Database& database, const csr::CsrReferenceInput& input, StaCsrSessionContext& context)
 {
   using namespace timing_edit;
-  if (full || cpu || cpu_native || input.source_identity.session_token != context.token()
+  if (full || cpu || input.source_identity.session_token != context.token()
       || input.source_identity.graph_generation != 0 || &database != &STADM.getDatabase())
     throw std::logic_error("physical baseline binding requires a fresh canonical session");
   if (request.backend == StaBackend::kCpu && request.update_strategy == StaUpdateStrategy::kIncremental) {
     auto initial = timing_dual_csr::makeCpuDualCsrBaseline(database, input, TimingEditSessionToken{context.token()});
-    cpu_native.emplace(NativeTargetedEditPreparer::bindBaseline(database, input, *initial.baseline, context.libraryModels(database)));
+    _native_generation = TransactionGeneration{0};
     cpu = std::make_unique<timing_dual_csr::DualCsrTransactionCoordinator>(std::move(initial));
     return;
   }
-  auto identity = NativeTimingEditPreparer::identityFromInput(database, input, TransactionGeneration{0});
-  const BaselineSemanticIdentity baseline{database.get_design_name(), std::move(identity.current_fingerprints),
-                                          std::move(identity.canonical_pre_state)};
-  if (request.update_strategy == StaUpdateStrategy::kFull)
-    full.reset(new NativeFullEditState(NativeFullEditPreparer::bindBaseline(database, input, baseline)));
   if (request.backend == StaBackend::kCuda) {
 #if ISTA_ENABLE_CUDA
-    if (context._cuda) throw std::logic_error("physical baseline already has a CUDA owner");
+    if (context._cuda || cuda_graph) throw std::logic_error("physical baseline already has a CUDA owner");
+    cuda_graph.reset(new CudaCsrEditState(database, input, TimingEditSessionToken{context.token()}));
     context._cuda.reset(new StaCudaSessionState(database, input));
-    if (request.update_strategy == StaUpdateStrategy::kIncremental)
-      context._cuda->bindEdits(database, input, baseline, context.libraryModels(database));
+    // Physical queries resolve the current native view from stable CSR keys.
+    std::vector<std::string>{}.swap(context._cuda->_baseline_names);
+    std::vector<std::optional<std::size_t>>{}.swap(context._cuda->_baseline_ranks);
+    _native_generation = TransactionGeneration{0};
 #else
     throw std::logic_error("CUDA physical STA was not built");
 #endif
   } else {
+    auto identity = NativeTimingEditPreparer::identityFromInput(database, input, TransactionGeneration{0});
+    const BaselineSemanticIdentity baseline{database.get_design_name(), identity.current_fingerprints,
+                                            identity.canonical_pre_state};
+    full.reset(new NativeFullEditState(NativeFullEditPreparer::bindBaseline(database, input, baseline)));
     _timing_generation = TransactionGeneration{0};
-    _report_generation = TransactionGeneration{0};
   }
 }
 timing_edit::TransactionGeneration PhysicalStaSessionState::generation(const StaCsrSessionContext& context) const
@@ -60,7 +62,9 @@ timing_edit::TransactionGeneration PhysicalStaSessionState::generation(const Sta
 #if ISTA_ENABLE_CUDA
   if (context._cuda) {
     context._cuda->device.requireCommitted();
-    return context._cuda->device.generation();
+    if (!cuda_graph || context._cuda->_poisoned || cuda_graph->graph.generation != context._cuda->device.generation())
+      throw std::logic_error("physical host/device generation differs");
+    return cuda_graph->graph.generation;
   }
 #else
   static_cast<void>(context);
@@ -72,51 +76,69 @@ void PhysicalStaSessionState::materialize(Database& database, StaCsrSessionConte
 {
   if (!authority.readyForQuery() || authority.sessionToken().value() != context.token() || &database != &STADM.getDatabase())
     throw std::logic_error("physical timing query requires the committed session");
-  if (request.backend == StaBackend::kCuda) {
-#if ISTA_ENABLE_CUDA
-    context.materializeCudaTiming(database, authority);
-    return;
-#else
-    throw std::logic_error("CUDA physical STA was not built");
-#endif
-  }
   const auto current = generation(context);
-  if (!cpu) return;
-  if (cpu->poisoned() || !cpu_native || cpu_native->generation != current)
-    throw std::logic_error("physical CPU result owner is poisoned or stale");
+  if (full) return;
+  if (cpu && cpu->poisoned())
+    throw std::logic_error("physical CPU result owner is poisoned");
   if (_timing_generation == current) return;
+#if ISTA_ENABLE_CUDA
+  if (cuda_graph) {
+    try {
+      materializeCsr(database, authority, cuda_graph->graph, context._cuda->device.timingValues());
+    } catch (...) {
+      if (context._cuda->_poisoned || context._cuda->device.poisoned()) authority.poison();
+      throw;
+    }
+    return;
+  }
+#endif
   const auto& committed = cpu->committed();
-  const auto& layout = committed.graph.reference_payload;
-  auto prepared = csr::detail::prepareStableTimingResult(database, cpu_native->node_names, cpu_native->arc_native_ranks,
-      {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, committed.timing.values);
-  auto* result = std::get_if<csr::detail::PreparedTimingResult>(&prepared);
-  if (!result) throw std::runtime_error("physical CPU timing cannot be mapped to native state");
-  csr::detail::publishPreparedTimingResult(*result);
-  _timing_generation = current;
+  materializeCsr(database, authority, committed.graph, committed.timing.values);
 }
 void PhysicalStaSessionState::prepareReport(Database& database, StaCsrSessionContext& context,
     const timing_edit::NativeExecutionAuthority& authority)
 {
-  if (request.backend == StaBackend::kCuda) {
-#if ISTA_ENABLE_CUDA
-    context.prepareCudaReport(database, authority);
-    return;
-#else
-    throw std::logic_error("CUDA physical STA was not built");
-#endif
-  }
   materialize(database, context, authority);
   const auto current = generation(context);
-  if (!cpu || _report_generation == current) return;
+  if (_report_generation == current) return;
   _timing_generation.reset();
   _report_generation.reset();
   const auto result = executeStaLifecyclePipeline(
       {{"TimingAnalyzer", [] { TimingAnalyzer::initInst(); }, [] { STATA.analyzePropagatedTiming(); }, [] { TimingAnalyzer::destroyInst(); }}},
       StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
   if (result.cleanup_failed) authority.poison();
-  if (!result.succeeded) throw std::runtime_error("physical CPU report preparation failed: " + result.message);
+  if (!result.succeeded) throw std::runtime_error("physical propagated report preparation failed: " + result.message);
   _timing_generation = current;
   _report_generation = current;
+}
+PhysicalGreedySelection PhysicalStaSessionState::selectBuffers(Database& database, StaCsrSessionContext& context,
+    const timing_edit::NativeExecutionAuthority& authority, std::span<const std::string> cells,
+    std::uint64_t top_k, std::uint64_t max_buffers)
+{
+  if (!authority.readyForQuery() || authority.sessionToken().value() != context.token() || &database != &STADM.getDatabase())
+    throw std::logic_error("physical candidate query requires the committed session");
+  const auto current = generation(context);
+  auto& models = context.libraryModels(database);
+  if (full)
+    return selectPhysicalBuffers(database, models, full->resolver(), current.value(), cells, top_k, max_buffers, technology.dbu_per_um);
+#if ISTA_ENABLE_CUDA
+  if (cuda_graph) {
+    try {
+      return selectCsrPhysicalBuffers(database, models, design, cuda_graph->graph, cuda_graph->index, cuda_graph->resolver,
+          context._cuda->device.candidateTiming(), cells, top_k, max_buffers, technology.dbu_per_um);
+    } catch (...) {
+      if (context._cuda->_poisoned || context._cuda->device.poisoned()) authority.poison();
+      throw;
+    }
+  }
+#endif
+  if (!cpu || cpu->poisoned()) throw std::logic_error("physical CPU candidate owner is unavailable");
+  const auto& committed = cpu->committed();
+  std::vector<csr::BufferCandidateTiming> timing;
+  timing.reserve(committed.graph.nodes.size());
+  for (const auto& node : committed.graph.nodes) timing.push_back(csr::bufferCandidateTiming(committed.timing.values, node.id));
+  return selectCsrPhysicalBuffers(database, models, design, committed.graph, committed.arc_group_index, committed.resolver,
+      timing, cells, top_k, max_buffers, technology.dbu_per_um);
 }
 PhysicalStaCurrentResult PhysicalStaSessionState::read(Database& database, StaCsrSessionContext& context,
     const timing_edit::NativeExecutionAuthority& authority, bool summary_only)

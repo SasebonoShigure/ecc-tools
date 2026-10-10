@@ -5,11 +5,11 @@
 #include "StaCsrSessionContext.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "DataManager.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "TimingEditDualCsrDescriptorBuilder.hpp"
 #if ISTA_ENABLE_CUDA
 #include "StaCudaSessionState.hpp"
 #include "CudaTargetedExecution.hpp"
-#include "CudaFullExecution.hpp"
 #endif
 
 namespace ista {
@@ -26,16 +26,16 @@ PhysicalStaBatchResult PhysicalStaSessionState::applyBatchImpl(Database& databas
   using namespace timing_edit;
   const bool cuda = request.backend == StaBackend::kCuda;
   const bool incremental = request.update_strategy == StaUpdateStrategy::kIncremental;
-  if ((!cuda && incremental && (!cpu || !cpu_native)) || (!incremental && !full))
+  if (!cuda && (incremental ? !cpu : !full))
     throw std::invalid_argument("physical batch backend is not enabled");
-  const TimingEditResolverState* resolver = full ? &full->resolver() : cpu_native ? &cpu_native->resolver : nullptr;
+  const TimingEditResolverState* resolver = full ? &full->resolver() : cpu ? &cpu->committed().resolver : nullptr;
 #if ISTA_ENABLE_CUDA
   if (cuda) {
     if (!context._cuda || context._cuda->_poisoned || context._cuda->device.poisoned()) {
       authority.poison();
       throw std::runtime_error("physical CUDA owner is absent or poisoned");
     }
-    if (incremental && context._cuda->native) resolver = &context._cuda->native->resolver;
+    if (cuda_graph) resolver = &cuda_graph->resolver;
   }
 #else
   if (cuda) throw std::invalid_argument("CUDA physical STA was not built");
@@ -68,46 +68,49 @@ PhysicalStaBatchResult PhysicalStaSessionState::applyBatchImpl(Database& databas
     auto physical = preparePhysicalTimingEdit(design, edits, *resolver, locations, technology.dbu_per_um);
     auto placement = placementRows().prepare(physical);
     auto trees = physical.prepareRc(technology);
-    std::optional<timing_dual_csr::PendingStructuredBatch> cpu_pending;
+    std::optional<timing_dual_csr::PendingStructuredBatch> pending;
     if (!cuda && incremental) {
-      if (cpu->poisoned() || cpu_native->generation != before)
-        throw std::logic_error("physical native/CPU origin differs");
-      cpu_pending.emplace(cpu->prepareBatch(edits));
+      if (cpu->poisoned() || cpu->committed().generation != before)
+        throw std::logic_error("physical CPU origin differs");
+      pending.emplace(cpu->prepareBatch(edits));
     }
+#if ISTA_ENABLE_CUDA
+    if (cuda) {
+      if (!cuda_graph || cuda_graph->graph.generation != before || context._cuda->device.generation() != before)
+        throw std::logic_error("physical CSR/device origin differs");
+      pending.emplace(cuda_graph->prepareBatch(edits));
+    }
+#endif
     if (!physical.apply()) throw std::runtime_error("physical batch apply failed");
     std::optional<NativeFullEditBatch> native_full;
-    std::optional<NativeTargetedEditBatch> native_targeted;
     std::optional<timing_dual_csr::DualCsrVerifiedStage> cpu_candidate;
 #if ISTA_ENABLE_CUDA
+    std::optional<CudaCsrEditState::Patch> host_patch;
     std::optional<csr::CudaDualCsrSession> candidate;
-    std::vector<std::string> names;
-    std::vector<std::optional<std::size_t>> ranks;
 #endif
+    std::vector<csr::ParasiticNetModel> rc;
+    if (pending) {
+      rc.reserve(trees.size());
+      for (const auto& [name, tree] : trees)
+        rc.push_back(csr::detail::projectCanonicalParasiticNet(name, tree));
+    }
     if (!cuda && incremental) {
       using namespace timing_dual_csr;
-      native_targeted.emplace(NativeTargetedEditPreparer::prepare(
-          database, authority, edits, *cpu_native, std::move(trees)));
-      copyCreatedPhysicalPinCoordinates(physical, database);
-      const auto capture = [&]() {
-        const auto& committed = cpu->committed();
-        auto captured = NarrowTimingRecordReader{context.libraryModels(database), &*native_targeted}.read(
-            database, DualSemanticReadView{committed.graph}, committed.arc_group_index,
-            cpu_pending->stagedResolver(), cpu_pending->preparedBatch(), cpu_pending->capturePlan());
-        if (!captured.success())
-          throw std::runtime_error("physical CPU narrow capture failed: " + std::to_string(static_cast<unsigned>(*captured.error())));
-        return TimingEditDualCsrDescriptorBuilder::build(std::move(*cpu_pending), std::move(captured));
+      const auto prepare = [&]() {
+        return TimingEditDualCsrDescriptorBuilder::buildDirect(
+            std::move(*pending), authority, context.libraryModels(database), rc);
       };
-      auto attempt = makeMixedLevelizedDualCsrAnalysisState(*cpu, capture());
+      auto attempt = makeMixedLevelizedDualCsrAnalysisState(*cpu, prepare());
       if (auto* ready = std::get_if<DualCsrVerifiedStage>(&attempt)) cpu_candidate.emplace(std::move(*ready));
       else {
         const auto* mixed = std::get_if<timing_incremental_levelization::MixedLevelizationFailure>(&attempt);
         if (!mixed || mixed->code != timing_incremental_levelization::MixedStageFailureCode::kOldLevelOrderConflict
             || request.fallback_policy != StaFallbackPolicy::kFullWithRecord)
           throw std::runtime_error("physical CPU incremental computation failed");
-        // The failed stage has already undone graph/index changes. Native/IDB
-        // edits remain in their local transaction for this explicitly allowed retry.
-        cpu_pending.emplace(cpu->prepareBatch(edits));
-        auto fallback = makeStagedDualCsrAnalysisState(*cpu, capture());
+        // The failed stage has undone the host CSR changes. The physical
+        // edit remains pending for this explicitly allowed retry.
+        pending.emplace(cpu->prepareBatch(edits));
+        auto fallback = makeStagedDualCsrAnalysisState(*cpu, prepare());
         if (!fallback.success()) throw std::runtime_error("physical CPU full fallback failed");
         cpu_candidate.emplace(std::move(*fallback.staged));
         result.execution.executed_update_strategy = StaUpdateStrategy::kFull;
@@ -118,35 +121,34 @@ PhysicalStaBatchResult PhysicalStaSessionState::applyBatchImpl(Database& databas
       }
     } else
 #if ISTA_ENABLE_CUDA
-    if (cuda && incremental) {
-      auto& owned = *context._cuda;
-      if (!owned.native || owned.native->generation != before || owned.device.generation() != before)
-        throw std::logic_error("physical native/device origin differs");
-      native_targeted.emplace(NativeTargetedEditPreparer::prepare(database, authority, edits, *owned.native, std::move(trees)));
-      copyCreatedPhysicalPinCoordinates(physical, database);
-      std::optional<csr::CudaDualCsrTelemetry> rejected;
-      candidate.emplace(csr::detail::stageCudaTargetedBatch(owned.device, native_targeted->patch,
-          request.update_strategy, request.fallback_policy, result.execution, rejected));
+    if (cuda) {
+      using namespace timing_dual_csr;
+      auto& host = *cuda_graph;
+      auto direct = TimingEditDualCsrDescriptorBuilder::buildDirect(
+          std::move(*pending), authority, context.libraryModels(database), rc);
+      // Preserve before-state until the device patch and all local undo are prepared.
+      std::optional<csr::CudaDualCsrPatch> patch;
+      if (incremental)
+        patch.emplace(csr::detail::makeCudaTargetedPatch(host.graph, direct.descriptor(), context.libraryModels(database)));
+      host_patch.emplace(host, std::move(direct));
+      host_patch->apply();
+      if (incremental) {
+        std::optional<csr::CudaDualCsrTelemetry> rejected;
+        candidate.emplace(csr::detail::stageCudaTargetedBatch(context._cuda->device, *patch,
+            request.update_strategy, request.fallback_policy, result.execution, rejected));
+      } else {
+        candidate.emplace(context._cuda->device.stageFullCsr(host.graph));
+        if (candidate->computationCode()) throw std::runtime_error("physical CUDA full computation failed");
+      }
     } else
 #endif
     {
       native_full.emplace(NativeFullEditPreparer::prepare(database, authority, edits, *full, std::move(trees)));
       copyCreatedPhysicalPinCoordinates(physical, database);
-      if (!cuda) NativeCandidateExecutor::executeFull(native_full->transaction());
-#if ISTA_ENABLE_CUDA
-      else {
-        auto staged = csr::detail::stageCudaFullBatch(context, *native_full, context._cuda->device);
-        names = std::move(staged.node_names);
-        ranks = std::move(staged.arc_ranks);
-        candidate.emplace(std::move(staged.candidate));
-      }
-#endif
+      NativeCandidateExecutor::executeFullTiming(native_full->transaction());
       if (!native_full->canCommit() || native_full->targetGeneration().value() != result.generation)
         throw std::logic_error("physical native full qualification failed");
     }
-    if (native_targeted && (!native_targeted->transaction.active()
-        || native_targeted->staged.generation.value() != result.generation))
-      throw std::logic_error("physical native targeted qualification failed");
     if (!cuda && incremental && (!cpu_candidate || !cpu->canPublish(*cpu_candidate)))
       throw std::logic_error("physical CPU publication qualification failed");
     if (!physical.applied() || (!recovery && _journal->generation() != before.value()))
@@ -172,24 +174,21 @@ PhysicalStaBatchResult PhysicalStaSessionState::applyBatchImpl(Database& databas
       if (!status.ok() || !status.published || status.poisoned)
         throw std::logic_error("physical CPU publication failed after the commit marker");
     }
-    if (native_targeted) native_targeted->transaction.commit();
     if (native_full && !native_full->commit())
       throw std::logic_error("physical native publication failed after the commit marker");
     physical.commit();
     placement.commit();
 #if ISTA_ENABLE_CUDA
     if (cuda) {
-      if (incremental) context._cuda->committed();
-      else context._cuda->committedFull(std::move(names), std::move(ranks));
+      host_patch->commit();
+      context._cuda->committed();
     }
 #endif
-    if (!cuda && incremental) {
+    _report_generation.reset();
+    if (cuda || incremental)
       _timing_generation.reset();
-      _report_generation.reset();
-    } else if (!cuda) {
+    else
       _timing_generation = TransactionGeneration{result.generation};
-      _report_generation = TransactionGeneration{result.generation};
-    }
   } catch (...) {
     // Undo runs while the authority and operation guard are live.
     bool damaged = marker_published || !_journal->healthy() || (cpu && cpu->poisoned());

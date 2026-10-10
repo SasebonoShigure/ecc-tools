@@ -77,6 +77,9 @@ struct CanonicalLoadPinFacts
 [[nodiscard]] ReferencedLibraryCellModel projectCanonicalReferencedLibraryCell(const ista::Database& database,
                                                                                const std::string& cell_name);
 [[nodiscard]] CellPinCapacitanceModel projectCanonicalCellPinCapacitance(
+    const ReferencedLibraryCellModel& cell, NodeId node, const std::string& port_name);
+void addCanonicalLoad(const CanonicalLoadPinFacts& pin, ArcOutputLoadMatrix& result);
+[[nodiscard]] CellPinCapacitanceModel projectCanonicalCellPinCapacitance(
     const ista::Database& database, NodeId node, const NodeKey& key);
 void applyCanonicalInstanceLibraryRoles(
     const ReferencedLibraryCellModel& cell, InstanceRecord& instance);

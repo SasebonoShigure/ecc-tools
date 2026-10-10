@@ -6,9 +6,11 @@
 #include "PhysicalStaJournal.hpp"
 #include "IncrementalStaSession.hpp"
 #include "NativeFullEditPreparer.hpp"
-#include "NativeTargetedEditPreparer.hpp"
 #include "DualCsrTransactionCoordinator.hpp"
 #include "StaExecutionContract.hpp"
+#if ISTA_ENABLE_CUDA
+#include "CudaCsrEditState.hpp"
+#endif
 
 namespace ista {
 class StaCsrSessionContext;
@@ -31,6 +33,9 @@ class PhysicalStaSessionState final
   PhysicalStaCurrentResult read(Database& database, StaCsrSessionContext& context,
       const timing_edit::NativeExecutionAuthority& authority, bool summary_only);
 
+  PhysicalGreedySelection selectBuffers(Database& database, StaCsrSessionContext& context,
+      const timing_edit::NativeExecutionAuthority& authority, std::span<const std::string> cells,
+      std::uint64_t top_k, std::uint64_t max_buffers);
   std::string publishArtifacts(Database& database, StaCsrSessionContext& context,
       const timing_edit::NativeExecutionAuthority& authority);
   std::string readArtifacts(const StaCsrSessionContext& context) const;
@@ -40,9 +45,13 @@ class PhysicalStaSessionState final
   const izh::PreRouteRcTechnology technology;
   const StaExecutionRequest request;
   std::unique_ptr<timing_edit::NativeFullEditState> full;
-  std::optional<timing_edit::NativeTargetedEditState> cpu_native;
   std::unique_ptr<timing_dual_csr::DualCsrTransactionCoordinator> cpu;
+#if ISTA_ENABLE_CUDA
+  std::unique_ptr<CudaCsrEditState> cuda_graph;
+#endif
  private:
+  void materializeCsr(Database& database, const timing_edit::NativeExecutionAuthority& authority,
+      const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues& values);
   PhysicalStaBatchResult applyBatchImpl(Database& database, StaCsrSessionContext& context,
       const timing_edit::NativeExecutionAuthority& authority, const timing_edit::EditBatch& edits,
       std::span<const PhysicalBufferLocation> locations, bool recovery);
@@ -50,6 +59,6 @@ class PhysicalStaSessionState final
   std::unique_ptr<izh::PhysicalPlacementRows> _placement;
   std::string _baseline_id;
   std::filesystem::path _recovery_directory;
-  std::optional<timing_edit::TransactionGeneration> _timing_generation, _report_generation;
+  std::optional<timing_edit::TransactionGeneration> _native_generation, _timing_generation, _report_generation;
 };
 }  // namespace ista

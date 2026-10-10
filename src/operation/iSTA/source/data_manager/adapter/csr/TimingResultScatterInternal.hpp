@@ -28,6 +28,8 @@
 #include "TimingPoint.hpp"
 #include "TimingResultScatter.hpp"
 
+namespace ista::timing_dual_csr { struct DualCsrState; }
+
 namespace ista::csr::detail {
 
 using NativeLaneDoubleMap = std::map<ista::AnalysisType, std::map<ista::TransType, double>>;
@@ -140,6 +142,10 @@ using PrepublishScatterResult = std::variant<PreparedScatterEnvelope, CsrTimingR
     Database& database, const std::vector<std::string>& node_names,
     const std::vector<std::optional<std::size_t>>& arc_native_ranks,
     const TimingScatterLayout& layout, const CsrTimingValues& values);
+
+// Resolve current native targets only within the caller's guarded query.
+[[nodiscard]] PreparedTimingResult prepareDualCsrTimingResult(
+    Database& database, const timing_dual_csr::DualCsrState& graph, const CsrTimingValues& values);
 
 [[nodiscard]] TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTargets& targets, const TimingScatterLayout& layout,
                                                                         const CsrTimingValues& values);

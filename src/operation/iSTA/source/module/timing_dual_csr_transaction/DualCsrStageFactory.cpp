@@ -28,7 +28,6 @@
 #include "DualCsrDescriptorValidation.hpp"
 #include "DualCsrUpdaterInternal.hpp"
 #include "DualCsrArcGroupIndexValidation.hpp"
-#include "NarrowCaptureAuditValidation.hpp"
 
 namespace ista::timing_dual_csr {
 
@@ -75,7 +74,6 @@ class DualCsrStageFactoryAccess final
     timing_edit::PreparedBatch prepared_batch;
     timing_edit::TimingEditResolverDelta resolver_delta;
     DualCsrBatchDescriptor descriptor;
-    NarrowCaptureAudit capture_audit;
   };
 
   [[nodiscard]] static ConsumedBatch consume(
@@ -83,8 +81,7 @@ class DualCsrStageFactoryAccess final
   {
     return {batch._source_graph, std::move(batch._prepared_batch),
             std::move(batch._resolver_delta),
-            std::move(batch._descriptor),
-            std::move(batch._capture_audit)};
+            std::move(batch._descriptor)};
   }
 
   using StageData = DualCsrVerifiedStage::Data;
@@ -198,10 +195,7 @@ PreparedStageAttempt prepareStage(
       || batch.descriptor.session_token != batch.prepared_batch.sessionToken()
       || batch.descriptor.expected_generation != batch.prepared_batch.expectedGeneration()
       || batch.descriptor.target_generation != batch.prepared_batch.targetGeneration() || batch.descriptor.before != batch.prepared_batch.slotPlan().before
-      || batch.descriptor.after != batch.prepared_batch.slotPlan().after || batch.resolver_delta.highWater() != batch.descriptor.after
-      || (incregpusta_debug_checks_enabled
-          && !validateNarrowCaptureAudit(batch.capture_audit,
-                                         NarrowCaptureAuditExpectation{batch.descriptor.after, batch.descriptor.logical_deactivations.size()})))
+      || batch.descriptor.after != batch.prepared_batch.slotPlan().after || batch.resolver_delta.highWater() != batch.descriptor.after)
     return makeDualFailure(
         DualCsrStageFailureOrigin::kCapability,
         DualCsrViolationCode::kGeneration, "stage.capability",

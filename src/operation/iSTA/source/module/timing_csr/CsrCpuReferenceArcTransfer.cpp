@@ -146,9 +146,8 @@ void resetRequiredSoa(OptionalSoa<T>& soa, std::size_t size, const T& value)
   const auto& sink = work.rc_nodes[arc.sink.value()];
   const ReferencedLibraryCellModel* load_cell = nullptr;
   if (!sink.is_port) {
-    const auto found = std::lower_bound(work.rc_cells.begin(), work.rc_cells.end(), sink.instance_cell,
-        [](const ReferencedLibraryCellModel& cell, const std::string& name) { return cell.cell_name < name; });
-    if (found != work.rc_cells.end() && found->cell_name == sink.instance_cell) load_cell = &*found;
+    const auto found = work.rc_cells.find(sink.instance_cell);
+    if (found != work.rc_cells.end()) load_cell = found->second;
   }
   return evaluateCsrCpuNetTiming(arc.parasitic, analysis, transition, source_slew,
       work.rc_nodes[arc.source.value()].is_port, load_cell, work.input_port_thresholds,

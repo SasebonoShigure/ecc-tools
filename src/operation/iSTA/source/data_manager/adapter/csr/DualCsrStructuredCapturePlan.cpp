@@ -34,8 +34,7 @@ struct ArcBaseLess
   bool operator()(const csr::ArcKeyBase& lhs,
                   const csr::ArcKeyBase& rhs) const
   {
-    return csr::arcKeyLess(csr::ArcKey{lhs, 0},
-                           csr::ArcKey{rhs, 0});
+    return csr::arcKeyBaseLess(lhs, rhs);
   }
 };
 
@@ -107,12 +106,11 @@ void addCurrentGroup(
 
 std::uint64_t postMultiplicity(
     const csr::ArcKeyBase& base,
-    const timing_edit::PreparedBatch& batch,
-    timing_edit::TimingEditResolverView staged,
+    std::uint64_t appended_count,
     const DualCsrArcGroupIndex& index,
     const std::set<timing_edit::StableArcRef>& deactivated)
 {
-  std::uint64_t count = 0;
+  std::uint64_t count = appended_count;
   if (const auto* group = index.activeGroup(base)) {
     for (const auto id : group->active_arc_ids) {
       const auto* slot = index.slot(id);
@@ -121,15 +119,6 @@ std::uint64_t postMultiplicity(
       if (!deactivated.contains(slot->ref))
         ++count;
     }
-  }
-  for (const auto& assignment : batch.slotPlan().arcs) {
-    if (assignment.tombstone)
-      continue;
-    if (assignment.slot.value() < batch.slotPlan().before.arc_slots
-        || assignment.slot.value() >= batch.slotPlan().after.arc_slots)
-      invalid("active arc assignment is not an append slot");
-    if (materializedArcKey(assignment.ref, staged).base == base)
-      ++count;
   }
   return count;
 }
@@ -243,11 +232,20 @@ AffectedCapturePlan makeStructuredCapturePlan(
   for (const auto& base : affected_bases)
     addCurrentGroup(base, arc_group_index, requested);
 
+  std::map<csr::ArcKeyBase, std::uint64_t, ArcBaseLess> appended_counts;
+  for (const auto& assignment : batch.slotPlan().arcs) {
+    if (assignment.tombstone)
+      continue;
+    if (assignment.slot.value() < batch.slotPlan().before.arc_slots
+        || assignment.slot.value() >= batch.slotPlan().after.arc_slots)
+      invalid("active arc assignment is not an append slot");
+    ++appended_counts[materializedArcKey(assignment.ref, staged).base];
+  }
   std::map<csr::ArcKeyBase, std::uint64_t, ArcBaseLess>
       post_multiplicities;
   for (const auto& base : affected_bases)
     post_multiplicities.emplace(
-        base, postMultiplicity(base, batch, staged, arc_group_index,
+        base, postMultiplicity(base, appended_counts[base], arc_group_index,
                                deactivated));
 
   std::vector<AffectedArcCapture> arcs;

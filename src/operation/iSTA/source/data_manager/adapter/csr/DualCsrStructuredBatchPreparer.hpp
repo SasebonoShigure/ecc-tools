@@ -16,6 +16,8 @@
 #include "IncreGpuStaBuildConfig.hpp"
 #include "TimingEditResolver.hpp"
 
+namespace ista { class CudaCsrEditState; }
+
 namespace ista::timing_dual_csr {
 
 class TimingEditDualCsrDescriptorBuilder;
@@ -119,6 +121,7 @@ class DualCsrStructuredBatchPreparer final
       const DualCsrArcGroupIndex& committed_arc_group_index);
 
   friend class DualCsrTransactionCoordinator;
+  friend class ista::CudaCsrEditState;
 };
 
 }  // namespace ista::timing_dual_csr

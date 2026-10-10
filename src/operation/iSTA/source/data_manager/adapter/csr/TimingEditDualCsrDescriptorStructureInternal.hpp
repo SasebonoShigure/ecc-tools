@@ -14,6 +14,9 @@ struct DualCsrBatchDescriptor;
 namespace detail {
 struct NarrowTimingRecords;
 
+[[nodiscard]] DualCsrBatchDescriptor basicDescriptor(
+    const PendingStructuredBatch& pending, const NarrowTimingRecords& records);
+
 // Completes BaseOut/AuxOut and BaseIn edits. Incoming replacement pairs are
 // derived from the semantic reconnect's exact StableArcRefs, never from
 // coincident vector positions or destination alone.

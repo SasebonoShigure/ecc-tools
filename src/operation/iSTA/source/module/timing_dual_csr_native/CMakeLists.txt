@@ -13,6 +13,7 @@ add_library(ista_timing_dual_csr_native
     ${ISTA_SOURCE}/data_manager/adapter/csr/DualCsrStructuredCapturePlan.cpp
     ${ISTA_SOURCE}/data_manager/adapter/csr/TimingEditDualCsrCaptureEvidenceInternal.cpp
     ${ISTA_SOURCE}/data_manager/adapter/csr/TimingEditDualCsrDescriptorBuilder.cpp
+    ${ISTA_SOURCE}/data_manager/adapter/csr/DirectCsrBufferEdit.cpp
     ${ISTA_SOURCE}/data_manager/adapter/csr/TimingEditDualCsrDescriptorStructure.cpp
     ${ISTA_SOURCE}/data_manager/adapter/csr/NativeDualCsrPayloadCapture.cpp
     ${ISTA_SOURCE}/data_manager/adapter/csr/NativeDualCsrReferenceCapture.cpp
@@ -138,6 +139,20 @@ if(BUILD_TESTING)
            COMMAND ista_timing_dual_csr_structured_batch_test)
   set_tests_properties(ista_timing_dual_csr_structured_batch_test
       PROPERTIES LABELS "ista_unit;ista_timing_dual_csr")
+
+  add_executable(ista_timing_direct_csr_edit_test
+      ${ISTA_TEST}/timing_dual_csr/DirectCsrBufferEditTest.cpp
+      ${ISTA_DUAL_CSR_STRUCTURED_TEST_SUPPORT})
+  target_include_directories(ista_timing_direct_csr_edit_test PRIVATE
+      ${ISTA_MODULE}/timing_csr_snapshot
+      ${ISTA_TEST}/timing_dual_csr ${ISTA_TEST}/timing_edit)
+  target_link_libraries(ista_timing_direct_csr_edit_test PRIVATE
+      ista_timing_dual_csr_native ista_timing_graph_csr_adapter ista_timing_dual_csr_transaction
+      ista_interface ista_data_manager ista_delay_calculator)
+  target_compile_options(ista_timing_direct_csr_edit_test PRIVATE
+      -Wall -Wextra -Werror -pedantic -ffp-contract=off)
+  add_test(NAME ista_timing_direct_csr_edit_test COMMAND ista_timing_direct_csr_edit_test)
+  set_tests_properties(ista_timing_direct_csr_edit_test PROPERTIES LABELS "ista_unit;ista_timing_dual_csr")
 
   add_executable(ista_timing_dual_csr_parallel_deactivation_receipt_test
       ${ISTA_TEST}/timing_dual_csr/DualCsrParallelDeactivationReceiptTest.cpp

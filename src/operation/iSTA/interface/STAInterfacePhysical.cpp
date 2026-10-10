@@ -12,6 +12,9 @@
 #include "NativeCandidateExecutor.hpp"
 #include "DelayCalculator.hpp"
 #include "GraphBuilder.hpp"
+#include "ClockPropagator.hpp"
+#include "TimingPropagator.hpp"
+#include "TimingAnalyzer.hpp"
 #include "StaProductionLifecycle.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 #include "TimingSemanticKey.hpp"
@@ -100,7 +103,12 @@ StaStatus STAInterface::runSessionPhysicalBaseline(std::uint64_t token, StaCsrSe
     };
     StaOperationResult result;
     if (request.backend == StaBackend::kCpu && request.update_strategy == StaUpdateStrategy::kFull) {
-      result = runFullStaPipeline(false);
+      result = executeStaLifecyclePipeline(
+          {{"GraphBuilder", [] { GraphBuilder::initInst(); }, [] { STAGB.build(); }, [] { GraphBuilder::destroyInst(); }},
+           {"ClockPropagator", [] { ClockPropagator::initInst(); }, [] { STACP.propagate(); }, [] { ClockPropagator::destroyInst(); }},
+           {"TimingPropagator", [] { TimingPropagator::initInst(); }, [] { STATP.propagate(); }, [] { TimingPropagator::destroyInst(); }},
+           {"TimingAnalyzer", [] { TimingAnalyzer::initInst(); }, [] { STATA.propagateRequired(); }, [] { TimingAnalyzer::destroyInst(); }}},
+          StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
       if (result.succeeded) bind();
     } else {
       result = executeStaLifecyclePipeline(

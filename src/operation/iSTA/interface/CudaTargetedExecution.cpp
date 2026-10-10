@@ -2,6 +2,9 @@
 // Licensed under Mulan PSL v2.
 #include "CudaTargetedExecution.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
+#include "CsrParasiticTree.hpp"
+#include "DataManager.hpp"
 #include <stdexcept>
 
 namespace ista::csr {
@@ -10,6 +13,65 @@ void require(bool valid, const char* message)
 {
   if (!valid) throw std::runtime_error(message);
 }
+}
+CudaDualCsrPatch detail::makeCudaTargetedPatch(const timing_dual_csr::DualCsrState& before,
+    const timing_dual_csr::DualCsrBatchDescriptor& descriptor, NativeLibraryModels& models)
+{
+  models.requireDatabase(STADM.getDatabase());
+  require(before.session_token == descriptor.session_token && before.generation == descriptor.expected_generation
+              && before.high_water == descriptor.before, "CUDA descriptor has stale before-state");
+  CudaDualCsrPatch patch;
+  patch.session_token = descriptor.session_token;
+  patch.expected_generation = descriptor.expected_generation;
+  patch.target_generation = descriptor.target_generation;
+  patch.before = descriptor.before;
+  patch.after = descriptor.after;
+  patch.node_appends = descriptor.node_appends;
+  patch.arc_appends = descriptor.arc_appends;
+  patch.removes = descriptor.removes;
+  patch.changes = descriptor.changes;
+  patch.reverse_changes = descriptor.reverse_changes;
+  patch.payload_changes = descriptor.payload_changes;
+  patch.logical_deactivations = descriptor.logical_deactivations;
+  patch.aux_rows = descriptor.aux_rows;
+  patch.appended_base_out_rows = descriptor.appended_base_out_rows;
+  for (const auto& row : descriptor.affected_base_in_rows)
+    if (row.sink.value() >= descriptor.before.node_slots)
+      patch.appended_base_in_rows.push_back({row.sink, row.replacement_arc_ids});
+
+  std::map<NodeId, CsrParasiticBinding> old, next;
+  const auto collect = [](auto& bindings, const CsrParasiticBinding& binding) {
+    if (!binding.tree) return;
+    const auto& tree = binding.tree;
+    require(!tree->terminals.empty(), "CUDA descriptor RC tree lacks a driver");
+    if (const auto found = bindings.find(tree->terminals.front()); found != bindings.end()) {
+      require(found->second.tree == tree, "CUDA descriptor RC driver has conflicting owners");
+      return;
+    }
+    for (std::size_t terminal = 0; terminal < tree->terminals.size(); ++terminal)
+      require(bindings.emplace(tree->terminals[terminal], CsrParasiticBinding{tree, terminal}).second,
+              "CUDA descriptor RC terminal belongs to multiple nets");
+  };
+  for (const auto& arc : descriptor.logical_deactivations)
+    collect(old, before.arc_slots.at(arc.id.value()).payload.parasitic);
+  for (const auto& arc : descriptor.payload_changes) {
+    collect(old, arc.expected.parasitic);
+    collect(next, arc.replacement.parasitic);
+  }
+  for (const auto& arc : descriptor.arc_appends) collect(next, arc.payload.parasitic);
+  if (descriptor.reference_payload.start_seeds)
+    for (const auto& seed : descriptor.reference_payload.start_seeds->changes) {
+      collect(old, seed.expected.parasitic);
+      collect(next, seed.replacement.parasitic);
+    }
+  for (const auto& [node, binding] : next) {
+    const auto previous = old.find(node);
+    patch.rc_bindings.push_back({node, previous == old.end() ? CsrParasiticBinding{} : previous->second, binding});
+  }
+  for (const auto& node : descriptor.node_appends)
+    if (!node.payload.is_port && next.contains(node.id))
+      patch.rc_load_cells.try_emplace(node.payload.instance_cell, std::cref(models.cell(node.payload.instance_cell)));
+  return patch;
 }
 CudaDualCsrSession detail::stageCudaTargetedBatch(CudaDualCsrSession& owner, const CudaDualCsrPatch& patch, StaUpdateStrategy strategy,
                                                   StaFallbackPolicy fallback, StaExecutionRecord& execution, std::optional<CudaDualCsrTelemetry>& rejected_mixed_attempt)

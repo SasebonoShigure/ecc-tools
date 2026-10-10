@@ -145,7 +145,8 @@ void compareNetArc(const CsrParasiticBinding& binding, AnalysisMode analysis, Tr
   FlatCsrEdgeView edges(input);
   CsrCpuReferenceWorkState work;
   work.rc_nodes = input.nodes;
-  work.rc_cells = input.referenced_library_cells;
+  for (const auto& cell : input.referenced_library_cells)
+    work.rc_cells.emplace(cell.cell_name, &cell);
   work.input_port_thresholds = thresholds;
   work.rc = std::move(cache);
   require(initializeCsrCpuReferenceArcs(edges, work) == CsrCpuReferenceStageStatus::kSuccess,

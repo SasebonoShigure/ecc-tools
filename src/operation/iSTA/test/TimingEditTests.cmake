@@ -93,6 +93,7 @@ set(ISTA_TIMING_EDIT_TRANSACTION_TEST_SOURCES
     ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT}
 )
 set(ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS
+    ista_timing_dual_csr_native
     ista_timing_edit_native
     ista_timing_graph_csr_adapter
     ista_timing_database_headers
@@ -236,6 +237,8 @@ endif()
 add_executable(izh_native_physical_rc_test
     "${HOME_OPERATION}/iZH/test/PhysicalNativeRcTransactionTest.cpp"
     "${HOME_OPERATION}/iZH/test/PhysicalQueryFailureTest.cpp"
+    "${HOME_OPERATION}/iZH/test/PhysicalGreedyCandidateTest.cpp"
+    "${HOME_OPERATION}/iZH/test/PhysicalReportFailureTest.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/AllocationFailureSupport.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/TimingEditTransactionNativeSupport.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/timing_edit/StaTimingEditSessionProbeAccess.cpp"

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "CsrCudaBackend.hpp"
+#include "CudaTraceObservation.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "TimingEditTypes.hpp"
 
@@ -15,11 +16,11 @@ struct ReplayProgram;
 namespace ista::csr {
 struct CudaFullTraceBatch
 {
-  std::uint64_t generation_before{}, generation_after{}, node_count{}, arc_count{};
-  double prepare_ms{}, native_graph_ms{}, export_ms{}, commit_ms{}, query_materialize_ms{}, report_ms{}, consumer_end_to_end_ms{};
+  std::uint64_t generation_before{}, generation_after{}, node_count{}, arc_slots{};
+  bool results_consumed{false};
+  double direct_prepare_ms{}, host_apply_ms{}, commit_ms{}, query_materialize_ms{}, report_ms{}, consumer_end_to_end_ms{};
   CsrCudaTelemetry cuda;
-  std::optional<CsrReferenceInput> diagnostic_input;
-  std::optional<CsrTimingResult> diagnostic_timing;
+  std::optional<CudaTraceObservation> diagnostic;
 };
 struct CudaFullTraceResult
 {
@@ -28,8 +29,12 @@ struct CudaFullTraceResult
 };
 // The caller's existing operation guard owns the authority and baseline.
 // Each generation rebuilds and uploads the complete graph, reusing session models
-// and capacity. No CPU levelization/propagation or CPU Dual-CSR updater is called.
-[[nodiscard]] CudaFullTraceResult replayCudaFullTracePrefix(StaCsrSessionContext& session, Database& baseline, const CsrReferenceInput& baseline_input,
+// and capacity. Host CSR owns edits; no CPU timing propagation is called.
+class CudaFullTraceReplayer final
+{
+ public:
+  [[nodiscard]] static CudaFullTraceResult run(StaCsrSessionContext& session, Database& baseline, const CsrReferenceInput& baseline_input,
                                                             const timing_edit::NativeExecutionAuthority& authority, const buffer_trace::ReplayProgram& program,
                                                             std::size_t prefix, const std::function<void()>& consume_results = {});
+};
 }  // namespace ista::csr

@@ -11,6 +11,8 @@
 #include "CsrReferenceTypes.hpp"
 #include "ActiveCsrEdgeView.hpp"
 #include "CsrRcDriverCache.hpp"
+#include "DualCsrState.hpp"
+#include "TimingPayloadView.hpp"
 
 namespace ista::csr::cuda_detail {
 struct ArcLayout
@@ -138,9 +140,14 @@ struct HostData
 };
 
 void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& models);
+void packRcGraph(const timing_dual_csr::DualCsrState& input, HostData& data, ModelStorage& models);
+void packTimingPayload(const TimingPayloadView& input, HostData& data, ModelStorage& models);
+void finishPacking(HostData& data);
 
 [[nodiscard]] Arc packArc(const ArcSemanticPayload& source, ModelStorage& models);
 [[nodiscard]] HostData pack(const CsrReferenceInput& input, ModelStorage& models);
+// Internal full rebuild from stable slots; inactive IDs remain tombstones.
+[[nodiscard]] HostData pack(const timing_dual_csr::DualCsrState& input, ModelStorage& models);
 [[nodiscard]] CsrTimingValues unpackValues(DownloadData&& data, const ResultLayout& layout, const PathDomain& domain);
 
 }  // namespace ista::csr::cuda_detail

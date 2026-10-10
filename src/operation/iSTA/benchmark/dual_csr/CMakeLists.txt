@@ -45,7 +45,7 @@ target_compile_options(ista_dual_csr_trace_runtime PRIVATE
 if(ISTA_ENABLE_CUDA)
   add_library(ista_cuda_full_trace_runtime CudaFullTraceReplayer.cpp)
   target_include_directories(ista_cuda_full_trace_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(ista_cuda_full_trace_runtime PUBLIC ista_cuda ista_interface ista_buffer_trace_contract ista_timing_edit_native ista_timing_graph_csr_adapter
+  target_link_libraries(ista_cuda_full_trace_runtime PUBLIC ista_cuda ista_interface ista_buffer_trace_contract ista_timing_edit_native ista_timing_graph_csr_adapter ista_timing_dual_csr_native ista_timing_dual_csr_transaction
       PRIVATE ista_timing_database_headers)
   target_compile_options(ista_cuda_full_trace_runtime PRIVATE ${ISTA_DUAL_CSR_TRACE_RUNTIME_OPTIONS})
 endif()
@@ -53,7 +53,7 @@ endif()
 if(ISTA_ENABLE_CUDA)
   add_library(ista_cuda_targeted_trace_runtime CudaTargetedTraceReplayer.cpp)
   target_include_directories(ista_cuda_targeted_trace_runtime PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(ista_cuda_targeted_trace_runtime PUBLIC ista_cuda ista_interface ista_buffer_trace_contract ista_timing_edit_native ista_timing_graph_csr_adapter
+  target_link_libraries(ista_cuda_targeted_trace_runtime PUBLIC ista_cuda ista_interface ista_buffer_trace_contract ista_timing_edit_native ista_timing_graph_csr_adapter ista_timing_dual_csr_native ista_timing_dual_csr_transaction
       PRIVATE ista_timing_database_headers)
   target_compile_options(ista_cuda_targeted_trace_runtime PRIVATE ${ISTA_DUAL_CSR_TRACE_RUNTIME_OPTIONS})
 endif()

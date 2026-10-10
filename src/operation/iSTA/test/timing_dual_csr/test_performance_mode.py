@@ -50,17 +50,19 @@ class PerformanceModeTest(unittest.TestCase):
         phases = [
             {**dict.fromkeys(DURATION_KEYS, 0.0),
              "generation_before": i, "generation_after": i + 1,
-             "session_step_ms": 1.0, "query_materialization_ms": 2.0,
-             "report_ms": 3.0, "consumer_step_ms": 6.5,
+             "result_consumption": "completed" if i == 1 else "not_run",
+             "session_step_ms": 1.0, "query_materialization_ms": 2.0 if i == 1 else None,
+             "report_ms": 3.0 if i == 1 else None, "consumer_step_ms": 6.5,
              "invariant_ms": "not_run", "verify_ms": "not_run"}
             for i in range(2)
         ]
         result = {
-            "schema_version": "ista-incregpusta-performance-process/3.0.0",
+            "schema_version": "ista-incregpusta-performance-process/4.0.0",
             "debug_checks_enabled": False,
             "correctness_comparison": "not_run",
             "diagnostics": "not_run",
             "result_requirements": {
+                "scope": "final_prefix",
                 "timing_values": True, "summary": True, "timing_paths": True,
                 "file_artifacts": False,
             },
@@ -88,11 +90,18 @@ class PerformanceModeTest(unittest.TestCase):
             10,
         )
         self.assertEqual(sample["correctness_comparison"], "not_run")
+        phases[0]["report_ms"] = 1.0
+        with patch.object(smoke, "run_child", return_value=(result, 1.0)), self.assertRaisesRegex(
+            smoke.ControllerError, "must be null when not_run"
+        ):
+            smoke._run_sample(pathlib.Path("probe"), pathlib.Path("trace"), [{}, {}],
+                              pathlib.Path("runs"), "sample", 10)
 
     def test_consumer_interval_and_diagnostic_canaries(self):
         phase = {
             **dict.fromkeys(DURATION_KEYS, 0.0),
             "generation_before": 0, "generation_after": 1,
+            "result_consumption": "completed",
             "session_step_ms": 1.0, "query_materialization_ms": 2.0,
             "report_ms": 3.0, "consumer_step_ms": 6.5,
             "invariant_ms": "not_run", "verify_ms": "not_run",
@@ -158,7 +167,7 @@ class PerformanceModeTest(unittest.TestCase):
             trace.write_text(json.dumps({"workload": {"batches": [{}, {}]}}))
             build = {"debug_checks_enabled": False, "build_config": "Release"}
             result = {
-                "schema_version": "ista-cuda-full-trace/5.0.0", "build": build,
+                "schema_version": "ista-cuda-full-trace/6.0.0", "build": build,
                 "debug_checks_enabled": False, "correctness_comparison": "not_run",
                 "requested_backend": "cuda", "executed_backend": "cuda",
                 "requested_strategy": "full", "executed_strategy": "full",
@@ -167,7 +176,10 @@ class PerformanceModeTest(unittest.TestCase):
                 "batch_timings": [
                     {"generation_before": i, "generation_after": i + 1,
                      "explicit_kernel_launches": 4, "device_algorithm_calls": 2,
-                     "levelization_decision_bytes": 32} for i in range(2)
+                     "levelization_decision_bytes": 32,
+                     "result_consumption": "completed" if i == 1 else "not_run",
+                     "query_materialize_ms": 1.0 if i == 1 else None,
+                     "report_ms": 2.0 if i == 1 else None} for i in range(2)
                 ],
             }
             args = argparse.Namespace(
@@ -178,6 +190,15 @@ class PerformanceModeTest(unittest.TestCase):
                 patch.object(full, "run_child", return_value=(result, 1.0)) as child,
             ):
                 self.assertEqual(full.run(args), 0)
+                for field in ("query_materialize_ms", "report_ms"):
+                    bad = copy.deepcopy(result)
+                    bad["batch_timings"][0][field] = 0.0
+                    with self.subTest(field=field), self.assertRaises(smoke.ControllerError):
+                        full.require_performance_result(bad, 2, build)
+                bad = copy.deepcopy(result)
+                bad["batch_timings"][-1]["result_consumption"] = "not_run"
+                with self.assertRaises(smoke.ControllerError):
+                    full.require_performance_result(bad, 2, build)
                 self.assertEqual([call.args[1] for call in child.call_args_list],
                                  ["performance", "performance"])
                 for bad_sample in (False, True):

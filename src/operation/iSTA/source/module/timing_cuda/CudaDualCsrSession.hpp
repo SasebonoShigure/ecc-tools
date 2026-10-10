@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "CsrCudaBackend.hpp"
+#include "CsrBufferCandidateTiming.hpp"
 #include "CudaDualCsrPatch.hpp"
 #include "MixedLevelizationTelemetry.hpp"
 #include "MixedLevelizationTypes.hpp"
@@ -13,14 +14,11 @@ namespace ista {
 class Database;
 class StaCsrSessionContext;
 class StaCudaSessionState;
-namespace timing_edit { class NativeFullEditBatch; }
+class PhysicalStaSessionState;
+namespace timing_dual_csr { struct DualCsrState; }
 }
 namespace ista::csr {
 class CudaDualCsrSession;
-namespace detail {
-struct CudaFullStage;
-CudaFullStage stageCudaFullBatch(StaCsrSessionContext&, timing_edit::NativeFullEditBatch&, CudaDualCsrSession&);
-}
 
 
 enum class CudaLevelizationMode
@@ -72,8 +70,11 @@ class CudaDualCsrSession final
   friend class CudaDualCsrTestReader;
   friend class CsrCudaBackend;
   friend class ista::StaCudaSessionState;
-  friend detail::CudaFullStage detail::stageCudaFullBatch(
-      StaCsrSessionContext&, timing_edit::NativeFullEditBatch&, CudaDualCsrSession&);
+  friend class ista::PhysicalStaSessionState;
+  [[nodiscard]] const std::vector<BufferCandidateTiming>& candidateTiming() const;
+  // The owning transaction already validated and applied this host state.
+  [[nodiscard]] CudaDualCsrSession stageFullCsr(const timing_dual_csr::DualCsrState& input);
+  friend class CudaFullTraceReplayer;
   // Only the direct, validated native-export paths can use these cores.
   [[nodiscard]] static CudaDualCsrSession fromNativeExport(
       const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);

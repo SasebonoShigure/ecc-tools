@@ -17,6 +17,7 @@
 #include "GraphBuilder.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 
 #include "CanonicalGraphConstruction.hpp"
 #include "DataManager.hpp"
@@ -69,8 +70,8 @@ void GraphBuilder::buildStructure()
 {
   buildTimingPointList();
   normalizePinDirectionByTimingCell();
-  buildCellArcs();
   buildInoutPinDirectionByGraph();
+  rebuildCellArcListByPinDirection();
   buildNetDriverLoadList();
   buildNetArcs();
   buildStartEndPointList();
@@ -170,11 +171,17 @@ bool GraphBuilder::isOutputLike(PinDirection direction)
 void GraphBuilder::buildInoutPinDirectionByGraph()
 {
   Database& database = STADM.getDatabase();
+  if (std::ranges::none_of(database.get_pin_map(), [](const auto& entry) {
+        return entry.second.get_direction() == PinDirection::kInout;
+      })) {
+    return;
+  }
+  // Only unresolved inout directions consume the preliminary cell graph.
+  buildCellArcs();
   std::map<std::string, PinDirection> inout_pin_direction_map = makeInoutPinDirectionMap();
   for (std::pair<const std::string, PinDirection>& pin_direction_pair : inout_pin_direction_map) {
     database.get_pin_map()[pin_direction_pair.first].set_direction(pin_direction_pair.second);
   }
-  rebuildCellArcListByPinDirection();
 }
 
 std::map<std::string, PinDirection> GraphBuilder::makeInoutPinDirectionMap()
@@ -449,12 +456,17 @@ bool GraphBuilder::isDisableArc(Arc& arc)
 void GraphBuilder::buildStartEndPointList()
 {
   Database& database = STADM.getDatabase();
+  auto& starts = database.get_start_point_list();
+  auto& ends = database.get_end_point_list();
+  const std::unordered_set<std::string> existing_starts(starts.begin(), starts.end());
+  const std::unordered_set<std::string> existing_ends(ends.begin(), ends.end());
+  // The pin map visits each name once; only entries from an earlier build can repeat.
   for (auto& [pin_name, pin] : database.get_pin_map()) {
-    if (isStartPoint(pin_name, pin)) {
-      appendUnique(database.get_start_point_list(), pin_name);
+    if (isStartPoint(pin_name, pin) && !existing_starts.contains(pin_name)) {
+      starts.push_back(pin_name);
     }
-    if (isEndPoint(pin_name, pin)) {
-      appendUnique(database.get_end_point_list(), pin_name);
+    if (isEndPoint(pin_name, pin) && !existing_ends.contains(pin_name)) {
+      ends.push_back(pin_name);
     }
   }
 }
@@ -548,24 +560,22 @@ bool GraphBuilder::isEndPort(Pin& pin)
   return pin.get_is_port() && (pin.get_direction() == PinDirection::kOutput || pin.get_direction() == PinDirection::kInout);
 }
 
-void GraphBuilder::appendUnique(std::vector<std::string>& list, const std::string& value)
-{
-  if (!STAUTIL.exist(list, value)) {
-    list.push_back(value);
-  }
-}
-
 void GraphBuilder::breakLoopArcList()
 {
-  std::size_t disabled_loop_num = breakLoopArcFromStart();
-  disabled_loop_num += breakLoopArcFromEnd();
-  disabled_loop_num += breakLoopArcFromFloating();
+  auto& database = STADM.getDatabase();
+  const auto& starts = database.get_start_point_list();
+  const auto& ends = database.get_end_point_list();
+  const std::unordered_set<std::string> start_points(starts.begin(), starts.end());
+  const std::unordered_set<std::string> end_points(ends.begin(), ends.end());
+  std::size_t disabled_loop_num = breakLoopArcFromStart(end_points);
+  disabled_loop_num += breakLoopArcFromEnd(start_points);
+  disabled_loop_num += breakLoopArcFromFloating(end_points);
   if (disabled_loop_num > 0) {
     STALOG.info(Loc::current(), "Break iSTA loop arcs: disabled_arcs=", disabled_loop_num);
   }
 }
 
-std::size_t GraphBuilder::breakLoopArcFromStart()
+std::size_t GraphBuilder::breakLoopArcFromStart(const std::unordered_set<std::string>& stop_points)
 {
   Database& database = STADM.getDatabase();
   std::size_t disabled_loop_num = 0;
@@ -576,17 +586,17 @@ std::size_t GraphBuilder::breakLoopArcFromStart()
       if (isDisableArc(arc)) {
         continue;
       }
-      traverseDataPath(arc.get_sink_pin(), true, color_map, disabled_loop_num);
+      traverseDataPath(arc.get_sink_pin(), true, color_map, stop_points, disabled_loop_num);
     }
   }
   return disabled_loop_num;
 }
 
 bool GraphBuilder::traverseDataPath(std::string& pin_name, bool is_forward, std::map<std::string, GBColorType>& color_map,
-                                    std::size_t& disabled_loop_num)
+                                    const std::unordered_set<std::string>& stop_points, std::size_t& disabled_loop_num)
 {
   Database& database = STADM.getDatabase();
-  if (stopTraverse(pin_name, is_forward) || isBlack(color_map, pin_name)) {
+  if (stop_points.contains(pin_name) || isBlack(color_map, pin_name)) {
     return false;
   }
   if (isGray(color_map, pin_name)) {
@@ -612,7 +622,7 @@ bool GraphBuilder::traverseDataPath(std::string& pin_name, bool is_forward, std:
       }
       continue;
     }
-    if (traverseDataPath(next_pin_name, is_forward, color_map, disabled_loop_num)) {
+    if (traverseDataPath(next_pin_name, is_forward, color_map, stop_points, disabled_loop_num)) {
       if (disableLoopArc(arc)) {
         ++disabled_loop_num;
       }
@@ -621,15 +631,6 @@ bool GraphBuilder::traverseDataPath(std::string& pin_name, bool is_forward, std:
   }
   color_map[pin_name] = GBColorType::kBlack;
   return false;
-}
-
-bool GraphBuilder::stopTraverse(std::string& pin_name, bool is_forward)
-{
-  Database& database = STADM.getDatabase();
-  if (is_forward) {
-    return STAUTIL.exist(database.get_end_point_list(), pin_name);
-  }
-  return STAUTIL.exist(database.get_start_point_list(), pin_name);
 }
 
 bool GraphBuilder::isBlack(std::map<std::string, GBColorType>& color_map, std::string& pin_name)
@@ -651,7 +652,7 @@ bool GraphBuilder::disableLoopArc(Arc& arc)
   return true;
 }
 
-std::size_t GraphBuilder::breakLoopArcFromEnd()
+std::size_t GraphBuilder::breakLoopArcFromEnd(const std::unordered_set<std::string>& stop_points)
 {
   Database& database = STADM.getDatabase();
   std::size_t disabled_loop_num = 0;
@@ -662,31 +663,24 @@ std::size_t GraphBuilder::breakLoopArcFromEnd()
       if (isDisableArc(arc)) {
         continue;
       }
-      traverseDataPath(arc.get_source_pin(), false, color_map, disabled_loop_num);
+      traverseDataPath(arc.get_source_pin(), false, color_map, stop_points, disabled_loop_num);
     }
   }
   return disabled_loop_num;
 }
 
-std::size_t GraphBuilder::breakLoopArcFromFloating()
+std::size_t GraphBuilder::breakLoopArcFromFloating(const std::unordered_set<std::string>& stop_points)
 {
   Database& database = STADM.getDatabase();
   std::size_t disabled_loop_num = 0;
   std::map<std::string, GBColorType> color_map;
   for (std::pair<const std::string, TimingPoint>& timing_pair : database.get_timing_point_map()) {
     std::string pin_name = timing_pair.first;
-    traverseFloatingDataPath(pin_name, color_map, disabled_loop_num);
+    if (!isBlack(color_map, pin_name)) {
+      (void) traverseDataPath(pin_name, true, color_map, stop_points, disabled_loop_num);
+    }
   }
   return disabled_loop_num;
-}
-
-void GraphBuilder::traverseFloatingDataPath(std::string& pin_name, std::map<std::string, GBColorType>& color_map,
-                                            std::size_t& disabled_loop_num)
-{
-  if (isBlack(color_map, pin_name)) {
-    return;
-  }
-  (void) traverseDataPath(pin_name, true, color_map, disabled_loop_num);
 }
 
 void GraphBuilder::buildTimingOrder()

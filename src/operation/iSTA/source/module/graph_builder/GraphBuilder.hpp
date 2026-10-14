@@ -16,6 +16,8 @@
 // ***************************************************************************************
 #pragma once
 
+#include <unordered_set>
+
 #include "Database.hpp"
 #include "GBColorType.hpp"
 
@@ -90,19 +92,15 @@ class GraphBuilder
   bool isTimingCheckEndPoint(const std::string& pin_name, Pin& pin);
   bool hasOutgoingArc(const std::string& pin_name);
   bool isEndPort(Pin& pin);
-  void appendUnique(std::vector<std::string>& list, const std::string& value);
   void breakLoopArcList();
-  std::size_t breakLoopArcFromStart();
+  std::size_t breakLoopArcFromStart(const std::unordered_set<std::string>& stop_points);
   bool traverseDataPath(std::string& pin_name, bool is_forward, std::map<std::string, GBColorType>& color_map,
-                        std::size_t& disabled_loop_num);
-  bool stopTraverse(std::string& pin_name, bool is_forward);
+                        const std::unordered_set<std::string>& stop_points, std::size_t& disabled_loop_num);
   bool isBlack(std::map<std::string, GBColorType>& color_map, std::string& pin_name);
   bool isGray(std::map<std::string, GBColorType>& color_map, std::string& pin_name);
   bool disableLoopArc(Arc& arc);
-  std::size_t breakLoopArcFromEnd();
-  std::size_t breakLoopArcFromFloating();
-  void traverseFloatingDataPath(std::string& pin_name, std::map<std::string, GBColorType>& color_map,
-                                std::size_t& disabled_loop_num);
+  std::size_t breakLoopArcFromEnd(const std::unordered_set<std::string>& stop_points);
+  std::size_t breakLoopArcFromFloating(const std::unordered_set<std::string>& stop_points);
   void buildTimingOrder();
   std::map<std::string, std::size_t> makeIndegreeMap();
   void pushRootPinList(std::map<std::string, std::size_t>& indegree_map, std::queue<std::string>& pin_queue);

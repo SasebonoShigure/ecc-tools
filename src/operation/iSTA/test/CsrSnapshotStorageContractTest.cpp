@@ -298,7 +298,7 @@ void checkDynamicFamilies()
         cell.cell_name = "ZZ_CELL";
         cell.present = true;
         cell.library_name = "extra.lib";
-        cell.ports.push_back({.name = "A", .direction = PinDirection::kInput});
+        cell.ports.push_back({.name = "A", .direction = PinDirection::kInput, .transition_capacitance = {}});
         input.referenced_library_cells.push_back(std::move(cell));
       },
       "referenced library closure");
@@ -383,7 +383,7 @@ void checkReserveAndTerminatorRules()
 void checkFixedOptionalStorage()
 {
   auto input = snapshotInput();
-  require(input.arcs[0].output_load.has_value(), "nonparasitic fixture must engage output load");
+  input.arcs[0].output_load = ArcOutputLoadMatrix{};
   const auto engaged = productionStorage(input, snapshotMetadata());
   const auto engaged_oracle = independentReferenceInputStorage(input, snapshotMetadata());
   input.arcs[0].output_load.reset();

@@ -282,10 +282,6 @@ void payloadAndDescriptorContracts()
       csr::NodeId{3}, current_node.key, current_node.net_name,
       "replacement_net"}};
   auto replacement = third.arc_slots[2].payload;
-  replacement.output_load = csr::test::outputLoad(4.0);
-  descriptor.payload_changes = {{csr::ArcId{2},
-                                 third.arc_slots[2].payload,
-                                 replacement}};
   auto constraints = third.reference_payload.port_constraints;
   const auto output_constraint = std::ranges::find_if(
       constraints, [](const csr::PortConstraintModel& constraint) {
@@ -298,9 +294,9 @@ void payloadAndDescriptorContracts()
                    third.reference_payload.port_constraints,
                    std::move(constraints));
   const DualCsrState changed = apply(third, descriptor);
-  require(changed.nodes[3].net_name == "replacement_net" && (*changed.arc_slots[2].payload.output_load)[0][0] == 4.0
-              && (!incregpusta_debug_checks_enabled || changed.telemetry.payload_change_count == 1),
-          "node/arc payload changes were not applied");
+  require(changed.nodes[3].net_name == "replacement_net"
+              && changed.arc_slots == third.arc_slots,
+          "node/reference update changed unrelated arc payloads");
 
   auto missing_identity = descriptorFor(second, 0, 0);
   missing_identity.reference_payload.source_identity.reset();

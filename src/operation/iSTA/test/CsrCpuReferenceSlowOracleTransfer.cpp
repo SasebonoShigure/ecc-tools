@@ -217,7 +217,6 @@ SlowOracleStatus slowOracleInitialize(const CsrReferenceInput& input, const Slow
   const std::size_t io_lanes = transition_lanes * kTransitionCount;
 
   state.result = {};
-  state.result.schema_version = input.schema_version;
   state.result.source_identity = input.source_identity;
   state.result.level_offsets = levelization.level_offsets;
   state.result.level_nodes = levelization.level_nodes;

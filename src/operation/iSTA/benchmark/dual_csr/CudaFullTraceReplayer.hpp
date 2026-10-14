@@ -24,7 +24,7 @@ struct CudaFullTraceBatch
 };
 struct CudaFullTraceResult
 {
-  double backend_setup_ms{};
+  double backend_setup_ms{}, edit_sta_loop_ms{};
   std::vector<CudaFullTraceBatch> batches;
 };
 // The caller's existing operation guard owns the authority and baseline.

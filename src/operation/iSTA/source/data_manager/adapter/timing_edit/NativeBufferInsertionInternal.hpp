@@ -66,5 +66,10 @@ struct PreparedNativeGraphPatch
     Database& database, std::span<const BufferInsertionMutation> edits,
     TimingEditResolverView resolver, std::uint64_t first_instance_id,
     std::map<std::string, ParasiticNet> prepared_rc = {});
+// Appends one cell arc and one input net arc per edit, in edit order. Existing
+// moved sinks keep their physical arc slot, including across an unqueried suffix.
+[[nodiscard]] PreparedNativeGraphPatch prepareNativeBufferGraph(
+    Database& database, PreparedNativeBufferInsertions& raw,
+    std::span<const BufferInsertionMutation> edits, TimingEditResolverView resolver);
 void applyNativeBufferInsertion(Database& database, const BufferInsertionMutation& edit, TimingEditResolverView resolver, std::uint64_t instance_id);
 }  // namespace ista::timing_edit::detail

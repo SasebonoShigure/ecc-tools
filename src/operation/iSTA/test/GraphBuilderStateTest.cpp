@@ -242,13 +242,147 @@ bool testRepeatedBuildOnUnchangedDatabase()
   return valid;
 }
 
+bool testExistingEndpointOrder()
+{
+  auto& database = ista::DataManager::getInst().getDatabase();
+  for (int index = 0; index < 16; ++index) {
+    const auto input = "input" + std::to_string(index);
+    const auto output = "output" + std::to_string(index);
+    const auto net = "net" + std::to_string(index);
+    database.get_pin_map().emplace(input, makePin(input, input, "", net, ista::PinDirection::kInput, true));
+    database.get_pin_map().emplace(output, makePin(output, output, "", net, ista::PinDirection::kOutput, true));
+    database.get_net_map().emplace(net, makeNet(net, {input, output}));
+  }
+  database.get_start_point_list() = {"input9", "input1"};
+  database.get_end_point_list() = {"output7"};
+  auto expected_starts = database.get_start_point_list();
+  auto expected_ends = database.get_end_point_list();
+  for (const auto& [name, pin] : database.get_pin_map()) {
+    if (name.starts_with("input") && name != "input9" && name != "input1") {
+      expected_starts.push_back(name);
+    }
+    if (name.starts_with("output") && name != "output7") {
+      expected_ends.push_back(name);
+    }
+  }
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    ista::GraphBuilder::getInst().buildStructure();
+    if (!expect(database.get_start_point_list() == expected_starts, "start order changed or gained duplicates")
+        || !expect(database.get_end_point_list() == expected_ends, "end order changed or gained duplicates")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool testInoutInference(const std::string& changed_pin, bool with_library, ista::PinDirection expected_direction)
+{
+  auto& database = ista::DataManager::getInst().getDatabase();
+  populateStaticChain(database);
+  if (!with_library) {
+    database.get_timing_library().get_cell_map().clear();
+  }
+  if (changed_pin == "floating") {
+    database.get_pin_map().emplace(changed_pin,
+        makePin(changed_pin, changed_pin, "", "", ista::PinDirection::kInout, true));
+  } else {
+    database.get_pin_map().at(changed_pin).set_direction(ista::PinDirection::kInout);
+  }
+  ista::GraphBuilder::getInst().buildStructure();
+  if (!expect(database.get_pin_map().at(changed_pin).get_direction() == expected_direction,
+              "Liberty, preliminary-cell, net or floating inout inference changed")) {
+    return false;
+  }
+  const auto first = captureGraphSnapshot(database);
+  const std::vector<ArcSignature> expected_arcs{
+      {"u0:A", "u0:Y", ista::ArcType::kCell, "u0"},
+      {"data_in", "u0:A", ista::ArcType::kNet, "n_in"},
+      {"u0:Y", "data_out", ista::ArcType::kNet, "n_out"}};
+  if (!expect(first.arc_list == expected_arcs, "inout inference changed cell/net arc order")) {
+    return false;
+  }
+  ista::GraphBuilder::getInst().buildStructure();
+  return expect(captureGraphSnapshot(database) == first,
+                "repeat build after direction resolution changed the graph");
+}
+
+bool testLoopBoundaries(const std::vector<std::string>& starts, const std::vector<std::string>& ends,
+                        const std::vector<ArcSignature>& expected_disabled)
+{
+  auto& database = ista::DataManager::getInst().getDatabase();
+  for (int index = 0; index < 3; ++index) {
+    const auto name = "ring" + std::to_string(index);
+    const auto next = "ring" + std::to_string((index + 1) % 3);
+    const auto input_net = "n" + std::to_string((index + 2) % 3);
+    const auto output_net = "n" + std::to_string(index);
+    database.get_pin_map().emplace(name + ":A",
+        makePin(name + ":A", "A", name, input_net, ista::PinDirection::kInput, false));
+    database.get_pin_map().emplace(name + ":Y",
+        makePin(name + ":Y", "Y", name, output_net, ista::PinDirection::kOutput, false));
+    database.get_net_map().emplace(output_net, makeNet(output_net, {name + ":Y", next + ":A"}));
+    ista::Instance instance;
+    instance.set_instance_name(name);
+    instance.set_cell_name("BUF");
+    instance.set_pin_name_list({name + ":A", name + ":Y"});
+    database.get_instance_map().emplace(name, std::move(instance));
+  }
+  database.get_start_point_list() = starts;
+  database.get_end_point_list() = ends;
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    ista::GraphBuilder::getInst().buildStructure();
+    std::vector<ArcSignature> disabled;
+    for (auto& arc : database.get_arc_list()) {
+      if (arc.get_is_loop_disable()) {
+        disabled.push_back(getArcSignature(arc));
+      }
+    }
+    if (!expect(disabled == expected_disabled, "loop cut order or start/end stopping boundary changed")) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 int main()
 {
-  SingletonScope singleton_scope;
   try {
-    return testRepeatedBuildOnUnchangedDatabase() ? 0 : 1;
+    {
+      SingletonScope singleton_scope;
+      if (!testRepeatedBuildOnUnchangedDatabase()) {
+        return 1;
+      }
+    }
+    {
+      SingletonScope singleton_scope;
+      if (!testExistingEndpointOrder()) {
+        return 1;
+      }
+    }
+    for (bool with_library : {false, true}) {
+      for (const auto& [pin, direction] : std::vector<std::pair<std::string, ista::PinDirection>>{
+               {"u0:A", ista::PinDirection::kInput}, {"u0:Y", ista::PinDirection::kOutput},
+               {"data_in", ista::PinDirection::kInput}, {"data_out", ista::PinDirection::kOutput},
+               {"floating", ista::PinDirection::kInout}}) {
+        SingletonScope singleton_scope;
+        if (!testInoutInference(pin, with_library, direction)) {
+          return 1;
+        }
+      }
+    }
+    const auto check_loop = [](const std::vector<std::string>& starts, const std::vector<std::string>& ends,
+                               const std::vector<ArcSignature>& disabled) {
+      SingletonScope singleton_scope;
+      return testLoopBoundaries(starts, ends, disabled);
+    };
+    const ArcSignature floating_cut = {"ring2:Y", "ring0:A", ista::ArcType::kNet, "n2"};
+    const ArcSignature seeded_cut = {"ring1:A", "ring1:Y", ista::ArcType::kCell, "ring1"};
+    return check_loop({}, {}, {floating_cut})
+                   && check_loop({"ring1:A"}, {}, {seeded_cut})
+                   && check_loop({}, {"ring1:Y"}, {seeded_cut})
+                   && check_loop({"ring1:A"}, {"ring2:A"}, {})
+               ? 0 : 1;
   } catch (const std::exception& error) {
     std::cerr << "GraphBuilderStateTest: " << error.what() << '\n';
     return 1;

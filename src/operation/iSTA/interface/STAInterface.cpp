@@ -22,6 +22,7 @@
 #include <exception>
 #include <set>
 #include <stdexcept>
+#include <unordered_set>
 
 #include "DataManager.hpp"
 #include "Lib.hh"
@@ -311,25 +312,16 @@ void STAInterface::wrapNetPinList(idb::IdbNet* idb_net, Net& net)
 
 void STAInterface::wrapNetPinList(idb::IdbPins* io_pin_list, idb::IdbPins* instance_pin_list, Net& net)
 {
-  for (idb::IdbPin* idb_pin : io_pin_list->get_pin_list()) {
-    wrapNetPin(idb_pin, net);
-  }
-  for (idb::IdbPin* idb_pin : instance_pin_list->get_pin_list()) {
-    wrapNetPin(idb_pin, net);
-  }
-}
-
-void STAInterface::wrapNetPin(idb::IdbPin* idb_pin, Net& net)
-{
-  std::string pin_name = idbTimingPinName(*idb_pin);
-  wrapNetPinNameList(net, pin_name);
-}
-
-void STAInterface::wrapNetPinNameList(Net& net, std::string& pin_name)
-{
-  std::vector<std::string>& pin_name_list = net.get_pin_name_list();
-  if (!STAUTIL.exist(pin_name_list, pin_name)) {
-    pin_name_list.push_back(pin_name);
+  auto& names = net.get_pin_name_list();
+  std::unordered_set<std::string> seen(names.begin(), names.end());
+  seen.reserve(names.size() + io_pin_list->get_pin_list().size() + instance_pin_list->get_pin_list().size());
+  for (auto* pins : {io_pin_list, instance_pin_list}) {
+    for (idb::IdbPin* pin : pins->get_pin_list()) {
+      std::string name = idbTimingPinName(*pin);
+      if (seen.insert(name).second) {
+        names.push_back(std::move(name));
+      }
+    }
   }
 }
 

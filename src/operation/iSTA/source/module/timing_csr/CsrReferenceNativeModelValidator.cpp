@@ -498,7 +498,7 @@ void validateReferenceNativeModels(const CsrReferenceInput& input, Violations& e
   for (const auto& arc : input.arcs) {
     if (arc.sink.value() >= input.nodes.size())
       continue;  // Structural validation reports the invalid NodeId.
-    const bool loads_present = !rc_nets.contains(input.nodes[arc.sink.value()].net_name);
+    const bool loads_present = arc.kind == ArcKind::kCell && !rc_nets.contains(input.nodes[arc.sink.value()].net_name);
     if (arc.output_load.has_value() != loads_present)
       reject(errors, "arcs.output_load", "load presence must follow its output net's parasitic state");
   }

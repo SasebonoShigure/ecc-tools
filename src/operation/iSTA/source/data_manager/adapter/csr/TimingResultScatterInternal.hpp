@@ -21,6 +21,8 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -116,6 +118,25 @@ struct PreparedTimingResult
   std::vector<std::string> timing_order;
 };
 
+// Query-scoped report reader. Borrowed mappings/results stay under one operation guard.
+// Only consumed nodes acquire native path maps; the authoritative Database is untouched.
+class CsrReportNodeReader final
+{
+ public:
+  CsrReportNodeReader(const StableScatterTargets& targets, const TimingScatterLayout& layout, const CsrTimingValues& values);
+  CsrReportNodeReader(const CsrReportNodeReader&) = delete;
+  CsrReportNodeReader& operator=(const CsrReportNodeReader&) = delete;
+  [[nodiscard]] bool contains(std::string_view name) const { return _ids.contains(name); }
+  [[nodiscard]] ista::TimingPoint& point(std::string_view name);
+
+ private:
+  const StableScatterTargets& _targets;
+  TimingScatterLayout _layout;
+  const CsrTimingValues& _values;
+  std::unordered_map<std::string_view, std::size_t> _ids;
+  std::map<std::size_t, ista::TimingPoint> _points;
+};
+
 struct TimingResultPreparationFailure
 {
   CsrScatterCode code{CsrScatterCode::kIdMappingMismatch};
@@ -144,6 +165,9 @@ using PrepublishScatterResult = std::variant<PreparedScatterEnvelope, CsrTimingR
     const TimingScatterLayout& layout, const CsrTimingValues& values);
 
 // Resolve current native targets only within the caller's guarded query.
+[[nodiscard]] StableScatterTargets resolveDualCsrTimingTargets(
+    Database& database, const timing_dual_csr::DualCsrState& graph);
+
 [[nodiscard]] PreparedTimingResult prepareDualCsrTimingResult(
     Database& database, const timing_dual_csr::DualCsrState& graph, const CsrTimingValues& values);
 
@@ -162,6 +186,7 @@ using PrepublishScatterResult = std::variant<PreparedScatterEnvelope, CsrTimingR
 [[nodiscard]] CsrScatterCode publishComputedTimingResult(Database& database, const CsrReferenceInput& input, const CsrTimingResult& result,
                                                          std::uint64_t session_token);
 
+void publishPreparedTimingPoint(PreparedTimingPointState& prepared) noexcept;
 void publishPreparedTimingResult(PreparedTimingResult& prepared) noexcept;
 
 }  // namespace ista::csr::detail

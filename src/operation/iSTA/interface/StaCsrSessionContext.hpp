@@ -15,6 +15,7 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #pragma once
+#include <utility>
 
 #include <cstdint>
 #include <memory>
@@ -90,6 +91,9 @@ class StaCsrSessionContext final
   [[nodiscard]] StaCudaSessionState& cudaState(const timing_edit::NativeExecutionAuthority& authority);
   void materializeCudaTiming(Database& database, const timing_edit::NativeExecutionAuthority& authority);
   void prepareCudaReport(Database& database, const timing_edit::NativeExecutionAuthority& authority);
+  // Borrowed current-generation strings remain under the caller's operation guard.
+  const std::pair<std::string, std::string>& readCudaReport(Database& database,
+      const timing_edit::NativeExecutionAuthority& authority);
 #endif
 
   // Internal callers hold the session operation guard.

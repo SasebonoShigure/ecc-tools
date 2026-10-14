@@ -284,7 +284,8 @@ Json startSeed(const csr::StartSeedModel& value)
           {"crpr_transition",
            optionalValue(value.crpr_transition, [](auto item) {
              return Json(csr::token(item));
-           })}};
+           })},
+          {"output_load", optionalValue(value.output_load, loadMatrix)}};
 }
 
 Json endpoint(const csr::EndpointRequiredModel& value)
@@ -559,11 +560,6 @@ Json descriptor(const DualCsrBatchDescriptor& value)
     return Json{{"source", item.source.value()},
                 {"arc_ids", ids(item.arc_ids)}};
   };
-  const auto affected_out = [&](const AffectedBaseOutRowDescriptor& item) {
-    return Json{{"source", item.source.value()},
-                {"expected_arc_ids", ids(item.expected_arc_ids)},
-                {"replacement_arc_ids", ids(item.replacement_arc_ids)}};
-  };
   const auto affected_in = [&](const AffectedBaseInRowDescriptor& item) {
     return Json{{"sink", item.sink.value()},
                 {"expected_arc_ids", ids(item.expected_arc_ids)},
@@ -597,8 +593,6 @@ Json descriptor(const DualCsrBatchDescriptor& value)
           {"aux_rows", arrayOf(value.aux_rows, aux_row)},
           {"appended_base_out_rows",
            arrayOf(value.appended_base_out_rows, appended_out)},
-          {"affected_base_out_rows",
-           arrayOf(value.affected_base_out_rows, affected_out)},
           {"affected_base_in_rows",
            arrayOf(value.affected_base_in_rows, affected_in)},
           {"reference_payload", referenceDelta(value.reference_payload)},

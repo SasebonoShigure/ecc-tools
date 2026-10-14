@@ -447,7 +447,6 @@ void testTwoDimensionalLoadKAT()
   input.cell_pin_capacitances.front().transition_capacitance = capacitance;
   input.referenced_library_cells.front().ports.front().transition_capacitance = capacitance;
   input.nodes[2].net_name = input.nodes[1].net_name;
-  input.arcs.front().output_load = load;
   input.arcs[arc].output_load = load;
   synchronizeCell(input, "2x2 load fixture");
 
@@ -537,9 +536,6 @@ void testIgnoredNoSpefPayloadIsolation()
   CsrReferenceInput net_baseline_input = makeCpuReferenceNetFixture();
   CsrReferenceInput net_load_input = net_baseline_input;
   net_load_input.port_constraints[1].output_load = 0.75;
-  net_load_input.arcs.front().output_load = ArcOutputLoadMatrix{};
-  for (auto& analysis : *net_load_input.arcs.front().output_load)
-    analysis.fill(0.75);
   refreshCpuReferenceIdentity(net_load_input);
   const auto errors = validateReferenceInput(net_load_input);
   requireCpuReference(errors.empty(), "ignored no-SPEF load fixture is not strict-valid");

@@ -55,7 +55,6 @@ CsrCudaComputation CsrCudaBackend::computeWithTelemetry(const CsrReferenceInput&
       output.computation = CsrComputationResult{*code};
     } else {
       CsrTimingResult result;
-      result.schema_version = input.schema_version;
       result.source_identity = input.source_identity;
       static_cast<void>(session.timingValues());
       static_cast<CsrTimingValues&>(result) = std::move(*session._impl->values);

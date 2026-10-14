@@ -38,6 +38,7 @@ CudaFullTraceResult CudaFullTraceReplayer::run(StaCsrSessionContext& session, Da
     owned.history.reserve(prefix);
     static_assert(std::is_nothrow_move_constructible_v<EditBatch>);
     result.backend_setup_ms = elapsed(setup_started);
+    const auto loop_started = Clock::now();
     for (std::size_t index = 0; index < prefix; ++index) {
       const auto started = Clock::now();
       require(host.graph.generation == owned.device.generation()
@@ -63,12 +64,13 @@ CudaFullTraceResult CudaFullTraceReplayer::run(StaCsrSessionContext& session, Da
       owned.history.push_back(std::move(record));
       owned.committed();
       batch.commit_ms = elapsed(started);
+      if (index + 1 == prefix) result.edit_sta_loop_ms = elapsed(loop_started);
       if (consume_results || index + 1 == prefix) {
         phase = Clock::now();
-        session.materializeCudaTiming(baseline, authority);
+        static_cast<void>(owned.device.timingValues());
         batch.query_materialize_ms = elapsed(phase);
         phase = Clock::now();
-        session.prepareCudaReport(baseline, authority);
+        static_cast<void>(session.readCudaReport(baseline, authority));
         if (consume_results) consume_results();
         batch.report_ms = elapsed(phase);
         batch.results_consumed = true;

@@ -12,6 +12,7 @@
 #include "TimingAnalyzer.hpp"
 #include "TimingReporter.hpp"
 #include <sstream>
+#include <algorithm>
 #include "TimingResultScatterInternal.hpp"
 #if ISTA_ENABLE_CUDA
 #include "StaCudaSessionState.hpp"
@@ -143,6 +144,24 @@ PhysicalGreedySelection PhysicalStaSessionState::selectBuffers(Database& databas
 PhysicalStaCurrentResult PhysicalStaSessionState::read(Database& database, StaCsrSessionContext& context,
     const timing_edit::NativeExecutionAuthority& authority, bool summary_only)
 {
+  if (!authority.readyForQuery() || authority.sessionToken().value() != context.token() || &database != &STADM.getDatabase())
+    throw std::logic_error("physical result query requires the committed session");
+  static_cast<void>(generation(context));
+#if ISTA_ENABLE_CUDA
+  if (cuda_graph) {
+    try {
+      return readCsr(database, authority, cuda_graph->graph, context._cuda->device.timingValues(), summary_only);
+    } catch (...) {
+      if (context._cuda->_poisoned || context._cuda->device.poisoned()) authority.poison();
+      throw;
+    }
+  }
+#endif
+  if (cpu) {
+    if (cpu->poisoned()) throw std::logic_error("physical CPU result owner is poisoned");
+    const auto& committed = cpu->committed();
+    return readCsr(database, authority, committed.graph, committed.timing.values, summary_only);
+  }
   prepareReport(database, context, authority);
   PhysicalStaCurrentResult result;
   result.generation = generation(context).value();
@@ -160,6 +179,42 @@ PhysicalStaCurrentResult PhysicalStaSessionState::read(Database& database, StaCs
     paths.exceptions(std::ios::badbit | std::ios::failbit);
     reporter.outputTimingPathsJson(&paths);
     result.paths_json = std::move(paths).str();
+  }
+  return result;
+}
+PhysicalStaCurrentResult PhysicalStaSessionState::readCsr(Database& database,
+    const timing_edit::NativeExecutionAuthority& authority, const timing_dual_csr::DualCsrState& graph,
+    const csr::CsrTimingValues& values, bool summary_only)
+{
+  prepareCsrView(database, authority, graph, nullptr);
+  if (_csr_report_generation != graph.generation || (!summary_only && _csr_report.second.empty())) {
+    std::pair<std::string, std::string> report;
+    const auto status = executeStaLifecyclePipeline(
+        {{"CSR report", [] {}, [&] {
+          const auto targets = csr::detail::resolveDualCsrTimingTargets(database, graph);
+          const auto& layout = graph.reference_payload;
+          csr::detail::CsrReportNodeReader reader(targets,
+              {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, values);
+          report = TimingReporter::readCsrReport(reader, summary_only);
+        }, [] {}}},
+        StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+    if (status.cleanup_failed) authority.poison();
+    if (!status.succeeded) throw std::runtime_error("CSR report query failed: " + status.message);
+    _csr_report.swap(report);
+    _csr_report_generation = graph.generation;
+  }
+  PhysicalStaCurrentResult result;
+  result.generation = graph.generation.value();
+  result.qor_json = _csr_report.first;
+  if (!summary_only) {
+    result.paths_json = _csr_report.second;
+    result.timing.reserve(graph.nodes.size());
+    for (const auto& node : graph.nodes) {
+      const auto id = node.id.value();
+      result.timing.emplace_back(node.key.full_name,
+          std::array{values.nodes.arrivals.values[id], values.nodes.requireds.values[id], values.nodes.slacks.values[id]});
+    }
+    std::ranges::sort(result.timing, {}, [](const auto& entry) -> const std::string& { return entry.first; });
   }
   return result;
 }

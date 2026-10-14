@@ -193,10 +193,14 @@ DualCsrBaselineAttempt DualCsrBaselineFactory::fromNativeExport(
     timing_edit::TimingEditSessionToken session_token,
     timing_edit::AppendOnlyHighWater high_water)
 {
-  if constexpr (incregpusta_debug_checks_enabled)
-    return create(input, session_token, high_water);
+  if (incregpusta_debug_checks_enabled && baseline_factory_calls != std::numeric_limits<std::uint64_t>::max())
+    ++baseline_factory_calls;
   DualCsrBaselineAttempt attempt;
-  validateBaselineBinding(input, session_token, high_water, attempt.violations);
+  if constexpr (incregpusta_debug_checks_enabled)
+    validateBaselineInput(input, session_token, high_water, attempt.violations);
+  else
+    validateBaselineBinding(input, session_token, high_water, attempt.violations);
+  // The session's index factory proves the completed host state in diagnostic builds.
   if (attempt.violations.empty())
     attempt.state = buildBaselineState(input, session_token, high_water);
   return attempt;

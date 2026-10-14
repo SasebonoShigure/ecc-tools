@@ -17,6 +17,8 @@
 #include "DataManager.hpp"
 
 #include <stdexcept>
+#include <string_view>
+#include <unordered_set>
 
 #include "Logger.hpp"
 #include "Monitor.hpp"
@@ -297,10 +299,15 @@ void DataManager::makeNet(const std::string& net_name, Net& net)
   net.get_driver_pin_list().clear();
   net.get_load_pin_list().clear();
 
-  for (std::string& pin_name : net.get_pin_name_list()) {
+  // Names are borrowed from the unchanged net pin list for this call only.
+  std::unordered_set<std::string_view> seen;
+  seen.reserve(net.get_pin_name_list().size());
+  for (const std::string& pin_name : net.get_pin_name_list()) {
     Pin& pin = database.get_pin_map()[pin_name];
     pin.set_net_name(net_name);
-    makeUniqueName(net.get_load_pin_list(), pin_name);
+    if (seen.insert(pin_name).second) {
+      net.get_load_pin_list().push_back(pin_name);
+    }
   }
 }
 

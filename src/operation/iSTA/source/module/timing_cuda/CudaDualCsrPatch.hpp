@@ -20,6 +20,12 @@ struct CudaRcBindingChange
   CsrParasiticBinding expected, replacement;
 };
 
+struct CudaSeedLoadChange
+{
+  NodeId node;
+  ArcOutputLoadMatrix expected, replacement;
+};
+
 // Only changed data crosses this boundary; no full CPU graph or timing shadow.
 struct CudaDualCsrPatch
 {
@@ -44,6 +50,7 @@ struct CudaDualCsrPatch
   // Borrow immutable session models until stage() finishes its stream work.
   // Only newly introduced RC load-cell types are needed.
   std::map<std::string, std::reference_wrapper<const ReferencedLibraryCellModel>> rc_load_cells;
+  std::vector<CudaSeedLoadChange> seed_load_changes;
   std::vector<StartSeedModel> appended_start_seeds;
   std::vector<EndpointRequiredModel> appended_endpoints;
 };

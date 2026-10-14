@@ -110,14 +110,6 @@ void compressSha256(std::array<std::uint32_t, 8>& state, std::span<const std::ui
 
 }  // namespace
 
-std::string componentFingerprint(std::string_view domain, std::span<const std::uint8_t> payload)
-{
-  CanonicalEncoder encoder;
-  encoder.appendDomain(domain);
-  encoder.appendBytes(payload);
-  return sha256Hex(encoder.bytes());
-}
-
 namespace {
 
 constexpr std::array<std::uint32_t, 8> kSha256Initial
@@ -162,7 +154,48 @@ std::string digestHex(const std::array<std::uint8_t, 32>& digest)
   return result;
 }
 
+std::string fingerprintPayload(CanonicalEncoder& prefix, std::span<const std::uint8_t> payload)
+{
+  // Hash the existing length-prefixed bytes without making another payload-sized copy.
+  prefix.appendU64(payload.size());
+  const auto header = std::span<const std::uint8_t>(prefix.bytes());
+  checkSha256Size(header.size());
+  if (payload.size() > std::numeric_limits<std::uint64_t>::max() / 8 - header.size())
+    throw std::length_error("SHA-256 input is too large");
+  auto state = kSha256Initial;
+  std::array<std::uint8_t, 64> tail{};
+  std::size_t tail_size = 0;
+  for (auto bytes : {header, payload}) {
+    if (tail_size != 0) {
+      const auto count = std::min(tail.size() - tail_size, bytes.size());
+      std::copy_n(bytes.begin(), count, tail.begin() + tail_size);
+      tail_size += count;
+      bytes = bytes.subspan(count);
+      if (tail_size == tail.size()) {
+        compressSha256(state, tail);
+        tail_size = 0;
+      }
+    }
+    while (bytes.size() >= tail.size()) {
+      compressSha256(state, std::span<const std::uint8_t, 64>(bytes.data(), 64));
+      bytes = bytes.subspan(64);
+    }
+    if (!bytes.empty()) {
+      std::ranges::copy(bytes, tail.begin());
+      tail_size = bytes.size();
+    }
+  }
+  return digestHex(finishSha256(state, std::span<const std::uint8_t>(tail.data(), tail_size), header.size() + payload.size()));
+}
+
 }  // namespace
+
+std::string componentFingerprint(std::string_view domain, std::span<const std::uint8_t> payload)
+{
+  CanonicalEncoder encoder;
+  encoder.appendDomain(domain);
+  return fingerprintPayload(encoder, payload);
+}
 
 std::array<std::uint8_t, 32> sha256(std::span<const std::uint8_t> value)
 {
@@ -228,8 +261,7 @@ CsrSnapshotIdentity makeSnapshotIdentity(std::uint64_t session_token, std::uint6
   timing_input.appendString(identity.library_fingerprint);
   timing_input.appendString(identity.corner_fingerprint);
   timing_input.appendString(identity.parasitic_fingerprint);
-  timing_input.appendBytes(payloads.timing_input);
-  identity.timing_input_fingerprint = sha256Hex(timing_input.bytes());
+  identity.timing_input_fingerprint = fingerprintPayload(timing_input, payloads.timing_input);
   return identity;
 }
 

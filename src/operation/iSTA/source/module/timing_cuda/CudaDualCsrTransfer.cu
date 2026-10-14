@@ -130,6 +130,8 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
     for (Index i = 0; i < std::min(row.count, item.replacement_count); ++i)
       slots.push_back({row.buffer.data + i, 0});
   }
+  packed.seeds.reserve(packed.seed_loads.size());
+  for (const auto& load : packed.seed_loads) packed.seeds.push_back({load.slot});
   auto& arcs = packed.arcs;
   arcs.reserve(packed.payloads.size() + packed.deactivations.size());
   for (const auto& item : packed.payloads)
@@ -150,6 +152,11 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
   device.reverse_count = packed.reverse_changes.size();
   device.payloads = reserve(storage->payloads, packed.payloads.size());
   device.payload_count = packed.payloads.size();
+  device.seed_nodes = seed_nodes;
+  device.seed_loads = reserve(storage->seed_loads, packed.seed_loads.size());
+  device.seed_load_count = packed.seed_loads.size();
+  reserve(storage->seed_undo, packed.seeds.size());
+  storage->seed_undo_count = packed.seeds.size();
   device.deactivations = reserve(storage->deactivations, packed.deactivations.size());
   device.deactivate_count = packed.deactivations.size();
   device.aux_patches = reserve(storage->aux_patches, packed.aux_patches.size());
@@ -195,14 +202,16 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
     memory.upload(packed.changes, device.changes);
     memory.upload(packed.reverse_changes, device.reverse_changes);
     memory.upload(packed.payloads, device.payloads);
+    memory.upload(packed.seed_loads, device.seed_loads);
+    memory.upload(packed.seeds, storage->seed_undo.data);
     memory.upload(packed.deactivations, device.deactivations);
     memory.upload(packed.aux_patches, device.aux_patches);
     memory.upload(packed.aux_values, device.aux_values);
     memory.upload(slots, storage->slot_undo.data);
     memory.upload(arcs, storage->arc_undo.data);
-    launchCaptureUndo(view, storage->slot_undo.data, slots.size(), storage->arc_undo.data, arcs.size(), memory.stream(), storage->kernel_threads);
+    launchCaptureUndo(view, storage->slot_undo.data, slots.size(), storage->arc_undo.data, arcs.size(), seed_nodes, storage->seed_undo.data, packed.seeds.size(), memory.stream(), storage->kernel_threads);
     storage->undo_captured = true;
-    telemetry.cuda.kernel_launches += !slots.empty() || !arcs.empty();
+    telemetry.cuda.kernel_launches += !slots.empty() || !arcs.empty() || !packed.seeds.empty();
     memory.record(1);
     telemetry.cuda.kernel_launches += launchTargetedPatch(view, device, memory.stream(), storage->kernel_threads);
     // Upload vectors are session-owned. execute waits before publication or

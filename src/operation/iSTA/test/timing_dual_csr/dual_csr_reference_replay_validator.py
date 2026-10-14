@@ -525,7 +525,7 @@ def run_reference_replay_self_test(require: Require) -> None:
                    "path_source": "input", "clock_tag": "clk",
                    "arrival": [[zero, zero], [zero, zero]],
                    "slew": [[zero, zero], [zero, zero]],
-                   "crpr_node": None, "crpr_transition": None}
+                   "crpr_node": None, "crpr_transition": None, "output_load": None}
     seed_after = {**seed_before, "clock_tag": "next"}
     appended_seed = {**seed_before, "seed_node": 1, "path_start_node": 1}
     seed_delta: dict[str, Any] = {"expected_size": 1, "changes": [

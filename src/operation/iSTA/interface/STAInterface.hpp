@@ -177,8 +177,6 @@ class STAInterface
   void wrapNet(idb::IdbNet* idb_net);
   void wrapNetPinList(idb::IdbNet* idb_net, Net& net);
   void wrapNetPinList(idb::IdbPins* io_pin_list, idb::IdbPins* instance_pin_list, Net& net);
-  void wrapNetPin(idb::IdbPin* idb_pin, Net& net);
-  void wrapNetPinNameList(Net& net, std::string& pin_name);
   void wrapNetToDatabase(Net& net);
   void wrapTimingLibrary();
   void wrapTimingCellMap(std::vector<std::unique_ptr<idb::LibLibrary>>& lib_list);

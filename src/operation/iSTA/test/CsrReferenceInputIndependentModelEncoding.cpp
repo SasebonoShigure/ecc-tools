@@ -221,6 +221,10 @@ void appendStartSeed(Writer& writer, const StartSeedModel& seed)
   appendOptionalMatrix(writer, seed.slew);
   appendOptionalNodeId(writer, seed.crpr_node);
   appendOptionalTransition(writer, seed.crpr_transition);
+  writer.appendOptional(seed.output_load, [](Writer& local, const ArcOutputLoadMatrix& load) {
+    for (const auto& row : load)
+      appendPair(local, row);
+  });
 }
 
 void appendEndpointRequired(Writer& writer, const EndpointRequiredModel& endpoint)

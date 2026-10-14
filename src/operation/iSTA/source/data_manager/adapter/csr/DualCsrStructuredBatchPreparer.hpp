@@ -65,10 +65,8 @@ class PendingStructuredBatch final
   {
     return {_expected_before.resolver(), _resolver_delta};
   }
-  [[nodiscard]] const AffectedCapturePlan& capturePlan() const noexcept
-  {
-    return _capture_plan;
-  }
+  // Explicit native capture only; direct CSR preparation does not need it.
+  [[nodiscard]] const AffectedCapturePlan& capturePlan() const;
   [[nodiscard]] const ExpectedBeforeBinding& expectedBefore()
       const noexcept
   {
@@ -79,18 +77,16 @@ class PendingStructuredBatch final
   PendingStructuredBatch(
       timing_edit::PreparedBatch prepared_batch,
       timing_edit::TimingEditResolverDelta resolver_delta,
-      AffectedCapturePlan capture_plan,
       ExpectedBeforeBinding expected_before)
       : _prepared_batch(std::move(prepared_batch)),
         _resolver_delta(std::move(resolver_delta)),
-        _capture_plan(std::move(capture_plan)),
         _expected_before(std::move(expected_before))
   {
   }
 
   timing_edit::PreparedBatch _prepared_batch;
   timing_edit::TimingEditResolverDelta _resolver_delta;
-  AffectedCapturePlan _capture_plan;
+  mutable std::optional<AffectedCapturePlan> _capture_plan;
   ExpectedBeforeBinding _expected_before;
 
   friend class DualCsrStructuredBatchPreparer;

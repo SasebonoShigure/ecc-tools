@@ -144,6 +144,7 @@ if(BUILD_TESTING)
       ${ISTA_TEST}/timing_dual_csr/DirectCsrBufferEditTest.cpp
       ${ISTA_DUAL_CSR_STRUCTURED_TEST_SUPPORT})
   target_include_directories(ista_timing_direct_csr_edit_test PRIVATE
+      ${ISTA_MODULE}/graph_builder
       ${ISTA_MODULE}/timing_csr_snapshot
       ${ISTA_TEST}/timing_dual_csr ${ISTA_TEST}/timing_edit)
   target_link_libraries(ista_timing_direct_csr_edit_test PRIVATE

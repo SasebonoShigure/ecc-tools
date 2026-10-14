@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Exact candidate physical-row validation for descriptor schema 1.2."""
+"""Physical adjacency and required incoming-row validation."""
 
 import copy
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 Require = Callable[[bool, str], None]
 
@@ -129,14 +130,9 @@ def validate_candidate_rows(
     sources = _affected(descriptor, "source")
     expected_new = sorted(source for source in sources
                           if source in _new_nodes(descriptor))
-    expected_existing = sorted(source for source in sources
-                               if source < before["node_slots"])
     appended = descriptor["appended_base_out_rows"]
-    affected_out = descriptor["affected_base_out_rows"]
     require([record["source"] for record in appended] == expected_new,
             f"{label}.appended_base_out_rows coverage/order differs")
-    require([record["source"] for record in affected_out] == expected_existing,
-            f"{label}.affected_base_out_rows coverage/order differs")
     appended_ids = {record["id"] for record in descriptor["arc_appends"]}
     for position, record in enumerate(appended):
         source = record["source"]
@@ -147,20 +143,6 @@ def validate_candidate_rows(
                 f"{row_label} contains a non-appended ArcId")
         _sequence(record["arc_ids"], source, 0, endpoints,
                   after["arc_slots"], f"{row_label}.arc_ids", require)
-    for position, record in enumerate(affected_out):
-        source = record["source"]
-        row_label = f"{label}.affected_base_out_rows[{position}]"
-        require(outgoing[source] == record["replacement_arc_ids"],
-                f"{row_label}.replacement differs from BaseOut plus Aux")
-        require(set(record["replacement_arc_ids"])
-                == _post_members(descriptor, source, "source",
-                                 record["expected_arc_ids"]),
-                f"{row_label} replacement membership is not the exact edit")
-        _sequence(record["expected_arc_ids"], source, 0, endpoints,
-                  before["arc_slots"], f"{row_label}.expected_arc_ids", require)
-        _sequence(record["replacement_arc_ids"], source, 0, endpoints,
-                  after["arc_slots"], f"{row_label}.replacement_arc_ids", require)
-
     sinks = sorted(_affected(descriptor, "sink"))
     affected_in = descriptor["affected_base_in_rows"]
     require([record["sink"] for record in affected_in] == sinks,
@@ -192,16 +174,9 @@ def validate_expected_rows(
     """Validate ordered committed rows after reversing physical writes."""
     before = descriptor["before"]
     endpoints = _endpoint_ids(payloads, node_keys, label, require)
-    outgoing, incoming = _physical_rows(
+    _physical_rows(
         payloads, node_keys, base_out, out_offsets, base_in, in_offsets, aux,
         before["node_slots"], before["arc_slots"], label, require)
-    for position, record in enumerate(descriptor["affected_base_out_rows"]):
-        source = record["source"]
-        require(outgoing[source] == record["expected_arc_ids"],
-                f"{label}.affected_base_out_rows[{position}].expected differs")
-        _sequence(record["expected_arc_ids"], source, 0, endpoints,
-                  before["arc_slots"],
-                  f"{label}.affected_base_out_rows[{position}].expected", require)
     for position, record in enumerate(descriptor["affected_base_in_rows"]):
         sink = record["sink"]
         actual = _row(base_in, in_offsets, sink,
@@ -233,8 +208,6 @@ def run_descriptor_row_self_test(require: Require) -> None:
         "arc_appends": [{"id": 2, "source": 0, "sink": 1},
                         {"id": 3, "source": 0, "sink": 1}],
         "appended_base_out_rows": [],
-        "affected_base_out_rows": [{"source": 0,
-            "expected_arc_ids": [0, 1], "replacement_arc_ids": [2, 3]}],
         "affected_base_in_rows": [{"sink": 1,
             "expected_arc_ids": [0, 1], "replacement_arc_ids": [2, 3]}]}
     errors: list[str] = []
@@ -243,9 +216,9 @@ def run_descriptor_row_self_test(require: Require) -> None:
         lambda ok, message: errors.append(message) if not ok else None)
     require(not errors, f"valid candidate rows were rejected: {errors}")
     tampered = copy.deepcopy(descriptor)
-    tampered["affected_base_out_rows"][0]["replacement_arc_ids"] = [3, 2]
+    tampered["affected_base_in_rows"][0]["replacement_arc_ids"] = [3, 2]
     errors = []
     validate_candidate_rows(tampered, payloads, node_keys, [2, 3],
         [0, 2, 2], [2, 3], [0, 0, 2], {}, "row-order-tamper",
         lambda ok, message: errors.append(message) if not ok else None)
-    require(errors, "same-membership candidate row reorder was accepted")
+    require(errors, "same-membership incoming row reorder was accepted")

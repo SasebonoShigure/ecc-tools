@@ -121,9 +121,14 @@ void runCudaParallelPatchContracts(CudaLevelizationMode mode)
     auto payloads = patchFor(input, 1, water, water);
     for (const auto& arc : first.arc_appends) {
       auto replacement = arc.payload;
-      replacement.output_load = outputLoad(0.001 * arc.id.value());
+      replacement.is_loop_disabled = true;
+      replacement.eligibility = {};
       payloads.payload_changes.push_back({arc.id, arc.payload, replacement});
     }
+    auto disabled_roots = roots;
+    for (const auto& node : first.node_appends)
+      if (node.id.value() % 2 == 1) disabled_roots.push_back(node.id);
+    payloads.roots = ValueReplacement<std::vector<NodeId>>{roots, disabled_roots};
     {
       auto abandoned = owner.stage(payloads, mode);
       require(!abandoned.computationCode(), "cross-block payload update failed");
@@ -136,7 +141,7 @@ void runCudaParallelPatchContracts(CudaLevelizationMode mode)
     payloads.removes = {{NodeId{0}, 0, ArcId{0}}};
     payloads.aux_rows = {{NodeId{0}, {}, {ArcId{0}}}};
     for (std::size_t i = 0; i < payloads.payload_changes.size(); i += 2)
-      payloads.payload_changes[i].expected.output_load = outputLoad(999.0);
+      payloads.payload_changes[i].expected.eligibility.data_arrival = false;
     auto failed = owner.stage(payloads, mode);
     require(failed.computationCode() == CsrComputationCode::kInvariantViolation && !owner.poisoned()
                 && CudaDualCsrTestReader::capture(owner) == committed,

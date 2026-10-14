@@ -1,6 +1,7 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #pragma once
+#include <utility>
 #include <optional>
 #include "CudaDualCsrSession.hpp"
 #include "CudaCsrEditState.hpp"
@@ -28,8 +29,12 @@ class StaCudaSessionState final
   void materialize(Database& database, const timing_edit::NativeExecutionAuthority& authority);
   // Caller owns DelayCalculator runtime as well as the session operation guard.
   void prepareReport();
+  const std::pair<std::string, std::string>& readReport(Database& database,
+      const timing_edit::NativeExecutionAuthority& authority);
   void materializeBaseline(Database& database);
   SemanticCsrNativeView _native_view;
+  std::pair<std::string, std::string> _csr_report;
+  std::optional<timing_edit::TransactionGeneration> _csr_report_generation;
   bool _poisoned{false};
   const std::uint64_t _token;
   std::array<csr::AnalysisMode, csr::kAnalysisCount> _analysis_order;

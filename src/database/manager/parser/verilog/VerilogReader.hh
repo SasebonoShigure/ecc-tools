@@ -411,7 +411,7 @@ class VerilogReader
   VerilogReader(VerilogReader&& other) noexcept = default;
   VerilogReader& operator=(VerilogReader&& rhs) noexcept = default;
 
-  void* get_verilog_file_ptr() { return _verilog_file_ptr; }
+  void* get_verilog_file_ptr() { return _verilog_file_ptr.get(); }
   auto* get_top_module() { return _top_module; }
   auto& get_verilog_modules() { return _verilog_modules; }
 
@@ -420,7 +420,7 @@ class VerilogReader
   unsigned flattenModule(const char* top_module_name);
 
  private:
-  void* _verilog_file_ptr = nullptr;  //!< The parsed Verilog file handle.
+  std::unique_ptr<void, decltype(&verilog_free_file)> _verilog_file_ptr{nullptr, verilog_free_file};
   std::string _top_module_name;
   std::vector<ParsedVerilogModule*> _verilog_modules;  //!< The current design parsed from verilog file.
   ParsedVerilogModule* _top_module = nullptr;          //!< The design top module.

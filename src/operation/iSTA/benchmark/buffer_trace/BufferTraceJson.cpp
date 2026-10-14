@@ -122,7 +122,7 @@ Json plansJson(const timing_edit::BaselineSemanticIdentity& baseline, const std:
 }
 Json defaultBaselineJson()
 {
-  return {{"design_name", ""}, {"fingerprints", {{"schema_version", csr::kCsrSchemaVersion}, {"topology", ""},
+  return {{"design_name", ""}, {"fingerprints", {{"schema_version", csr::kCsrFingerprintSchemaVersion}, {"topology", ""},
       {"clock_constraint", ""}, {"library", ""}, {"corner", ""}, {"parasitic", ""}, {"timing_input", ""}}},
       {"canonical_pre_state", {{"instances", Json::array()}, {"nets", Json::array()}, {"nodes", Json::array()}, {"arcs", Json::array()}}}};
 }

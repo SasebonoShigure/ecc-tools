@@ -327,6 +327,18 @@ CsrNativeGraphFixture makeNativeGraphFixture(NativeGraphFixtureCase fixture_case
     case NativeGraphFixtureCase::kUnboundFallback:
       populateUnboundFallback(database);
       break;
+    case NativeGraphFixtureCase::kMixedFallback:
+      populateUnboundFallback(database);
+      addBoundCell(database, false);
+      addInstancePin(database, "bound", "A", ista::PinDirection::kInput);
+      addInstancePin(database, "bound", "Y", ista::PinDirection::kOutput);
+      addInstance(database, "bound", "BUF_X1", {"bound:A", "bound:Y"});
+      addBoundCellArc(database, "bound");
+      addBoundCellArc(database, "bound");
+      setStartEnd(database, {"fallback:A", "bound:A"}, {"fallback:Y", "bound:Y"});
+      setTimingState(database, {"bound:A", "fallback:A", "bound:Y", "fallback:Y"},
+                     {{"fallback:A", 1}, {"bound:A", 1}, {"fallback:Y", 2}, {"bound:Y", 2}});
+      break;
     case NativeGraphFixtureCase::kBoundSignature:
       populateChain(database, true);
       break;

@@ -63,9 +63,11 @@ def _value_matrix(value: float) -> tuple[tuple[float, float], tuple[float, float
 def _start_seeds(
     candidate: model.CandidateInput,
     facts: graph_oracle.GraphFacts,
+    net_loads: dict[str, tuple[tuple[float, float], tuple[float, float]]],
 ) -> tuple[model.CandidateStartSeed, ...]:
     constraints = transfer_oracle.index_port_constraints(candidate)
     result: list[model.CandidateStartSeed] = []
+    rc_nets = {net.map_key for net in candidate.parasitics.nets}
     for node_id in facts.expected_start_ids:
         node = candidate.nodes[node_id]
         instance = facts.instance_by_node[node_id]
@@ -153,6 +155,9 @@ def _start_seeds(
                 slew,
                 crpr_node,
                 crpr_transition,
+                net_loads.get(node.net_name, ((0.0, 0.0), (0.0, 0.0)))
+                if availability == model.StartSeedAvailability.DEFERRED_SEQUENTIAL
+                and node.is_output_pin and node.net_name not in rc_nets else None,
             )
         )
 
@@ -267,7 +272,7 @@ def recompute_model(
     if facts is None:
         facts = graph_oracle.recompute_graph(candidate, raw)
     transfer = transfer_oracle.recompute_transfer(candidate, raw, facts)
-    seeds = _start_seeds(candidate, facts)
+    seeds = _start_seeds(candidate, facts, transfer.net_loads)
     endpoints = _endpoint_required(candidate, facts)
     reasons = _unsupported(candidate, facts)
     return ModelFacts(

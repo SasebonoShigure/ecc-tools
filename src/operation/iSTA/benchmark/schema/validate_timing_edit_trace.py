@@ -492,7 +492,7 @@ def _signature() -> dict[str, object]:
 def _fingerprints(digit: str) -> dict[str, object]:
     value = digit * 64
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "2.0.0",
         "topology": value,
         "clock_constraint": value,
         "library": value,

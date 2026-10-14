@@ -174,6 +174,7 @@ int main(int argc, char** argv)
           timing_edit::oracle::ProductionFreshSessionLoader::run(
               artifacts.artifacts(), [&](const auto& view) {
                 static_cast<void>(csr::CudaTargetedTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority, program, 1, strategy));
+                view.session_context.materializeCudaTiming(view.database, view.authority);
                 auto exported = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
                 require(std::holds_alternative<csr::CsrReferenceInput>(exported), "committed prefix graph export failed");
                 require(after_failure == csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(exported)),

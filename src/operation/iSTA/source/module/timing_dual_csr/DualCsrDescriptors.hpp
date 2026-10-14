@@ -126,16 +126,6 @@ struct AppendedBaseOutRowDescriptor
                          const AppendedBaseOutRowDescriptor&) = default;
 };
 
-struct AffectedBaseOutRowDescriptor
-{
-  csr::NodeId source;
-  std::vector<csr::ArcId> expected_arc_ids;
-  std::vector<csr::ArcId> replacement_arc_ids;
-
-  friend bool operator==(const AffectedBaseOutRowDescriptor&,
-                         const AffectedBaseOutRowDescriptor&) = default;
-};
-
 struct AffectedBaseInRowDescriptor
 {
   csr::NodeId sink;
@@ -176,8 +166,6 @@ struct DualCsrBatchDescriptor
   std::vector<AuxOutRowDescriptor> aux_rows;
   std::vector<AppendedBaseOutRowDescriptor>
       appended_base_out_rows;
-  std::vector<AffectedBaseOutRowDescriptor>
-      affected_base_out_rows;
   std::vector<AffectedBaseInRowDescriptor>
       affected_base_in_rows;
   DualCsrReferencePayloadDelta reference_payload;

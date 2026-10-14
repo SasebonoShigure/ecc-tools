@@ -120,7 +120,7 @@ inline nlohmann::json runStage12Benchmark(const std::map<std::string, std::strin
                              {"executed_backend", "cpu"}, {"executed_strategy", "incremental"}});
       } else if (strategy == "full") {
         const auto result = csr::CudaFullTraceReplayer::run(view.session_context, view.database, view.reference_input,
-            view.authority, program, prefix, [&] { consumer(); });
+            view.authority, program, prefix, [&] { consumer.consumeCuda(view.session_context, view.database, view.authority); });
         timings = Json::array();
         backend_setup_ms = result.backend_setup_ms;
         device = device_info(result.batches.front().cuda);
@@ -135,7 +135,7 @@ inline nlohmann::json runStage12Benchmark(const std::map<std::string, std::strin
                              {"h2d_bytes", t.cuda.h2d_bytes}, {"d2h_bytes", t.cuda.d2h_bytes}});
       } else {
         const auto result = csr::CudaTargetedTraceReplayer::run(view.session_context, view.database, view.reference_input,
-            view.authority, program, prefix, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError, [&] { consumer(); });
+            view.authority, program, prefix, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError, [&] { consumer.consumeCuda(view.session_context, view.database, view.authority); });
         timings = Json::array();
         backend_setup_ms = result.backend_setup_ms;
         device = device_info(result.batches.front().device.cuda);

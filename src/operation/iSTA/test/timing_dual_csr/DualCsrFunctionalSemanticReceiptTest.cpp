@@ -127,6 +127,20 @@ void rankAndStorageHistoryAreNotFunctional()
           "canonical NodeKey/ArcKey ordering was not preserved");
 }
 
+void timingSchemaIsIndependentOfInput()
+{
+  const auto state = baselineState();
+  auto result = timingFor(state);
+  require(result.values.schema_version == csr::kCsrSchemaVersion
+              && result.values.schema_version != state.reference_payload.schema_version,
+          "timing result inherited the input schema");
+  result.values.schema_version = state.reference_payload.schema_version;
+  const auto errors = validateDualCsrTimingResult(state, result);
+  require(std::ranges::any_of(errors, [](const auto& error) {
+    return error.field == "result.schema_version";
+  }), "validator accepted an input schema as a timing result schema");
+}
+
 void requiredMinimumCannotBeWeakened()
 {
   const auto state = baselineState();
@@ -197,6 +211,7 @@ int main()
 {
   try {
     ista::timing_dual_csr::test::rankAndStorageHistoryAreNotFunctional();
+    ista::timing_dual_csr::test::timingSchemaIsIndependentOfInput();
     ista::timing_dual_csr::test::requiredMinimumCannotBeWeakened();
     ista::timing_dual_csr::test::clockOwnershipAndPhysicalCausality();
     ista::timing_dual_csr::test::semanticDifferenceIsVisible();

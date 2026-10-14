@@ -133,7 +133,6 @@ CsrReferenceInput dividerInput()
   arc.transfer.delay = 0.0;
   arc.transfer.delay_min = 0.0;
   arc.transfer.delay_max = 0.0;
-  arc.output_load = outputLoad(0.1);
   input.arcs = {arc};
   input.arc_ids_by_key = {{arc.key, ArcId{0}}};
   input.out_row_offsets = {0};
@@ -163,9 +162,9 @@ CsrReferenceInput dividerInput()
   cell.clock_pin_name = "CK";
   cell.data_pin_name = "D";
   cell.output_pin_name = "Q";
-  cell.ports = {LibraryPortModel{.name = "CK", .direction = PinDirection::kInput, .is_clock = true, .default_capacitance = 0.1},
-                LibraryPortModel{.name = "D", .direction = PinDirection::kInput, .default_capacitance = 0.1},
-                LibraryPortModel{.name = "Q", .direction = PinDirection::kOutput, .is_output = true, .default_capacitance = 0.1}};
+  cell.ports = {LibraryPortModel{.name = "CK", .direction = PinDirection::kInput, .is_clock = true, .default_capacitance = 0.1, .transition_capacitance = {}},
+                LibraryPortModel{.name = "D", .direction = PinDirection::kInput, .default_capacitance = 0.1, .transition_capacitance = {}},
+                LibraryPortModel{.name = "Q", .direction = PinDirection::kOutput, .is_output = true, .default_capacitance = 0.1, .transition_capacitance = {}}};
   cell.cell_arcs = {LibraryCellArcModel{"CK", "Q", selected_transfer}};
   cell.timing_checks = {[] { LibraryTimingCheckArcModel check; check.clock_port = "CK"; check.data_port = "D"; check.kind = TimingCheckKind::kSetup; return check; }()};
   input.referenced_library_cells = {cell};
@@ -196,6 +195,12 @@ CsrReferenceInput dividerInput()
       makeUnsupportedSequentialNull(seed);
       input.start_seeds.push_back(seed);
     }
+  }
+  for (auto& seed : input.start_seeds) {
+    if (seed.seed_node == u1_q)
+      seed.output_load = outputLoad(0.1);
+    else if (seed.seed_node == u2_q)
+      seed.output_load = outputLoad(0.0);
   }
   input.clock_tags = {"clk"};
   for (const NodeId node : {u1_ck, u1_q, u2_ck, u2_q})

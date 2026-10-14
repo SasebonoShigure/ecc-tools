@@ -66,12 +66,11 @@ StaStatus STAInterface::runOwnedCudaBaseline(std::uint64_t token, StaCsrSessionC
     std::vector<StaLifecycleStage> stages{
         {"GraphBuilder", [] { GraphBuilder::initInst(); }, [] { STAGB.buildStructure(); }, [] { GraphBuilder::destroyInst(); }},
         {"CUDA full timing", [] {}, compute, [] {}},
-        {"CUDA timing consumer", [] {}, [&] { context->_cuda->materializeBaseline(STADM.getDatabase()); }, [] {}},
     };
-    if (include_artifacts)
-      stages.push_back({"PowerPropagator", [] { PowerPropagator::initInst(); }, [] { STAPP.propagate(); }, [] { PowerPropagator::destroyInst(); }});
-    stages.push_back({"CUDA report preparation", [] {}, [&] { context->_cuda->prepareReport(); }, [] {}});
     if (include_artifacts) {
+      stages.push_back({"CUDA timing consumer", [] {}, [&] { context->_cuda->materializeBaseline(STADM.getDatabase()); }, [] {}});
+      stages.push_back({"PowerPropagator", [] { PowerPropagator::initInst(); }, [] { STAPP.propagate(); }, [] { PowerPropagator::destroyInst(); }});
+      stages.push_back({"CUDA report preparation", [] {}, [&] { context->_cuda->prepareReport(); }, [] {}});
       stages.push_back({"PowerAnalyzer", [] { PowerAnalyzer::initInst(); }, [] { STAPA.analyze(); }, [] { PowerAnalyzer::destroyInst(); }});
       stages.push_back({"TimingReporter", [] { TimingReporter::initInst(); }, [] { STATR.report(); }, [] { TimingReporter::destroyInst(); }});
       stages.push_back({"PowerReporter", [] { PowerReporter::initInst(); }, [] { STAPR.report(); }, [] { PowerReporter::destroyInst(); }});

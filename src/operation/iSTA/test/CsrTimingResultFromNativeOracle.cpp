@@ -425,7 +425,6 @@ CsrTimingResult materializeTimingResultFromNativeOracle(const CsrReferenceInput&
   }
 
   CsrTimingResult result;
-  result.schema_version = input.schema_version;
   result.source_identity = input.source_identity;
   materializeNodes(input, oracle, result);
   materializePaths(input, oracle, result);

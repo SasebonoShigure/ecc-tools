@@ -63,6 +63,10 @@ CudaDualCsrPatch detail::makeCudaTargetedPatch(const timing_dual_csr::DualCsrSta
     for (const auto& seed : descriptor.reference_payload.start_seeds->changes) {
       collect(old, seed.expected.parasitic);
       collect(next, seed.replacement.parasitic);
+      if (seed.expected.output_load != seed.replacement.output_load) {
+        require(seed.expected.output_load && seed.replacement.output_load, "CUDA Q load changed parasitic mode");
+        patch.seed_load_changes.push_back({seed.replacement.seed_node, *seed.expected.output_load, *seed.replacement.output_load});
+      }
     }
   for (const auto& [node, binding] : next) {
     const auto previous = old.find(node);

@@ -185,12 +185,43 @@ void verifyRichChain()
               && allPresent(clock_seed.slew) && clock_seed.clock_tag == "embedded_clk",
           "direct input-clock seed materialization or tag priority is wrong");
 
-  require(std::ranges::all_of(first.arcs, [](const ArcRecord& arc) { return arc.output_load.has_value(); }),
-          "no-SPEF export must materialize every output-load matrix");
+  require(std::ranges::all_of(first.arcs, [](const ArcRecord& arc) { return arc.output_load.has_value() == (arc.kind == ArcKind::kCell); }),
+          "no-SPEF export must retain load only on Cell arcs");
   const auto divider = std::ranges::find(first.arcs, "div_net", [](const ArcRecord& arc) { return arc.key.base.owner_name; });
   require(divider != first.arcs.end() && divider->kind == ArcKind::kNet && divider->is_disabled, "sequential divider exact disabled mirror is absent");
   const std::vector expected_reasons = {CsrReferenceUnsupportedReason::kClockGatingOrDivider, CsrReferenceUnsupportedReason::kCaseAnalysis};
   require(first.unsupported_reasons == expected_reasons, "rich chain support reasons are not exact-derived and sorted");
+}
+
+void verifySequentialOutputLoads()
+{
+  auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
+  auto& database = fixture.database();
+  std::erase_if(database.get_arc_list(), [](const auto& arc) { return arc.get_type() == ista::ArcType::kCell; });
+  database.get_outgoing_arc_list_map().clear();
+  database.get_incoming_arc_list_map().clear();
+  for (std::size_t rank = 0; rank < database.get_arc_list().size(); ++rank) {
+    const auto& arc = database.get_arc_list()[rank];
+    database.get_outgoing_arc_list_map()[arc.get_source_pin()].push_back(rank);
+    database.get_incoming_arc_list_map()[arc.get_sink_pin()].push_back(rank);
+  }
+  const auto input = exportWithoutNativeWrites(fixture, referenceInputTestContext(), 73, "Q loads");
+  const auto& divider = seedByName(input, "ff0:Q");
+  const auto& output = seedByName(input, "ff1:Q");
+  require(divider.output_load.has_value() && output.output_load.has_value(), "Q seed lost no-RC output load");
+  for (std::size_t a = 0; a < kAnalysisCount; ++a)
+    for (std::size_t t = 0; t < kTransitionCount; ++t) {
+      const double expected = 0.12 + (a == 0 && t == 0 ? 0.01 : a == 1 && t == 1 ? 0.02 : 0.0);
+      require((*divider.output_load)[a][t] == expected && (*output.output_load)[a][t] == 0.3,
+              "Q seed differs from independent pin/port capacitance");
+    }
+  require(!seedByName(input, "ff0:CK").output_load, "clock seed retained an unused output load");
+  addParasitics(fixture.database(), "q-load.spef");
+  auto context = referenceInputTestContext();
+  context.rc_corner = "typical_rc";
+  const auto rc = exportWithoutNativeWrites(fixture, context, 74, "Q RC loads");
+  require(!seedByName(rc, "ff0:Q").output_load && seedByName(rc, "ff1:Q").output_load == output.output_load,
+          "RC suppressed an unrelated Q load or retained a no-RC duplicate");
 }
 
 void verifyEmptyDiamondAndCycle()
@@ -219,7 +250,7 @@ void verifyParasiticNetLoadsAndPathExclusion()
   require(first.parasitics.nets.size() == 1 && first.parasitics.nets[0].nodes.size() == 2 && first.parasitics.nets[0].resistors.size() == 1,
           "raw parasitic semantic was not detached completely");
   require(std::ranges::all_of(first.arcs, [&](const ArcRecord& arc) {
-            return arc.output_load.has_value() != (first.nodes[arc.sink.value()].net_name == "div_net");
+            return arc.output_load.has_value() == (arc.kind == ArcKind::kCell && first.nodes[arc.sink.value()].net_name != "div_net");
           }), "parasitics must only suppress the corresponding net load");
   require(!first.unsupported_reasons.empty() && first.unsupported_reasons.front() == CsrReferenceUnsupportedReason::kParasiticNet,
           "parasitic support reason is missing or unsorted");
@@ -307,6 +338,7 @@ int main()
 {
   try {
     verifyRichChain();
+    verifySequentialOutputLoads();
     verifyEmptyDiamondAndCycle();
     verifyParasiticNetLoadsAndPathExclusion();
     verifyIdentityAndSessionBinding();

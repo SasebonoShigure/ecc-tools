@@ -25,7 +25,6 @@ inline void constrainPorts(Database& database)
 }
 struct PhysicalDesign
 {
-  std::unique_ptr<idb::IdbCellMaster> master;
   idb::IdbLayout layout;
   idb::IdbDefService service{&layout};
   idb::IdbDesign& design{*service.get_design()};
@@ -47,7 +46,7 @@ struct PhysicalDesign
       layer->set_width(vertical ? 400 : 200);
       layer->set_resistance(0.2); layer->set_capacitance(0.01); layer->set_edge_capacitance(0.001);
     }
-    master.reset(layout.get_cell_master_list()->set_cell_master("BUF_X1"));
+    auto* master = layout.get_cell_master_list()->set_cell_master("BUF_X1");
     master->set_site(site);
     master->set_width(1000); master->set_height(2000); master->set_type(idb::CellMasterType::kCore);
     for (bool output : {false, true}) {
@@ -70,7 +69,7 @@ struct PhysicalDesign
     }
     dmInst->set_idb_def_service(&service);
   }
-  ~PhysicalDesign() { dmInst->set_idb_def_service(previous); design.get_io_pin_list()->reset(); delete design.get_units(); design.set_units(nullptr); }
+  ~PhysicalDesign() { dmInst->set_idb_def_service(previous); }
 };
 struct RecoveryDirectory
 {

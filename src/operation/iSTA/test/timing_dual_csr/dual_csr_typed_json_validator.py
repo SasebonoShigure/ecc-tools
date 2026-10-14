@@ -290,7 +290,7 @@ def validate_reference_delta(value: object, label: str, require: Require,
 
 def validate_descriptor_schema(value: object, label: str,
                                require: Require) -> None:
-    require(value == "ista-dual-csr-update/3.0.0",
+    require(value == "ista-dual-csr-update/4.0.0",
             f"{label} exact schema differs")
 
 
@@ -301,7 +301,7 @@ def run_typed_validator_self_test(require: Require) -> None:
         if not ok:
             errors.append(message)
 
-    validate_descriptor_schema("ista-dual-csr-update/3.0.0", "schema-canary",
+    validate_descriptor_schema("ista-dual-csr-update/4.0.0", "schema-canary",
                                collect_error)
     require(not errors, f"valid descriptor schema was rejected: {errors}")
     validate_descriptor_schema("ista-dual-csr-update/1.2.0", "old-schema-canary",

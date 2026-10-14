@@ -395,9 +395,8 @@ void checkStableReresolutionAndBoundaryCanaries()
   require(verified.captureAudit() == audit,
           "verified batch changed the capture audit");
   const auto& descriptor = verified.descriptor();
-  require(descriptorHasLoad(descriptor, 0.17)
-              && descriptorHasLoad(descriptor, 0.31),
-          "verified descriptor lost native load/capacitance evidence");
+  require(!descriptorHasLoad(descriptor, 0.17) && descriptorHasLoad(descriptor, 0.31),
+          "descriptor lost Cell load or retained an unused PI Net load copy");
   auto replacement_identity
       = baseline.state.reference_payload.source_identity;
   replacement_identity.session_token

@@ -74,8 +74,8 @@ void canonicalSort(std::vector<Value>& values, Encode encode)
 void validateFingerprints(const ComponentFingerprints& value, std::string_view field, Violations& errors)
 {
   const std::string prefix(field);
-  if (value.schema_version != csr::kCsrSchemaVersion)
-    reject(errors, TimingEditContractCode::kSchemaMismatch, prefix + ".schema_version", "expected CSR fingerprint schema 1.0.0");
+  if (value.schema_version != csr::kCsrFingerprintSchemaVersion)
+    reject(errors, TimingEditContractCode::kSchemaMismatch, prefix + ".schema_version", "expected CSR fingerprint schema 2.0.0");
   const std::pair<std::string_view, const std::string*> fields[] = {{"topology", &value.topology},
                                                                    {"clock_constraint", &value.clock_constraint},
                                                                    {"library", &value.library},

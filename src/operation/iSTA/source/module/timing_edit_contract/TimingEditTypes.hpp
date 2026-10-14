@@ -185,7 +185,7 @@ using StableArcRef = std::variant<ExistingArcRef, CreatedCellArcRef, CreatedOldN
 
 struct ComponentFingerprints
 {
-  std::string schema_version{csr::kCsrSchemaVersion};
+  std::string schema_version{csr::kCsrFingerprintSchemaVersion};
   std::string topology;
   std::string clock_constraint;
   std::string library;

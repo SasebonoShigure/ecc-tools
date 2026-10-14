@@ -7,11 +7,8 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
-#include <string_view>
-#include <tuple>
 
 #include "Arc.hpp"
-#include "CanonicalGraphConstruction.hpp"
 #include "Database.hpp"
 #include "DataManager.hpp"
 #include "NativeCandidateExecutor.hpp"
@@ -34,9 +31,6 @@ AppendOnlySlot append(std::uint64_t& value)
 }
 struct Insertion
 {
-  const BufferInsertionMutation* edit;
-  TokenMaterialization names;
-  std::string driver;
   csr::ArcId cell, input;
   std::vector<std::pair<csr::ArcId, csr::ArcId>> replaced;
 };
@@ -55,12 +49,19 @@ std::size_t movedRank(const Database& database, const std::string& driver, const
 }
 void affectedNet(const Database& database, const NativeTargetedEditState& state, const std::string& net, std::set<csr::ArcId>& payloads)
 {
-  for (const auto& pin : database.get_net_map().at(net).get_pin_name_list()) {
+  const bool rc = database.get_parasitic_library().get_net_map().contains(net);
+  const auto capture = [&](const std::string& pin) {
     const auto row = database.get_incoming_arc_list_map().find(pin);
     if (row != database.get_incoming_arc_list_map().end())
       for (auto rank : row->second)
-        payloads.insert(state.native_arc_ids.at(rank));
-  }
+        if (rc || database.get_arc_list().at(rank).get_type() == ArcType::kCell)
+          payloads.insert(state.native_arc_ids.at(rank));
+  };
+  const auto& native_net = database.get_net_map().at(net);
+  if (rc)
+    for (const auto& pin : native_net.get_pin_name_list()) capture(pin);
+  else
+    capture(native_net.get_driver_pin());
 }
 }  // namespace
 
@@ -160,7 +161,7 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
     const auto cell_slot = append(slots.after.arc_slots), input_slot = append(slots.after.arc_slots);
     slots.arcs.push_back({cell_ref, cell_slot, false});
     slots.arcs.push_back({input_ref, input_slot, false});
-    Insertion insertion{&edit, materialization, driver_name, csr::ArcId{cell_slot.value()}, csr::ArcId{input_slot.value()}, {}};
+    Insertion insertion{csr::ArcId{cell_slot.value()}, csr::ArcId{input_slot.value()}, {}};
     changed_rows.insert(current.node_ids.at(driver_name));
     affectedNet(database, current, net, payloads);
     for (const auto& sink : edit.moved_sinks) {
@@ -187,6 +188,16 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   // Capture only expected payloads and affected rows before applying the edit.
   std::map<std::string, csr::ArcOutputLoadMatrix> old_loads, new_loads;
   std::map<csr::ArcId, csr::ArcSemanticPayload> old_payloads;
+  std::map<csr::NodeId, std::string> q_load_nets;
+  for (const auto& edit : plan.edits) {
+    const auto net = current.resolver.resolveNet(edit.original_net);
+    if (database.get_parasitic_library().get_net_map().contains(net)) continue;
+    const auto& driver = database.get_net_map().at(net).get_driver_pin();
+    const auto node = detail::targetedNode(database, current, driver, starts, ends);
+    if (!node.is_sequential || !node.is_output_pin || !starts.contains(driver)) continue;
+    if (q_load_nets.emplace(node.id, net).second)
+      old_loads.emplace(net, detail::targetedNetLoad(database, current, net, starts, ends));
+  }
   auto capture_old = [&](csr::ArcId id) {
     if (!old_payloads.contains(id))
       old_payloads.emplace(id, detail::targetedArc(database, current, *current.arc_native_ranks.at(id.value()), old_loads, starts, ends));
@@ -212,119 +223,16 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   }
   auto raw = detail::prepareNativeBufferInsertions(database, plan.edits, metadata->resolver(),
                                                    detail::nextNativeInstanceId(database), std::move(prepared_rc));
-  detail::PreparedNativeGraphPatch graph;
-  graph.arc_count_before = database.get_arc_list().size();
-  graph.appends.reserve(insertions.size() * 2);
-  for (const auto node : changed_rows) {
-    const auto& name = metadata->nodeName(node.value());
-    auto prepare_row = [&](const auto& native, auto& rows, auto& appended) {
-      const auto found = native.find(name);
-      rows.emplace(name, found == native.end() ? std::vector<std::size_t>{} : found->second);
-      if (found == native.end())
-        appended.push_back(name);
-    };
-    prepare_row(database.get_outgoing_arc_list_map(), graph.outgoing, graph.new_outgoing);
-    prepare_row(database.get_incoming_arc_list_map(), graph.incoming, graph.new_incoming);
-  }
+  auto graph = detail::prepareNativeBufferGraph(database, raw, plan.edits, metadata->resolver());
   std::vector<std::pair<csr::ArcId, std::size_t>> new_ranks;
   new_ranks.reserve(slots.after.arc_slots - slots.before.arc_slots);
-  auto append_arc = [&](Arc arc, csr::ArcId id) {
-    const auto slot = graph.arc_count_before + graph.appends.size();
-    graph.outgoing.at(arc.get_source_pin()).push_back(slot);
-    graph.incoming.at(arc.get_sink_pin()).push_back(slot);
-    graph.appends.push_back(std::move(arc));
-    new_ranks.emplace_back(id, slot);
-  };
-  for (const auto& insertion : insertions) {
-    const auto& edit = *insertion.edit;
-    for (const auto& name : {insertion.names.input_pin_name, insertion.names.output_pin_name}) {
-      graph.points.emplace(name, TimingPoint{});
-      graph.new_points.push_back(name);
-    }
-    auto& children = database.get_timing_library().get_cell_map().at(edit.library_cell.cell_name).get_cell_arc_list();
-    const auto child = std::ranges::find_if(children, [](const auto& arc) { return arc.get_is_timing_graph_arc(); });
-    demand(child != children.end(), "targeted missing library graph arc");
-    append_arc(canonical_graph::makeArc(insertion.names.input_pin_name, insertion.names.output_pin_name,
-                                        ArcType::kCell, insertion.names.instance_name,
-                                        child->get_source_port(), child->get_sink_port(), child->get_is_clock_arc(),
-                                        child->get_is_disable_arc(), &*child), insertion.cell);
-    // The accepted data-only edit cannot target a clock input; neither newly
-    // created net arc is eligible for native sequential-to-clock disabling.
-    append_arc(canonical_graph::makeArc(insertion.driver, insertion.names.input_pin_name, ArcType::kNet,
-                                        current.resolver.resolveNet(edit.original_net), {}, {}, false, false, nullptr),
-               insertion.input);
-    for (const auto [old, replacement] : insertion.replaced) {
-      const auto slot = *current.arc_native_ranks.at(old.value());
-      const auto& arc = database.get_arc_list().at(slot);
-      auto& outgoing = graph.outgoing.at(arc.get_source_pin());
-      const auto found = std::ranges::find(outgoing, slot);
-      demand(found != outgoing.end(), "targeted replacement is absent from its outgoing row");
-      outgoing.erase(found);
-      graph.outgoing.at(insertion.names.output_pin_name).push_back(slot);
-      demand(graph.replacements.emplace(slot, canonical_graph::makeArc(
-                 insertion.names.output_pin_name, arc.get_sink_pin(), ArcType::kNet,
-                 insertion.names.output_net_name, {}, {}, false, false, nullptr)).second,
-             "targeted batch replaces the same physical arc twice");
-      new_ranks.emplace_back(replacement, slot);
-    }
+  for (std::size_t index = 0; index < insertions.size(); ++index) {
+    const auto& insertion = insertions[index];
+    new_ranks.emplace_back(insertion.cell, graph.arc_count_before + index * 2);
+    new_ranks.emplace_back(insertion.input, graph.arc_count_before + index * 2 + 1);
+    for (const auto [old, replacement] : insertion.replaced)
+      new_ranks.emplace_back(replacement, *current.arc_native_ranks.at(old.value()));
   }
-  auto pin_for = [&](const std::string& name) -> const Pin& {
-    const auto created = raw.pins.find(name);
-    return created == raw.pins.end() ? database.get_pin_map().at(name) : created->second;
-  };
-  auto cache_for = [&](Net& net, const std::vector<std::string>& members) {
-    detail::PreparedNetDriverLoad cache;
-    cache.net = &net;
-    for (const auto& name : members) {
-      const auto& pin = pin_for(name);
-      if (pin.get_is_port() ? pin.get_direction() == PinDirection::kInput : pin.get_direction() == PinDirection::kOutput) {
-        cache.driver = name;
-        cache.drivers.push_back(name);
-      } else {
-        cache.loads.push_back(name);
-      }
-    }
-    demand(cache.drivers.size() == 1, "targeted source requires exactly one driver after edit");
-    std::ranges::sort(cache.loads);
-    return cache;
-  };
-  for (const auto& [name, members] : raw.memberships)
-    graph.net_caches.push_back(cache_for(database.get_net_map().at(name), members));
-  for (auto& [name, net] : raw.nets) {
-    static_cast<void>(name);
-    auto cache = cache_for(net, net.get_pin_name_list());
-    cache.swap();
-  }
-
-  const auto arc_for = [&](std::size_t slot) -> const Arc& {
-    if (slot >= graph.arc_count_before)
-      return graph.appends.at(slot - graph.arc_count_before);
-    const auto replacement = graph.replacements.find(slot);
-    return replacement == graph.replacements.end() ? database.get_arc_list().at(slot) : replacement->second;
-  };
-  const auto key = [&](std::size_t slot) {
-    const auto& arc = arc_for(slot);
-    const bool net = arc.get_type() == ArcType::kNet;
-    std::size_t ordinal = slot;
-    if (const auto* child = arc.get_timing_cell_arc()) {
-      const auto created = raw.instances.find(arc.get_owner_name());
-      const auto& instance = created == raw.instances.end() ? database.get_instance_map().at(arc.get_owner_name()) : created->second;
-      const auto& children = database.get_timing_library().get_cell_map().at(instance.get_cell_name()).get_cell_arc_list();
-      const auto found = std::ranges::find_if(children, [&](const auto& value) { return &value == child; });
-      demand(found != children.end(), "targeted adjacency contains a foreign library arc");
-      ordinal = static_cast<std::size_t>(found - children.begin());
-    }
-    return std::tuple{net, std::string_view{arc.get_owner_name()}, net ? 0 : ordinal,
-                      std::string_view{arc.get_source_pin()}, std::string_view{arc.get_sink_pin()}, slot};
-  };
-  for (auto* rows : {&graph.outgoing, &graph.incoming})
-    for (auto& [name, row] : *rows) {
-      static_cast<void>(name);
-      std::ranges::sort(row, [&](auto left, auto right) { return key(left) < key(right); });
-    }
-  // Moving Arc values during capacity growth does not change physical indices.
-  // No Arc* survives this preparation; raw/map publication below is no-throw.
-  detail::reserveTargetedAppend(database.get_arc_list(), graph.arc_count_before + graph.appends.size());
   auto* metadata_undo = metadata.get();
   transaction.applyMetadata(std::move(metadata));
   for (const auto& insertion : insertions)
@@ -343,6 +251,13 @@ NativeTargetedEditBatch NativeTargetedEditPreparer::prepare(Database& database, 
   auto& staged = current;
   auto& target = transaction.database();
   csr::CudaDualCsrPatch patch;
+  patch.seed_load_changes.reserve(q_load_nets.size());
+  for (const auto& [node, net] : q_load_nets) {
+    const auto load = detail::targetedNetLoad(target, staged, net, starts, ends);
+    new_loads.emplace(net, load);
+    if (old_loads.at(net) != load)
+      patch.seed_load_changes.push_back({node, old_loads.at(net), load});
+  }
   auto bindings = detail::prepareTargetedParasitics(target, staged, changed_rc_nets);
   patch.rc_bindings.reserve(bindings.size());
   for (const auto& [node, next] : bindings) {

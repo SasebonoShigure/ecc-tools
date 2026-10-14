@@ -167,6 +167,28 @@ void testNativeDatabaseRejectsIncompleteTimingOrder()
           "incomplete timing order did not return the exact typed failure fields");
 }
 
+void testNativeNetMembershipCoverage()
+{
+  for (unsigned mutation = 0; mutation < 4; ++mutation) {
+    NativeEditFixture fixture = makeNativeEditFixture();
+    auto& database = fixture.database();
+    auto& net = database.get_net_map().at("n0");
+    if (mutation == 0) {
+      net.set_pin_name_list({"in"});
+      net.set_load_pin_list({});  // Consistent caches must not hide an omitted connected pin.
+    } else if (mutation == 1) {
+      net.set_pin_name_list({"in", "in"});
+    } else if (mutation == 2) {
+      net.set_pin_name_list({"in", "missing"});
+    } else {
+      database.get_pin_map().at("out").set_net_name("missing");
+    }
+    const auto rejected = validateNativeDatabase(database);
+    require(rejected && rejected->code == NativeDatabaseValidationCode::kMembershipMismatch,
+            "native net membership omission, duplicate or invalid binding was accepted");
+  }
+}
+
 void testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs()
 {
   constexpr TimingEditSessionToken kToken{23};
@@ -331,6 +353,7 @@ int main()
   testNativeRcLocalUndo();
   testOnlyExactNonInvertingTwoPortBufferIsAccepted();
   testNativeDatabaseRejectsIncompleteTimingOrder();
+  testNativeNetMembershipCoverage();
   testTranslatorUpdatesAllRawMembershipsWithoutConstructingDerivedArcs();
   testTranslatorChecksSequentialDataAndControlSinkRoles();
   return 0;

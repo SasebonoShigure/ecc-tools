@@ -53,7 +53,7 @@ timing_edit::ComponentFingerprints fingerprints(char digit)
 {
   const std::string digest(64, digit);
   return timing_edit::ComponentFingerprints{
-      csr::kCsrSchemaVersion, digest, digest, digest, digest, digest, digest};
+      csr::kCsrFingerprintSchemaVersion, digest, digest, digest, digest, digest, digest};
 }
 
 timing_edit::BaselineSemanticIdentity baseline()

@@ -46,6 +46,7 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
     static_assert(std::is_nothrow_move_constructible_v<EditBatch>);
     static_assert(std::is_nothrow_move_constructible_v<CudaTargetedTraceBatch>);
     result.backend_setup_ms = elapsed(setup_started);
+    const auto loop_started = Clock::now();
     for (std::size_t index = 0; index < prefix; ++index) {
       const auto started = Clock::now();
       require(authority.active() && host.graph.generation == device.generation(), "host/device generation binding changed");
@@ -69,12 +70,13 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
       owned.history.push_back(std::move(record));
       owned.committed();
       batch.commit_ms = elapsed(started);
+      if (index + 1 == prefix) result.edit_sta_loop_ms = elapsed(loop_started);
       if (consume_results || index + 1 == prefix) {
         auto phase = Clock::now();
-        session.materializeCudaTiming(baseline, authority);
+        static_cast<void>(owned.device.timingValues());
         batch.query_materialize_ms = elapsed(phase);
         phase = Clock::now();
-        session.prepareCudaReport(baseline, authority);
+        static_cast<void>(session.readCudaReport(baseline, authority));
         if (consume_results) consume_results();
         batch.report_ms = elapsed(phase);
         batch.results_consumed = true;

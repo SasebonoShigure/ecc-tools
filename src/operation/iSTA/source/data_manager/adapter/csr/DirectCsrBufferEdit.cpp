@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 
 #include "CanonicalTimingRecordProjectorInternal.hpp"
@@ -58,6 +59,14 @@ void requireFreshNames(const PendingStructuredBatch& pending)
 
 class DirectEdit
 {
+  struct PlannedArc
+  {
+    const StableArcRef* ref;
+    csr::ArcId id;
+    bool active;
+    const csr::ArcSemanticPayload* payload;
+  };
+
  public:
   DirectEdit(const PendingStructuredBatch& pending, const Database& library,
              csr::detail::NativeLibraryModels& models)
@@ -112,22 +121,36 @@ class DirectEdit
         demand(nodes.emplace(id, std::move(after)).second, "sink edited twice in one batch");
       }
     }
-    for (const auto& request : pending.capturePlan().nodes) {
-      const auto id = nodeId(request.ref);
-      if (!nodes.contains(id)) nodes.emplace(id, graph.nodes.at(id.value()));
-    }
-    for (const auto& request : pending.capturePlan().arcs) {
-      const auto* binding = resolver.findArcBinding(request.ref);
-      demand(binding != nullptr, "arc has no staged binding");
-      const csr::ArcId id{binding->slot.value()};
-      const bool active = !binding->tombstone;
-      csr::ArcSemanticPayload payload;
+    for (const auto& assignment : batch.slotPlan().nodes)
+      records.nodes.push_back({assignment.ref, csr::NodeId{assignment.slot.value()}, nodes.at(csr::NodeId{assignment.slot.value()})});
+    for (const auto& edit : batch.normalizedEdits())
+      for (const auto& ref : edit.moved_sinks) {
+        const auto id = nodeId(ref);
+        records.nodes.push_back({ref, id, nodes.at(id)});
+      }
+    for (const auto& ref : batch.invalidationClosure().load_nets)
+      load_nets.emplace(ref, resolver.resolveNet(ref));
+
+    const auto& index = pending.expectedBefore().arcGroupIndex();
+    std::size_t arc_count = batch.slotPlan().arcs.size();
+    for (const auto& [ref, net] : load_nets)
+      if (const auto* group = index.activeSinkNetGroup(net))
+        arc_count += group->active_arc_ids.size();
+    arcs.reserve(arc_count);
+    std::set<csr::ArcId> structural_ids;
+    for (const auto& assignment : batch.slotPlan().arcs) {
+      const csr::ArcId id{assignment.slot.value()};
+      structural_ids.insert(id);
+      const csr::ArcSemanticPayload* selected = nullptr;
       if (id.value() < graph.arc_slots.size()) {
-        const auto& old = graph.arc_slots[id.value()];
-        demand(old.active && request.expected_current_key == old.payload.key, "stale arc payload");
-        payload = old.payload;
+        const auto& old = graph.arc_slots.at(id.value());
+        const auto* indexed = index.slot(id);
+        demand(assignment.tombstone && old.active && indexed && indexed->ref == assignment.ref
+                   && indexed->current_active_key == old.payload.key, "stale arc payload");
+        selected = &old.payload;
       } else {
-        const auto key = detail::materializedArcKey(request.ref, resolver);
+        csr::ArcSemanticPayload payload;
+        const auto key = detail::materializedArcKey(assignment.ref, resolver);
         payload.key = key;
         payload.source = nodeId(key.base.source);
         payload.sink = nodeId(key.base.sink);
@@ -150,16 +173,30 @@ class DirectEdit
         arc.is_disabled = payload.is_disabled;
         arc.is_clock_arc = payload.is_clock_arc;
         payload.eligibility = csr::detail::projectCanonicalArcEligibility(arc, node(payload.sink), false, false);
+        selected = &changed_payloads.emplace(id, std::move(payload)).first->second;
       }
-      demand(active == (request.expected_post_multiplicity != 0)
-                 && payload.key.base == request.expected_post_base, "arc lifecycle or identity mismatch");
-      records.arcs.push_back({request.ref, id, active, std::move(payload)});
+      arcs.push_back({&assignment.ref, id, !assignment.tombstone, selected});
+    }
+    // Sink-net groups are disjoint. Borrow unchanged payloads until preparation
+    // ends; native capture keys and parallel-group proofs are not needed here.
+    for (const auto& [ref, net] : load_nets) {
+      const auto* group = index.activeSinkNetGroup(net);
+      if (!group) continue;
+      for (const auto id : group->active_arc_ids) {
+        if (structural_ids.contains(id)) continue;
+        arcs.push_back({&index.slots.at(id.value()).ref, id, true, &graph.arc_slots.at(id.value()).payload});
+      }
     }
   }
 
   detail::NarrowTimingRecords complete(std::span<const csr::ParasiticNetModel> affected_rc)
   {
     prepareLoads(affected_rc);
+    // Borrowed payloads live through this exclusive preparation; only changes
+    // need owned records for descriptor construction; transactions capture undo separately.
+    for (const auto& arc : arcs)
+      if (!arc.active || changed_payloads.contains(arc.id))
+        records.arcs.push_back({*arc.ref, arc.id, arc.active, *arc.payload});
     prepareRows();
     const auto& before = graph.reference_payload;
     std::ranges::sort(records.instances, [](const auto& a, const auto& b) {
@@ -186,10 +223,6 @@ class DirectEdit
     if (count)
       records.reference_payload.clock_owner_by_node = RecordAppend<std::optional<std::string>>{
           graph.nodes.size(), std::vector<std::optional<std::string>>(count)};
-    for (const auto& request : pending.capturePlan().nodes) {
-      const auto id = nodeId(request.ref);
-      records.nodes.push_back({request.ref, id, nodes.at(id)});
-    }
     return std::move(records);
   }
 
@@ -227,7 +260,7 @@ class DirectEdit
   csr::detail::CanonicalLoadPinFacts loadFacts(const csr::NodeRecord& value)
   {
     csr::detail::CanonicalLoadPinFacts result;
-    result.key = value.key; result.direction = value.direction; result.is_port = value.is_port;
+    result.direction = value.direction; result.is_port = value.is_port;
     if (value.is_port) {
       const auto& constraints = graph.reference_payload.port_constraints;
       const auto found = std::ranges::find(constraints, value.key.full_name, &csr::PortConstraintModel::map_key);
@@ -241,38 +274,57 @@ class DirectEdit
   {
     const auto& before = graph.reference_payload;
     const bool rc_mode = !before.parasitics.nets.empty();
-    demand(rc_mode ? affected_rc.size() == pending.capturePlan().load_nets.size() : affected_rc.empty(),
+    demand(rc_mode ? affected_rc.size() == load_nets.size() : affected_rc.empty(),
            "prepared RC coverage differs from affected nets");
     std::map<std::string_view, const csr::ParasiticNetModel*> raw;
     for (const auto& value : affected_rc)
       demand(raw.emplace(value.map_key, &value).second, "duplicate prepared RC net");
+    std::map<std::string_view, std::vector<const PlannedArc*>> net_arcs;
+    std::map<std::string_view, std::vector<PlannedArc*>> load_arcs;
+    for (auto& arc : arcs) {
+      if (!arc.active) continue;
+      if (arc.payload->kind == csr::ArcKind::kNet)
+        net_arcs[arc.payload->key.base.owner_name].push_back(&arc);
+      if (rc_mode || arc.payload->kind == csr::ArcKind::kCell)
+        load_arcs[node(arc.payload->sink).net_name].push_back(&arc);
+    }
     ParasiticNetDelta rc_delta{before.parasitics.nets.size(), {}, {}};
     StartSeedDelta seeds{before.start_seeds.size(), {}, {}};
-    for (const auto& request : pending.capturePlan().load_nets) {
-      std::map<std::string, csr::NodeId> sinks;
+    for (const auto& [ref, net] : load_nets) {
+      demand(!net_arcs[net].empty(), "affected net has no driver");
+      const auto& driver_node = node(net_arcs[net].front()->payload->source);
+      // Net arcs consume no capacitive load; only cells and deferred Q do.
+      if (!rc_mode && load_arcs[net].empty()
+          && !(driver_node.is_sequential && driver_node.is_output_pin))
+        continue;
+      using Sink = std::pair<std::string_view, csr::NodeId>;
+      std::vector<Sink> sinks;
+      sinks.reserve(net_arcs[net].size());
       std::optional<csr::NodeId> driver;
-      for (const auto& arc : records.arcs) {
-        if (!arc.active || arc.payload.kind != csr::ArcKind::kNet
-            || arc.payload.key.base.owner_name != request.expected_name) continue;
-        demand(!driver || *driver == arc.payload.source, "net has multiple drivers");
-        driver = arc.payload.source;
-        sinks.emplace(node(arc.payload.sink).key.full_name, arc.payload.sink);
+      for (const auto* captured : net_arcs[net]) {
+        const auto& arc = *captured;
+        demand(!driver || *driver == arc.payload->source, "net has multiple drivers");
+        driver = arc.payload->source;
+        sinks.emplace_back(node(arc.payload->sink).key.full_name, arc.payload->sink);
       }
+      std::ranges::sort(sinks, {}, &Sink::first);
+      sinks.erase(std::unique(sinks.begin(), sinks.end(),
+                              [](const auto& a, const auto& b) { return a.first == b.first; }), sinks.end());
       demand(driver.has_value(), "affected net has no driver");
       const auto& source = node(*driver);
-      demand(source.net_name == request.expected_name
+      demand(source.net_name == net
                  && (source.is_port ? source.direction == csr::PinDirection::kInput
                                     : source.direction == csr::PinDirection::kOutput),
              "affected net driver has incompatible membership or direction");
       for (const auto& [name, id] : sinks) {
         static_cast<void>(name);
-        demand(node(id).net_name == request.expected_name, "affected sink membership mismatch");
+        demand(node(id).net_name == net, "affected sink membership mismatch");
       }
       csr::ArcOutputLoadMatrix load{};
       std::map<csr::NodeId, csr::CsrParasiticBinding> bindings;
       if (rc_mode) {
         demand(before.analysis_context.rc_corner == "pre_route", "unsupported RC context");
-        const auto found = raw.find(request.expected_name);
+        const auto found = raw.find(net);
         demand(found != raw.end(), "affected RC net is missing");
         std::vector<csr::CsrRcPin> pins{{*driver, source.key.full_name, {}}};
         const auto source_load = loadFacts(source);
@@ -292,40 +344,45 @@ class DirectEdit
             csr::prepareCsrParasiticTree(*found->second, *driver, pins));
         for (std::size_t i = 0; i < tree->terminals.size(); ++i)
           bindings.emplace(tree->terminals[i], csr::CsrParasiticBinding{tree, i});
-        if (const auto slot = graph.parasitic_net_slots.find(request.expected_name);
+        if (const auto slot = graph.parasitic_net_slots.find(net);
             slot != graph.parasitic_net_slots.end()) {
           const auto& expected = before.parasitics.nets.at(slot->second);
           if (expected != *found->second) rc_delta.changes.push_back({slot->second, expected, *found->second});
         } else {
           rc_delta.appends.push_back(*found->second);
         }
-        const auto seed = std::lower_bound(before.start_seeds.begin(), before.start_seeds.end(), source.key.full_name,
-            [&](const auto& value, const auto& name) {
-              return csr::detail::referenceByteStringLess(graph.nodes.at(value.seed_node.value()).key.full_name, name);
-            });
-        if (seed != before.start_seeds.end() && seed->seed_node == *driver
-            && seed->availability == csr::StartSeedAvailability::kDeferredSequential) {
-          auto after = *seed;
-          after.parasitic = bindings.at(*driver);
-          seeds.changes.push_back({static_cast<std::uint64_t>(seed - before.start_seeds.begin()), *seed, std::move(after)});
-        }
+
       } else {
         for (const auto& [name, id] : sinks) {
           static_cast<void>(name);
           csr::detail::addCanonicalLoad(loadFacts(node(id)), load);
         }
       }
-      for (auto& arc : records.arcs) {
-        if (!arc.active || node(arc.payload.sink).net_name != request.expected_name) continue;
-        if (rc_mode) {
-          arc.payload.output_load.reset();
-          arc.payload.parasitic = bindings.at(arc.payload.sink);
-          demand((arc.payload.kind == csr::ArcKind::kCell ? arc.payload.sink : arc.payload.source) == *driver,
+      const std::optional<csr::ArcOutputLoadMatrix> next_load = rc_mode ? std::nullopt : std::optional{load};
+      const auto seed = std::lower_bound(before.start_seeds.begin(), before.start_seeds.end(), source.key.full_name,
+          [&](const auto& value, const auto& name) {
+            return csr::detail::referenceByteStringLess(graph.nodes.at(value.seed_node.value()).key.full_name, name);
+          });
+      if (seed != before.start_seeds.end() && seed->seed_node == *driver
+          && seed->availability == csr::StartSeedAvailability::kDeferredSequential && source.is_output_pin) {
+        auto after = *seed;
+        after.parasitic = rc_mode ? bindings.at(*driver) : csr::CsrParasiticBinding{};
+        after.output_load = next_load;
+        if (after != *seed)
+          seeds.changes.push_back({static_cast<std::uint64_t>(seed - before.start_seeds.begin()), *seed, std::move(after)});
+      }
+      for (auto* captured : load_arcs[net]) {
+        auto& arc = *captured;
+        const auto next_rc = rc_mode ? bindings.at(arc.payload->sink) : csr::CsrParasiticBinding{};
+        if (rc_mode)
+          demand((arc.payload->kind == csr::ArcKind::kCell ? arc.payload->sink : arc.payload->source) == *driver,
                  "RC arc has a stale driver");
-        } else {
-          arc.payload.output_load = load;
-          arc.payload.parasitic = {};
-        }
+        if (arc.payload->output_load == next_load && arc.payload->parasitic == next_rc)
+          continue;
+        auto& replacement = changed_payloads.try_emplace(arc.id, *arc.payload).first->second;
+        replacement.output_load = next_load;
+        replacement.parasitic = next_rc;
+        arc.payload = &replacement;
       }
     }
     if (!rc_delta.changes.empty() || !rc_delta.appends.empty()) records.reference_payload.parasitics = std::move(rc_delta);
@@ -334,6 +391,7 @@ class DirectEdit
   void prepareRows()
   {
     std::map<csr::ArcId, const detail::CapturedArc*> changed;
+    std::map<csr::NodeId, std::vector<csr::ArcId>> appended_outgoing, appended_incoming;
     std::set<csr::NodeId> sources, sinks;
     for (const auto& [id, value] : nodes) {
       static_cast<void>(value);
@@ -341,6 +399,10 @@ class DirectEdit
     }
     for (const auto& arc : records.arcs) {
       changed.emplace(arc.id, &arc);
+      if (arc.active && arc.id.value() >= graph.arc_slots.size()) {
+        appended_outgoing[arc.payload.source].push_back(arc.id);
+        appended_incoming[arc.payload.sink].push_back(arc.id);
+      }
       if (!arc.active || arc.id.value() >= graph.arc_slots.size()) {
         sources.insert(arc.payload.source); sinks.insert(arc.payload.sink);
       }
@@ -370,10 +432,23 @@ class DirectEdit
         }
         std::erase_if(result, [&](csr::ArcId arc) { const auto it = changed.find(arc); return it != changed.end() && !it->second->active; });
       }
-      for (const auto& arc : records.arcs)
-        if (arc.active && arc.id.value() >= graph.arc_slots.size()
-            && (incoming ? arc.payload.sink : arc.payload.source) == id) result.push_back(arc.id);
-      std::ranges::sort(result, [&](auto a, auto b) { return order(a) < order(b); });
+      const auto existing_size = result.size();
+      const auto& appends = incoming ? appended_incoming : appended_outgoing;
+      if (const auto found = appends.find(id); found != appends.end())
+        result.insert(result.end(), found->second.begin(), found->second.end());
+      if (result.size() > 1) {
+        using OrderedArc = std::pair<decltype(order(csr::ArcId{0})), csr::ArcId>;
+        std::vector<OrderedArc> ordered;
+        ordered.reserve(result.size());
+        for (const auto arc : result) ordered.emplace_back(order(arc), arc);
+        const auto middle = ordered.begin() + existing_size;
+        // Retained rows normally keep their order; imported Base/Aux rows may not.
+        if (!std::ranges::is_sorted(ordered.begin(), middle, {}, &OrderedArc::first))
+          std::ranges::sort(ordered.begin(), middle, {}, &OrderedArc::first);
+        std::ranges::sort(middle, ordered.end(), {}, &OrderedArc::first);
+        std::ranges::inplace_merge(ordered, middle, {}, &OrderedArc::first);
+        for (std::size_t i = 0; i < result.size(); ++i) result[i] = ordered[i].second;
+      }
       return result;
     };
     for (const auto source : sources) records.outgoing_rows.push_back({source, row(source, false)});
@@ -387,6 +462,9 @@ class DirectEdit
   std::map<csr::NodeId, csr::NodeRecord> nodes;
   std::map<std::string, const csr::ReferencedLibraryCellModel*> cells;
   std::map<std::string, std::uint64_t> cell_arcs;
+  std::map<StableNetRef, std::string> load_nets;
+  std::vector<PlannedArc> arcs;
+  std::map<csr::ArcId, csr::ArcSemanticPayload> changed_payloads;
   detail::NarrowTimingRecords records;
 };
 }  // namespace

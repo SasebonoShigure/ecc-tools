@@ -54,4 +54,27 @@ void verifyNeutralArcIdentity()
   for (const auto& node : wire.nodes)
     if (node.key.full_name == "u:Y" && node.predecessor_arc != keys[0])
       throw std::runtime_error("conditional Arc winner identity differs from adjacency");
+  // Repeated, distinct and conditional identities retain their native ordinals.
+  for (std::size_t index = 0; index < 257; ++index) {
+    Arc arc = database.get_arc_list().at(index % 2);
+    arc.set_owner_name("owner_" + std::to_string(index % 11));
+    if (index % 3 == 0) {
+      arc.set_source_pin("u:Y");
+      arc.set_sink_pin("u:A");
+    }
+    if (index % 5 == 0)
+      arc.set_type(ArcType::kNet);
+    database.get_arc_list().push_back(std::move(arc));
+  }
+  const auto repeated = test::nativeSemanticArcKeys(database);
+  for (std::size_t index = 0; index < repeated.size(); ++index) {
+    const auto expected_base = test::native_semantic_key_detail::makeArcBase(database, database.get_arc_list().at(index));
+    std::uint64_t expected_ordinal = 0;
+    for (std::size_t prior = 0; prior < index; ++prior)
+      if (repeated[prior].base == expected_base)
+        ++expected_ordinal;
+    if (repeated[index].base != expected_base || repeated[index].parallel_ordinal != expected_ordinal)
+      throw std::runtime_error("native Arc ordinal differs from prior complete-identity occurrences");
+  }
+
 }

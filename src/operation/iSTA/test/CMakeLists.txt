@@ -160,6 +160,12 @@ if(BUILD_TESTING)
     )
   endforeach()
 
+  add_executable(ista_input_net_test StaInputNetTest.cpp)
+  target_link_libraries(ista_input_net_test PRIVATE ista_interface ista_source idm)
+  add_test(NAME ista_input_net_test COMMAND ista_input_net_test
+    "${CMAKE_CURRENT_SOURCE_DIR}/baseline/fixtures" "${CMAKE_CURRENT_BINARY_DIR}/input_net_run")
+  set_tests_properties(ista_input_net_test PROPERTIES LABELS "ista_unit" TIMEOUT 60)
+
   add_executable(ista_graph_builder_state_test
       GraphBuilderStateTest.cpp
   )

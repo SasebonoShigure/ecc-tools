@@ -55,7 +55,7 @@ detail::TimingResultViolations detail::validateSnapshotIdentityClassified(const 
                                                                           bool require_stage2_generation)
 {
   TimingResultViolations errors;
-  if (identity.fingerprint_schema_version != kCsrSchemaVersion)
+  if (identity.fingerprint_schema_version != kCsrFingerprintSchemaVersion)
     reject(errors, CsrTimingResultViolationClass::kSchema, identityField(prefix, "fingerprint_schema_version"), "unsupported schema version");
   if (identity.session_token == 0)
     reject(errors, CsrTimingResultViolationClass::kSchema, identityField(prefix, "session_token"), "must be nonzero");

@@ -83,6 +83,7 @@ void testMakeSingleModule(idb::NetlistReader* nr, string topModuleName) {
 #include <optional>
 #include <regex>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 #include <unistd.h>
 #include <zlib.h>
@@ -93,6 +94,16 @@ void testMakeSingleModule(idb::NetlistReader* nr, string topModuleName) {
 namespace idb {
 
 namespace {
+
+std::unordered_map<std::string, IdbPin*> indexIoPins(IdbPins& pins)
+{
+  std::unordered_map<std::string, IdbPin*> index;
+  index.reserve(pins.get_pin_list().size());
+  for (auto* pin : pins.get_pin_list()) {
+    index.emplace(pin->get_pin_name(), pin);
+  }
+  return index;
+}
 
 bool writeAll(int fd, const char* data, size_t size)
 {
@@ -278,7 +289,7 @@ bool VerilogRead::createDb(std::string file, std::string top_module_name)
   }
 
   if (!_verilog_reader) {
-    _verilog_reader = new idb::VerilogReader();
+    _verilog_reader = std::make_unique<VerilogReader>();
   }
   if (!_verilog_reader->readVerilog(verilog_file.getReadFile().c_str())) {
     return false;
@@ -319,7 +330,7 @@ bool VerilogRead::createDbAutoTop(std::string file)
   }
 
   if (!_verilog_reader) {
-    _verilog_reader = new idb::VerilogReader();
+    _verilog_reader = std::make_unique<VerilogReader>();
   }
   if (!_verilog_reader->readVerilog(verilog_file.getReadFile().c_str())) {
     return false;
@@ -387,8 +398,14 @@ int32_t VerilogRead::build_pins()
     std::regex re(replace_str);
     return std::regex_replace(str, re, new_str);
   };
+  // Names do not change during import; avoid scanning all earlier ports for each declaration.
+  std::unordered_map<std::string, IdbPin*> io_pins;
+  io_pins.reserve(idb_io_pin_list->get_pin_list().size());
+  for (auto* pin : idb_io_pin_list->get_pin_list()) {
+    io_pins.emplace(pin->get_pin_name(), pin);
+  }
   // create pin.
-  auto dcl_process = [idb_design, &replace_str, this](DclType dcl_type, const char* dcl_name) -> IdbPin* {
+  auto dcl_process = [idb_io_pin_list, &io_pins, &replace_str, this](DclType dcl_type, const char* dcl_name) -> IdbPin* {
     if (dcl_type == DclType::KInput || dcl_type == DclType::KOutput || dcl_type == DclType::KInout) {
       std::string pin_name = dcl_name;
       if (std::string::npos != pin_name.find('\\')) {
@@ -396,10 +413,15 @@ int32_t VerilogRead::build_pins()
         pin_name = replace_str(pin_name, R"( )", "");
       }
 
-      IdbPin* idb_io_pin = idb_design->createOrFindIoPin(pin_name);
-      if (idb_io_pin == nullptr) {
+      if (pin_name.empty()) {
         return nullptr;
       }
+      auto [position, inserted] = io_pins.try_emplace(pin_name, nullptr);
+      if (inserted) {
+        position->second = idb_io_pin_list->add_pin_list();
+        position->second->set_pin_name(pin_name);
+      }
+      IdbPin* idb_io_pin = position->second;
       if (idb_io_pin->get_term() == nullptr) {
         idb_io_pin->set_term();
       }
@@ -489,15 +511,17 @@ int32_t VerilogRead::build_nets()
     return std::regex_replace(str, re, new_str);
   };
 
-  auto add_wire_net = [replace_str, idb_design](std::string net_name) -> IdbNet* {
+  // IO names stay fixed while nets are constructed.
+  const auto io_pins = indexIoPins(*idb_design->get_io_pin_list());
+  auto add_wire_net = [replace_str, idb_design, &io_pins](std::string net_name) -> IdbNet* {
     if (std::string::npos != net_name.find('\\')) {
       net_name = replace_str(net_name, R"(\\)", "");
       net_name = replace_str(net_name, R"( )", "");
     }
 
     IdbNet* idb_net = idb_design->createOrFindNet(net_name, IdbConnectType::kSignal);
-    if (auto* io_pin = idb_design->get_io_pin_list()->find_pin(net_name); io_pin != nullptr) {
-      idb_design->connectPinToNet(io_pin, idb_net);
+    if (const auto io_pin = io_pins.find(net_name); io_pin != io_pins.end()) {
+      idb_design->connectPinToNet(io_pin->second, idb_net);
     }
 
     return idb_net;
@@ -865,7 +889,8 @@ int32_t VerilogRead::build_components()
   IdbDesign* idb_design = _def_service->get_design();
   IdbLayout* idb_layout = _def_service->get_layout();
   IdbCellMasterList* idb_master_list = idb_layout->get_cell_master_list();
-  IdbPins* idb_io_pin_list = idb_design->get_io_pin_list();
+  // Rebuild here because createDbAutoTop handles aliases before components.
+  const auto io_pins = indexIoPins(*idb_design->get_io_pin_list());
 
   auto& top_module_stmts = _top_module->module_stmts;
 
@@ -882,7 +907,7 @@ int32_t VerilogRead::build_components()
     return std::regex_replace(str, re, new_str);
   };
 
-  auto add_pin = [idb_net_list, replace_str, idb_io_pin_list, idb_design](const std::string& raw_name, auto* idb_pin) {
+  auto add_pin = [idb_net_list, replace_str, &io_pins, idb_design](const std::string& raw_name, auto* idb_pin) {
     std::string net_name = raw_name;
     const bool is_escaped_name = isEscapedVerilogIdentifier(raw_name);
 
@@ -935,8 +960,8 @@ int32_t VerilogRead::build_components()
       }
     }
 
-    auto* io_pin = idb_io_pin_list->find_pin(net_name);
-    if (io_pin) {
+    if (const auto found_io_pin = io_pins.find(net_name); found_io_pin != io_pins.end()) {
+      auto* io_pin = found_io_pin->second;
       auto* net_io_pins = idb_net->get_io_pins();
       if (net_io_pins) {
         auto& net_io_pin_vec = net_io_pins->get_pin_list();

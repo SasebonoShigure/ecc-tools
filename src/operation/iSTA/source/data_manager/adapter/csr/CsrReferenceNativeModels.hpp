@@ -203,6 +203,7 @@ struct StartSeedModel
   std::optional<Transition> crpr_transition;
   // Q can have no graph arc; its deferred seed still owns the net model.
   CsrParasiticBinding parasitic{};
+  std::optional<ArcOutputLoadMatrix> output_load;
 
   friend bool operator==(const StartSeedModel&, const StartSeedModel&) = default;
 };

@@ -141,7 +141,12 @@ nlohmann::json CudaDualCsrTestReader::capture(const CudaDualCsrSession& session)
                       {"levelization", arc.levelization},
                       {"data_arrival", arc.data_arrival},
                       {"data_slew", arc.data_slew}});
+    nlohmann::json q_seed_loads = nlohmann::json::array();
+    for (const auto& seed : read(state.seed_nodes, state.host->node_seeds.size()))
+      if (seed.state.sequential.kind == SeedKind::output)
+        q_seed_loads.push_back({{"node", seed.node}, {"load", seed.state.sequential.output_load}});
     return {{"generation", state.generation.value()},
+            {"q_seed_loads", q_seed_loads},
             {"out_offsets", out_offsets},
             {"out_arcs", read(state.view.out_arcs, out_offsets.back())},
             {"in_offsets", in_offsets},

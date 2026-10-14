@@ -118,7 +118,7 @@ std::vector<std::uint8_t> canonicalNativeGraphProjectionBytes(const NativeGraphP
   appendNodeKeys(encoder, projection.ordered_roots);
   appendNodeKeys(encoder, projection.ordered_starts);
   appendNodeKeys(encoder, projection.ordered_ends);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> canonicalNativeGraphOracleBytes(const CsrNativeGraphOracle& oracle)
@@ -133,7 +133,7 @@ std::vector<std::uint8_t> canonicalNativeGraphOracleBytes(const CsrNativeGraphOr
     appendNodeKey(encoder, level.node_key);
     encoder.appendI32(level.native_level);
   }
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 }  // namespace ista::csr

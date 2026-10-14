@@ -14,6 +14,11 @@ void validateReferenceDelta(const DualCsrState& committed,
                             const DualCsrBatchDescriptor& descriptor,
                             DualCsrViolations& violations);
 
+// Only the controlled descriptor builder has already checked created names.
+void validateConstructedReferenceDelta(const DualCsrState& committed,
+                                       const DualCsrBatchDescriptor& descriptor,
+                                       DualCsrViolations& violations);
+
 // Validates the stable-ID Dual payload through the canonical DB-free Stage 2
 // intrinsic validator. The projection exists only for validation and never
 // participates in timing traversal or update construction.

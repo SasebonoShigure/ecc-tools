@@ -39,7 +39,7 @@
         "timing_input_fingerprint"
       ],
       "properties": {
-        "fingerprint_schema_version": {"const": "1.0.0"},
+        "fingerprint_schema_version": {"const": "2.0.0"},
         "session_token": {"$ref": "#/$defs/positiveU64"},
         "graph_generation": {"$ref": "#/$defs/u64"},
         "topology_fingerprint": {"$ref": "#/$defs/sha256"},

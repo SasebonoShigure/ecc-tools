@@ -69,12 +69,11 @@ csr::NodeRecord portNode(std::size_t id,
 
 csr::ArcSemanticPayload netPayload(
     const csr::NodeRecord& source, const csr::NodeRecord& sink,
-    double load, std::uint64_t ordinal = 0)
+    std::uint64_t ordinal = 0)
 {
   auto result = arcPayload(source.key, sink.key, source.id, sink.id,
                            ordinal);
   result.key.base.owner_name = source.net_name;
-  result.output_load = csr::test::outputLoad(load);
   return result;
 }
 
@@ -215,8 +214,7 @@ Generated generateBaseline(Random& random)
       endpoint.node = load;
       endpoint.clock_name = "clk";
       input.endpoint_required.push_back(std::move(endpoint));
-      const auto payload = netPayload(source, input.nodes[load.value()],
-                                      group.output_load);
+      const auto payload = netPayload(source, input.nodes[load.value()]);
       const std::size_t id = input.arcs.size();
       input.arcs.push_back(arcRecordFrom(payload, id));
       input.arc_ids_by_key.push_back({payload.key, csr::ArcId{id}});
@@ -265,7 +263,6 @@ Generated generateBaseline(Random& random)
     oracle.arcs.push_back({netPayload(
                               input.nodes[arc.source.value()],
                               input.nodes[arc.sink.value()],
-                              (*arc.output_load)[0][0],
                               arc.key.parallel_ordinal),
                           true});
   Generated result{std::move(*attempt.state), std::move(oracle),
@@ -321,12 +318,11 @@ std::vector<csr::ArcId> auxRow(const DualCsrState& state,
 ArcAppendRecord appendNetArcWithKeys(
     csr::ArcId id, csr::NodeId source, csr::NodeId sink,
     const csr::NodeKey& source_key, const csr::NodeKey& sink_key,
-    const std::string& net, double load, std::uint64_t ordinal = 0)
+    const std::string& net, std::uint64_t ordinal = 0)
 {
   auto result = appendArc(id.value(), source, sink, source_key, sink_key,
                           ordinal);
   result.payload.key.base.owner_name = net;
-  result.payload.output_load = csr::test::outputLoad(load);
   result.key = result.payload.key;
   return result;
 }
@@ -334,14 +330,12 @@ ArcAppendRecord appendNetArcWithKeys(
 
 ArcAppendRecord appendNetArc(const DualCsrState& state, csr::ArcId id,
                              csr::NodeId source, csr::NodeId sink,
-                             const std::string& net, double load,
-                             std::uint64_t ordinal = 0)
+                             const std::string& net, std::uint64_t ordinal = 0)
 {
   auto result = appendArc(id.value(), source, sink,
                           state.nodes.at(source.value()).key,
                           state.nodes.at(sink.value()).key, ordinal);
   result.payload.key.base.owner_name = net;
-  result.payload.output_load = csr::test::outputLoad(load);
   result.key = result.payload.key;
   return result;
 }
@@ -426,8 +420,7 @@ void runSample(std::uint64_t seed, std::size_t sample, Random& random)
   aux_descriptor.node_appends = {aux_node};
   aux_descriptor.arc_appends = {appendNetArcWithKeys(
       aux_arc, primary_source, aux_sink,
-      state.nodes[primary_source.value()].key, aux_node.key, primary.net,
-      current_load)};
+      state.nodes[primary_source.value()].key, aux_node.key, primary.net)};
   aux_descriptor.aux_rows = {{primary_source, auxRow(state, primary_source),
                               {aux_arc}}};
   completeReferencePayload(aux_descriptor, state);
@@ -445,8 +438,7 @@ void runSample(std::uint64_t seed, std::size_t sample, Random& random)
   const auto parallel_base
       = state.arc_slots[parallel_old.value()].payload.key.base;
   auto parallel_append = appendNetArc(
-      state, parallel_new, primary_source, primary_load, primary.net,
-      current_load, 0);
+      state, parallel_new, primary_source, primary_load, primary.net, 0);
   std::uint64_t ordinal = 0;
   for (std::size_t id = 0; id < state.arc_slots.size(); ++id) {
     const auto& slot = state.arc_slots[id];
@@ -485,15 +477,6 @@ void runSample(std::uint64_t seed, std::size_t sample, Random& random)
   if (replacement_load == current_load)
     replacement_load = current_load == 1.0 ? 0.25 : current_load + 0.25;
   auto payload_descriptor = descriptorFor(state, 0, 0);
-  for (std::size_t id = 0; id < state.arc_slots.size(); ++id) {
-    const auto& slot = state.arc_slots[id];
-    if (!slot.active || slot.payload.key.base.owner_name != primary.net)
-      continue;
-    auto replacement = slot.payload;
-    replacement.output_load = csr::test::outputLoad(replacement_load);
-    payload_descriptor.payload_changes.push_back(
-        {csr::ArcId{id}, slot.payload, std::move(replacement)});
-  }
   completeReferencePayload(payload_descriptor, state);
   auto constraints = state.reference_payload.port_constraints;
   const auto load_constraint = std::ranges::find_if(
@@ -507,13 +490,8 @@ void runSample(std::uint64_t seed, std::size_t sample, Random& random)
   replaceReference(payload_descriptor.reference_payload.port_constraints,
                    state.reference_payload.port_constraints,
                    std::move(constraints));
-  auto bad_payload = payload_descriptor;
-  ++bad_payload.payload_changes.front().replacement.key.parallel_ordinal;
-  requireAtomicReject(state, bad_payload,
-                      prefix + "malformed_payload_change");
   applyChecked(state, oracle, payload_descriptor,
-               prefix + "payload_change");
-  current_load = replacement_load;
+               prefix + "port_load_change");
 
   const auto reconnect_old
       = activeArc(state, primary_source, reconnect_sink);
@@ -532,7 +510,7 @@ void runSample(std::uint64_t seed, std::size_t sample, Random& random)
   reconnect_descriptor.node_appends = {reconnect_node};
   reconnect_descriptor.arc_appends = {appendNetArcWithKeys(
       reconnect_arc, reconnect_source, reconnect_sink, reconnect_node.key,
-      state.nodes[reconnect_sink.value()].key, reconnect_net, 0.0)};
+      state.nodes[reconnect_sink.value()].key, reconnect_net)};
   reconnect_descriptor.removes = {{primary_source, tombstone_slot,
                                     reconnect_old}};
   reconnect_descriptor.reverse_changes = {{
@@ -564,8 +542,7 @@ void runSample(std::uint64_t seed, std::size_t sample, Random& random)
   reuse_descriptor.node_appends = {reuse_node};
   reuse_descriptor.arc_appends = {appendNetArcWithKeys(
       reused_arc, primary_source, reused_sink,
-      state.nodes[primary_source.value()].key, reuse_node.key, primary.net,
-      current_load)};
+      state.nodes[primary_source.value()].key, reuse_node.key, primary.net)};
   reuse_descriptor.changes = {{primary_source, tombstone_slot,
                                std::nullopt, reused_arc}};
   completeReferencePayload(reuse_descriptor, state);
@@ -592,7 +569,7 @@ void runSample(std::uint64_t seed, std::size_t sample, Random& random)
   clear_descriptor.node_appends = {clear_node};
   clear_descriptor.arc_appends = {appendNetArcWithKeys(
       aux_replacement_arc, aux_replacement_source, aux_sink, clear_node.key,
-      state.nodes[aux_sink.value()].key, aux_net, 0.0)};
+      state.nodes[aux_sink.value()].key, aux_net)};
   clear_descriptor.reverse_changes = {{
       aux_sink, baseInSlot(state, aux_sink, aux_arc), aux_arc,
       aux_replacement_arc}};

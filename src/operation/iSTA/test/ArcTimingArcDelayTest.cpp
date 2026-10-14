@@ -22,6 +22,7 @@
 
 #include "Arc.hpp"
 #include "TimingPathState.hpp"
+#include "TimingPath.hpp"
 
 namespace {
 
@@ -231,6 +232,35 @@ bool testPublicTypedStateReplacementNormalizesInvalidSubset()
   return arc.get_timing_arc_delay_state().delay_map.empty() && arc.get_timing_arc_delay_state().fallback_key_set.empty();
 }
 
+bool testTimingReportValueMoves()
+{
+  static_assert(std::is_nothrow_move_constructible_v<ista::TimingPath>);
+  static_assert(std::is_nothrow_move_assignable_v<ista::TimingPath>);
+  static_assert(std::is_nothrow_move_constructible_v<ista::TimingPathPoint>);
+  static_assert(std::is_nothrow_move_assignable_v<ista::TimingPathPoint>);
+  ista::TimingPath original;
+  original.set_start_point(std::string(80, 's'));
+  original.set_end_point(std::string(80, 'e'));
+  original.set_slack(-3.25);
+  ista::TimingPathPoint point;
+  point.set_pin_name(std::string(80, 'p'));
+  point.set_arrival(7.5);
+  original.get_point_list().push_back(std::move(point));
+  const auto copy = original;
+  auto* points = original.get_point_list().data();
+  auto moved = std::move(original);
+  ista::TimingPath assigned;
+  assigned = std::move(moved);
+  if (assigned.get_point_list().data() != points || assigned.get_slack() != -3.25
+      || assigned.get_start_point() != std::string(80, 's') || assigned.get_end_point() != std::string(80, 'e')
+      || assigned.get_point_list().front().get_pin_name() != std::string(80, 'p')
+      || assigned.get_point_list().front().get_arrival() != 7.5)
+    return false;
+  assigned.get_point_list().clear();
+  auto independent = copy;
+  return independent.get_point_list().size() == 1 && independent.get_point_list().front().get_arrival() == 7.5;
+}
+
 bool testTimingPathStateConstStringGetters()
 {
   ista::TimingPathState state;
@@ -257,7 +287,7 @@ int main()
   return testMinDelayReplacesInitializationFallback() && testMaxDelayReplacesInitializationFallback() && testFallbackKeysAreIndependent()
                  && testEqualFirstDynamicClearsFallback() && testLossyMutableGetterAndLegacySetterClearFallbacks()
                  && testEscapedMutableReferenceCannotLeaveStaleFallbacks() && testTypedStateReplacement()
-                 && testPublicTypedStateReplacementNormalizesInvalidSubset() && testTimingPathStateConstStringGetters()
+                 && testPublicTypedStateReplacementNormalizesInvalidSubset() && testTimingPathStateConstStringGetters() && testTimingReportValueMoves()
              ? 0
              : 1;
 }

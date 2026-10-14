@@ -14,3 +14,10 @@ target_include_directories(liberty PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${HOME_UTILITY}
     ${HOME_THIRDPARTY}/parser/liberty/)
+
+
+if(BUILD_TESTING)
+  add_executable(liberty_expr_lifetime_test validation/LibertyExprLifetimeTest.cpp)
+  target_link_libraries(liberty_expr_lifetime_test PRIVATE liberty)
+  add_test(NAME liberty_expr_lifetime_test COMMAND liberty_expr_lifetime_test)
+endif()

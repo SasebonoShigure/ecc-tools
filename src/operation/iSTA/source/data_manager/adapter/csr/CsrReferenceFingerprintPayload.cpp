@@ -16,6 +16,8 @@
 // ***************************************************************************************
 #include "CsrReferenceFingerprintPayload.hpp"
 
+#include <unordered_map>
+
 #include "CsrReferenceCanonicalEncoderInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
@@ -30,7 +32,7 @@ std::vector<std::uint8_t> topologyPayload(const CsrReferenceInput& input)
   encoder.appendU64(input.nodes.size());
   for (const auto& node : input.nodes) {
     encoder.appendU64(node.id.value());
-    encoder.appendBytes(canonicalNodeKeyBytes(node.key));
+    encoder.appendNodeKeyBytes(node.key);
     encoder.appendString(token(node.direction));
     encoder.appendString(node.instance_cell);
     encoder.appendString(node.net_name);
@@ -38,7 +40,7 @@ std::vector<std::uint8_t> topologyPayload(const CsrReferenceInput& input)
   }
   encoder.appendU64(input.node_ids_by_key.size());
   for (const auto& entry : input.node_ids_by_key) {
-    encoder.appendBytes(canonicalNodeKeyBytes(entry.key));
+    encoder.appendNodeKeyBytes(entry.key);
     encoder.appendU64(entry.id.value());
   }
   encoder.appendU64(input.instances.size());
@@ -52,7 +54,7 @@ std::vector<std::uint8_t> topologyPayload(const CsrReferenceInput& input)
   encoder.appendU64(input.arcs.size());
   for (const auto& arc : input.arcs) {
     encoder.appendU64(arc.id.value());
-    encoder.appendBytes(canonicalArcKeyBytes(arc.key));
+    encoder.appendArcKeyBytes(arc.key);
     encoder.appendU64(arc.source.value());
     encoder.appendU64(arc.sink.value());
     encoder.appendString(token(arc.kind));
@@ -63,7 +65,7 @@ std::vector<std::uint8_t> topologyPayload(const CsrReferenceInput& input)
   }
   encoder.appendU64(input.arc_ids_by_key.size());
   for (const auto& entry : input.arc_ids_by_key) {
-    encoder.appendBytes(canonicalArcKeyBytes(entry.key));
+    encoder.appendArcKeyBytes(entry.key);
     encoder.appendU64(entry.id.value());
   }
   const auto append_u64s = [&](const auto& values) {
@@ -80,7 +82,7 @@ std::vector<std::uint8_t> topologyPayload(const CsrReferenceInput& input)
     encoder.appendU64(value);
   append_u64s(input.in_arc_ids);
   append_u64s(input.ordered_root_ids);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> clockConstraintPayload(const CsrReferenceInput& input)
@@ -117,7 +119,7 @@ std::vector<std::uint8_t> clockConstraintPayload(const CsrReferenceInput& input)
     encoder.appendString(constraint.raw_name);
     encoder.appendBool(constraint.value);
   }
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> libraryPayload(const CsrReferenceInput& input)
@@ -128,7 +130,7 @@ std::vector<std::uint8_t> libraryPayload(const CsrReferenceInput& input)
   encoder.appendU64(input.referenced_library_cells.size());
   for (const auto& cell : input.referenced_library_cells)
     detail::appendReferencedLibraryCellModelFields(encoder, cell);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> cornerPayload(const CsrReferenceInput& input)
@@ -140,7 +142,7 @@ std::vector<std::uint8_t> cornerPayload(const CsrReferenceInput& input)
   encoder.appendString(context.liberty_corner);
   encoder.appendString(context.temperature);
   encoder.appendString(context.rc_corner);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> parasiticPayload(const CsrReferenceInput& input)
@@ -149,13 +151,14 @@ std::vector<std::uint8_t> parasiticPayload(const CsrReferenceInput& input)
   encoder.appendDomain("reference-parasitic-payload", input.schema_version);
   encoder.appendBool(input.parasitics.nets.empty());
   detail::appendParasiticModelFields(encoder, input.parasitics);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> timingInputPayload(const CsrReferenceInput& input)
 {
   CanonicalEncoder encoder;
-  encoder.appendDomain("reference-timing-input-payload", input.schema_version);
+  encoder.appendDomain("reference-timing-input-model-digest-v1", input.schema_version);
+  std::unordered_map<const std::vector<ChildTimingArcModel>*, std::string> model_fingerprints;
   encoder.appendBool(input.nodes.empty() && input.arcs.empty() && input.start_seeds.empty() && input.endpoint_required.empty());
   for (AnalysisMode analysis : input.analysis_order)
     encoder.appendString(token(analysis));
@@ -191,7 +194,27 @@ std::vector<std::uint8_t> timingInputPayload(const CsrReferenceInput& input)
     encoder.appendBool(arc.eligibility.clock);
     encoder.appendBool(arc.native_cell_arc_ordinal.has_value());
     if (arc.native_cell_arc_ordinal) encoder.appendU64(*arc.native_cell_arc_ordinal);
-    detail::appendCellTransferModelFields(encoder, arc.transfer);
+    const auto& transfer = arc.transfer;
+    encoder.appendDouble(transfer.delay);
+    encoder.appendDouble(transfer.delay_min);
+    encoder.appendDouble(transfer.delay_max);
+    encoder.appendBool(transfer.is_clock_arc);
+    encoder.appendBool(transfer.is_disabled);
+    encoder.appendBool(transfer.is_clear_or_preset);
+    const auto& children = transfer.children();
+    encoder.appendU64(children.size());
+    if (!children.empty()) {
+      // Owners are immutable and stay alive for this export; pointers never enter the digest.
+      auto [entry, inserted] = model_fingerprints.try_emplace(&children);
+      if (inserted) {
+        CanonicalEncoder model;
+        model.appendU64(children.size());
+        for (const auto& child : children)
+          detail::appendChildTimingArcModelFields(model, child);
+        entry->second = componentFingerprint("reference-child-model", model.bytes());
+      }
+      encoder.appendString(entry->second);
+    }
     encoder.appendBool(arc.output_load.has_value());
     if (arc.output_load)
       for (const auto& analysis : *arc.output_load)
@@ -256,6 +279,11 @@ std::vector<std::uint8_t> timingInputPayload(const CsrReferenceInput& input)
     encoder.appendBool(seed.crpr_transition.has_value());
     if (seed.crpr_transition)
       encoder.appendString(token(*seed.crpr_transition));
+    encoder.appendBool(seed.output_load.has_value());
+    if (seed.output_load)
+      for (const auto& analysis : *seed.output_load)
+        for (double value : analysis)
+          encoder.appendDouble(value);
   }
   encoder.appendU64(input.endpoint_required.size());
   for (const auto& endpoint : input.endpoint_required) {
@@ -274,7 +302,7 @@ std::vector<std::uint8_t> timingInputPayload(const CsrReferenceInput& input)
   encoder.appendU64(input.unsupported_reasons.size());
   for (auto reason : input.unsupported_reasons)
     encoder.appendString(token(reason));
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 CsrSnapshotIdentity makeIdentityFromReferencePayloads(std::uint64_t session_token, std::uint64_t graph_generation, const FingerprintPayloads& payloads)

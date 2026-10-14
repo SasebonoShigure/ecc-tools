@@ -49,26 +49,9 @@ void reject(DualCsrViolations& errors, DualCsrViolationCode code,
   errors.push_back({code, std::move(field), std::move(message)});
 }
 
-void rebuildGroups(DualCsrArcGroupIndex& index,
-                   const DualCsrState& graph)
+void rebuildNetGroups(DualCsrArcGroupIndex& index,
+                      const DualCsrState& graph)
 {
-  std::map<csr::ArcKeyBase, std::vector<csr::ArcId>, ArcBaseLess> groups;
-  for (std::size_t slot = 0; slot < index.slots.size(); ++slot)
-    if (index.slots[slot].current_active_key)
-      groups[index.slots[slot].current_active_key->base].push_back(
-          csr::ArcId{static_cast<std::uint64_t>(slot)});
-  index.active_groups.clear();
-  index.active_groups.reserve(groups.size());
-  for (auto& [base, ids] : groups) {
-    std::ranges::sort(ids, [&](csr::ArcId lhs, csr::ArcId rhs) {
-      return index.slots[lhs.value()]
-                 .current_active_key->parallel_ordinal
-             < index.slots[rhs.value()]
-                   .current_active_key->parallel_ordinal;
-    });
-    index.active_groups.push_back({std::move(base), std::move(ids)});
-  }
-
   std::map<std::string, std::vector<csr::ArcId>> sink_nets;
   for (std::size_t slot = 0; slot < graph.arc_slots.size(); ++slot) {
     const auto& arc = graph.arc_slots[slot];
@@ -111,6 +94,29 @@ void rebuildGroups(DualCsrArcGroupIndex& index,
   index.clock_source_node_ids.erase(
       std::ranges::unique(index.clock_source_node_ids).begin(),
       index.clock_source_node_ids.end());
+}
+
+void rebuildGroups(DualCsrArcGroupIndex& index,
+                   const DualCsrState& graph)
+{
+  std::map<csr::ArcKeyBase, std::vector<csr::ArcId>, ArcBaseLess> groups;
+  for (std::size_t slot = 0; slot < index.slots.size(); ++slot)
+    if (index.slots[slot].current_active_key)
+      groups[index.slots[slot].current_active_key->base].push_back(
+          csr::ArcId{static_cast<std::uint64_t>(slot)});
+  index.active_groups.clear();
+  index.active_groups.reserve(groups.size());
+  for (auto& [base, ids] : groups) {
+    std::ranges::sort(ids, [&](csr::ArcId lhs, csr::ArcId rhs) {
+      return index.slots[lhs.value()]
+                 .current_active_key->parallel_ordinal
+             < index.slots[rhs.value()]
+                   .current_active_key->parallel_ordinal;
+    });
+    index.active_groups.push_back({std::move(base), std::move(ids)});
+  }
+
+  rebuildNetGroups(index, graph);
 }
 
 const std::string* sinkNet(const DualCsrState& graph,
@@ -315,11 +321,12 @@ void swap(DualCsrArcGroupIndex& lhs,
   lhs.swap(rhs);
 }
 
-DualCsrArcGroupIndexAttempt buildDualCsrArcGroupIndex(
+namespace {
+DualCsrArcGroupIndex constructIndex(
     const DualCsrState& graph,
-    std::span<const DualCsrArcGroupIndexBinding> bindings)
+    std::span<const DualCsrArcGroupIndexBinding> bindings,
+    DualCsrViolations& violations)
 {
-  DualCsrArcGroupIndexAttempt attempt;
   DualCsrArcGroupIndex index;
   index.session_token = graph.session_token;
   index.generation = graph.generation;
@@ -329,7 +336,7 @@ DualCsrArcGroupIndexAttempt buildDualCsrArcGroupIndex(
   for (const auto& binding : bindings) {
     const auto id = binding.id.value();
     if (id >= graph.arc_slots.size() || seen[id]) {
-      reject(attempt.violations, DualCsrViolationCode::kId,
+      reject(violations, DualCsrViolationCode::kId,
              "arc_group_index.bindings",
              "binding ArcId is out of range or duplicated");
       continue;
@@ -342,15 +349,74 @@ DualCsrArcGroupIndexAttempt buildDualCsrArcGroupIndex(
   }
   if (!std::ranges::all_of(seen,
                            [](bool value) { return value; }))
-    reject(attempt.violations, DualCsrViolationCode::kShape,
+    reject(violations, DualCsrViolationCode::kShape,
            "arc_group_index.bindings",
            "bindings do not cover every logical ArcId");
   rebuildGroups(index, graph);
+  return index;
+}
+
+void validateConstructedIndex(const DualCsrState& graph,
+                              DualCsrArcGroupIndex index,
+                              DualCsrArcGroupIndexAttempt& attempt)
+{
   auto errors = validateDualCsrArcGroupIndex(graph, index);
   attempt.violations.insert(attempt.violations.end(),
                             std::make_move_iterator(errors.begin()),
                             std::make_move_iterator(errors.end()));
   if (attempt.violations.empty())
+    attempt.index = std::move(index);
+}
+}  // namespace
+
+DualCsrArcGroupIndexAttempt buildDualCsrArcGroupIndex(
+    const DualCsrState& graph,
+    std::span<const DualCsrArcGroupIndexBinding> bindings)
+{
+  DualCsrArcGroupIndexAttempt attempt;
+  auto index = constructIndex(graph, bindings, attempt.violations);
+  validateConstructedIndex(graph, std::move(index), attempt);
+  return attempt;
+}
+
+DualCsrArcGroupIndexAttempt DualCsrArcGroupIndex::fromNativeExport(
+    const DualCsrState& graph)
+{
+  DualCsrArcGroupIndexAttempt attempt;
+  DualCsrArcGroupIndex index;
+  index.session_token = graph.session_token;
+  index.generation = graph.generation;
+  index.arc_high_water = graph.high_water.arc_slots;
+  index.slots.reserve(graph.arc_slots.size());
+  // Generation-zero native export binds each ArcId to its existing semantic key.
+  for (const auto& arc : graph.arc_slots)
+    index.slots.push_back({timing_edit::ExistingArcRef{arc.payload.key},
+                           arc.active ? std::optional{arc.payload.key} : std::nullopt});
+  // Native export assigns ArcIds in ArcKey order; parallel ordinals are already ordered.
+  std::size_t group_count = 0;
+  const csr::ArcKeyBase* previous = nullptr;
+  for (const auto& slot : index.slots) {
+    if (!slot.current_active_key)
+      continue;
+    const auto& base = slot.current_active_key->base;
+    if (previous == nullptr || *previous != base)
+      ++group_count;
+    previous = &base;
+  }
+  index.active_groups.reserve(group_count);
+  for (std::size_t slot = 0; slot < index.slots.size(); ++slot) {
+    if (!index.slots[slot].current_active_key)
+      continue;
+    const auto& base = index.slots[slot].current_active_key->base;
+    if (index.active_groups.empty() || index.active_groups.back().base != base)
+      index.active_groups.push_back({base, {}});
+    index.active_groups.back().active_arc_ids.push_back(
+        csr::ArcId{static_cast<std::uint64_t>(slot)});
+  }
+  rebuildNetGroups(index, graph);
+  if constexpr (incregpusta_debug_checks_enabled)
+    validateConstructedIndex(graph, std::move(index), attempt);
+  else
     attempt.index = std::move(index);
   return attempt;
 }
@@ -460,39 +526,44 @@ struct PreparedDualCsrIndexPatch::Data
     prepareGroupEdit(index.active_net_sink_groups, DualCsrNetSinkGroup{key, std::move(ids)}, NetSinkLess{}, &DualCsrNetSinkGroup::key, net_sinks);
   }
 
-  std::set<std::string> affected_nets;
   std::set<std::uint64_t> net_changed_ids = changed_ids;
-  for (const auto& delta : descriptor.arc_group_index_delta) {
-    if (const auto* net = sinkNet(graph, delta.id))
-      affected_nets.insert(*net);
-    if (const auto* net = afterNet(delta.id))
-      affected_nets.insert(*net);
-  }
+  for (const auto& change : descriptor.payload_changes)
+    if (change.expected.sink != change.replacement.sink)
+      net_changed_ids.insert(change.id.value());
   for (const auto& change : descriptor.node_payload_changes) {
-    affected_nets.insert(change.expected_net_name);
-    affected_nets.insert(change.replacement_net_name);
-    if (const auto* group = index.activeSinkNetGroup(
-            change.expected_net_name))
-      for (const auto id : group->active_arc_ids)
-        if (id.value() < graph.arc_slots.size()
-            && graph.arc_slots[id.value()].payload.sink
-                   == change.id)
-          net_changed_ids.insert(id.value());
+    // BaseIn contains every incoming arc, including arcs stored in AuxOut.
+    for (auto slot = graph.base_in.row_offsets[change.id.value()];
+         slot < graph.base_in.row_offsets[change.id.value() + 1]; ++slot)
+      if (const auto id = graph.base_in.physical_slots[slot])
+        net_changed_ids.insert(id->value());
   }
-  for (const auto& net_name : affected_nets) {
-    std::set<std::uint64_t> candidates = net_changed_ids;
-    if (const auto* group
-        = index.activeSinkNetGroup(net_name))
-      for (const auto id : group->active_arc_ids)
-        candidates.insert(id.value());
+  struct NetMembershipDelta {
+    std::vector<csr::ArcId> removed;
+    std::vector<csr::ArcId> added;
+  };
+  std::map<std::string, NetMembershipDelta> net_deltas;
+  for (const auto value : net_changed_ids) {
+    const csr::ArcId id{value};
+    const auto* before_net = sinkNet(graph, id);
+    const auto* after_net = afterNet(id);
+    if (before_net && after_net && *before_net == *after_net)
+      continue;
+    if (before_net)
+      net_deltas[*before_net].removed.push_back(id);
+    if (after_net)
+      net_deltas[*after_net].added.push_back(id);
+  }
+  for (const auto& [net_name, delta] : net_deltas) {
     std::vector<csr::ArcId> ids;
-    for (const auto id : candidates) {
-      const csr::ArcId arc_id{id};
-      const auto* actual_net = afterNet(arc_id);
-      if (actual_net != nullptr && *actual_net == net_name)
-        ids.push_back(arc_id);
+    if (const auto* group = index.activeSinkNetGroup(net_name)) {
+      ids.reserve(group->active_arc_ids.size() + delta.added.size());
+      std::ranges::set_difference(group->active_arc_ids, delta.removed,
+                                  std::back_inserter(ids), {},
+                                  &csr::ArcId::value, &csr::ArcId::value);
     }
-    std::ranges::sort(ids, {}, &csr::ArcId::value);
+    const auto retained = ids.size();
+    ids.insert(ids.end(), delta.added.begin(), delta.added.end());
+    std::ranges::inplace_merge(ids, ids.begin() + retained, {}, &csr::ArcId::value);
     prepareGroupEdit(index.active_sink_net_groups, DualCsrArcSinkNetGroup{net_name, std::move(ids)}, std::ranges::less{}, &DualCsrArcSinkNetGroup::sink_net_name, sink_nets);
   }
 

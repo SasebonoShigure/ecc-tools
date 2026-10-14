@@ -20,6 +20,7 @@
 #include <span>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 #include "CsrReferenceTypes.hpp"
 
@@ -38,8 +39,11 @@ class CanonicalEncoder
   void appendBytes(std::span<const std::uint8_t> value);
   void appendDouble(double value);
   void appendOptionalDouble(const std::optional<double>& value);
+  void appendNodeKeyBytes(const NodeKey& key);
+  void appendArcKeyBytes(const ArcKey& key);
 
   [[nodiscard]] const std::vector<std::uint8_t>& bytes() const { return _bytes; }
+  [[nodiscard]] std::vector<std::uint8_t> takeBytes() && noexcept { return std::move(_bytes); }
 
  private:
   std::vector<std::uint8_t> _bytes;

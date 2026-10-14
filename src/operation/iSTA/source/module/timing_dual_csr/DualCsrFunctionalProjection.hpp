@@ -141,6 +141,7 @@ struct DualCsrProjectedStartSeed
   csr::OptionalLaneMatrix slew;
   std::optional<csr::NodeKey> crpr_node;
   std::optional<csr::Transition> crpr_transition;
+  std::optional<csr::ArcOutputLoadMatrix> output_load;
 
   friend bool operator==(const DualCsrProjectedStartSeed&,
                          const DualCsrProjectedStartSeed&) = default;
@@ -178,7 +179,7 @@ struct DualCsrProjectedClockOwner
 
 struct DualCsrProjectedReferencePayload
 {
-  std::string schema_version{csr::kCsrSchemaVersion};
+  std::string schema_version{csr::kCsrReferenceInputSchemaVersion};
   csr::StaAnalysisContext analysis_context;
   std::array<csr::AnalysisMode, csr::kAnalysisCount> analysis_order{
       csr::AnalysisMode::kMax, csr::AnalysisMode::kMin};

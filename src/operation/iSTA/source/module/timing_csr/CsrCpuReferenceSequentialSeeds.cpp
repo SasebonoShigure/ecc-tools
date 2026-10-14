@@ -15,23 +15,6 @@
 namespace ista::csr {
 namespace {
 
-CsrCpuReferenceStageStatus outputLoad(const ActiveCsrEdgeView& edges, NodeId node, ArcOutputLoadMatrix& load)
-{
-  // Every outgoing net arc carries the canonical load of the entire Q net.
-  const auto visit = edges.forEachOutgoing(node, [&](const EdgeEntry& entry) {
-    const auto arc = edges.arc(entry.arc_id);
-    if (!arc || arc.value().source != node || arc.value().sink.value() >= edges.nodeCount())
-      return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-    if (arc.value().kind != ArcKind::kNet)
-      return EdgeVisitResult::continueVisit();
-    if (!arc.value().output_load)
-      return EdgeVisitResult::fail(CsrViewError::kCallbackError);
-    load = *arc.value().output_load;
-    return EdgeVisitResult::stopVisit();
-  });
-  return visit.control == EdgeVisitControl::kError ? CsrCpuReferenceStageStatus::kInvariantViolation : CsrCpuReferenceStageStatus::kSuccess;
-}
-
 CsrCpuReferenceStageStatus clockToQ(const CellTransferModel* transfer, AnalysisMode analysis, Transition clock_transition,
                                    Transition output_transition, double clock_slew, double load, const StartSeedModel& seed,
                                    CsrCpuReferenceWorkState& work, CsrDynamicArcValue& value)
@@ -70,7 +53,7 @@ CsrCpuReferenceStageStatus clockToQ(const CellTransferModel* transfer, AnalysisM
              ? CsrCpuReferenceStageStatus::kSuccess : CsrCpuReferenceStageStatus::kNumericFailure;
 }
 
-CsrCpuReferenceStageStatus initializeSeed(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads, const StartSeedModel& seed,
+CsrCpuReferenceStageStatus initializeSeed(const TimingPayloadView& payloads, const StartSeedModel& seed,
                                          const ReferencedLibraryCellModel& cell, std::optional<NodeId> clock_node, CsrCpuReferenceWorkState& work)
 {
   const auto node = seed.seed_node.value();
@@ -86,9 +69,9 @@ CsrCpuReferenceStageStatus initializeSeed(const ActiveCsrEdgeView& edges, const 
   const bool is_output = has_output && record.key.pin_name == cell.output_pin_name;
   ArcOutputLoadMatrix load{};
   if (is_output && !seed.parasitic.tree) {
-    const auto status = outputLoad(edges, seed.seed_node, load);
-    if (status != CsrCpuReferenceStageStatus::kSuccess)
-      return status;
+    if (!seed.output_load)
+      return CsrCpuReferenceStageStatus::kInvariantViolation;
+    load = *seed.output_load;
   }
   std::optional<ClockTagId> tag;
   if (seed.path_source) {
@@ -147,7 +130,7 @@ CsrCpuReferenceStageStatus initializeSeed(const ActiveCsrEdgeView& edges, const 
 
 }  // namespace
 
-CsrCpuReferenceStageStatus initializeCsrCpuSequentialSeeds(const ActiveCsrEdgeView& edges, const TimingPayloadView& payloads,
+CsrCpuReferenceStageStatus initializeCsrCpuSequentialSeeds(const ActiveCsrEdgeView&, const TimingPayloadView& payloads,
                                                          CsrCpuReferenceWorkState& work)
 {
   if (std::ranges::none_of(payloads.startSeeds(), [](const StartSeedModel& seed) { return seed.availability == StartSeedAvailability::kDeferredSequential; }))
@@ -178,7 +161,7 @@ CsrCpuReferenceStageStatus initializeCsrCpuSequentialSeeds(const ActiveCsrEdgeVi
         clock_node = found->second;
       }
     }
-    const auto status = initializeSeed(edges, payloads, seed, *cell->second, clock_node, work);
+    const auto status = initializeSeed(payloads, seed, *cell->second, clock_node, work);
     if (status != CsrCpuReferenceStageStatus::kSuccess)
       return status;
   }

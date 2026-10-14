@@ -237,6 +237,13 @@ void packSequential(const TimingPayloadView& input, HostData& data, ModelStorage
     }));
     if (has_output && node.key.pin_name == cell.output_pin_name)
       seed.kind = SeedKind::output;
+    if (seed.kind == SeedKind::output && !source.parasitic.tree) {
+      if (!source.output_load)
+        throw std::invalid_argument("CUDA sequential output seed has no load");
+      for (unsigned a = 0; a < 2; ++a)
+        for (unsigned t = 0; t < 2; ++t)
+          seed.output_load[a * 2 + t] = (*source.output_load)[a][t];
+    }
     seed.trigger = ctq != nullptr && !ctq->children().empty() && ctq->children().front().signature.trigger_transition == Transition::kFall ? 1 : 0;
     state.clock_name = intern(data.layout.clock_names, source.clock_tag);
     if (source.path_source) {

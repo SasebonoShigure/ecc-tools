@@ -12,9 +12,14 @@
 #include <utility>
 #include <vector>
 
-#include "DualCsrState.hpp"
+#include "DualCsrDescriptors.hpp"
 
 namespace ista::timing_dual_csr::detail {
+
+// Only the sealed builder may reuse its constructed row/ArcKey proof.
+// External descriptors must use validateDualCsrDescriptor.
+[[nodiscard]] DualCsrViolations validateConstructedDualCsrDescriptor(
+    const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor);
 
 inline void reject(DualCsrViolations& violations, DualCsrViolationCode code,
                    std::string field, std::string message)

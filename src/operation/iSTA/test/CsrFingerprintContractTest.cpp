@@ -123,7 +123,7 @@ CsrReferenceInput validInput()
                           .sink = NodeId{1},
                           .kind = ArcKind::kNet,
                           .eligibility = {true, true, true, false},
-                          .transfer = {}}};
+                          .transfer = {}, .output_load = {}}};
   input.arc_ids_by_key = {{input.arcs[0].key, ArcId{0}}};
   input.out_row_offsets = {0, 1, 1};
   input.out_arc_ids = {ArcId{0}};
@@ -207,6 +207,82 @@ void testSha256AndPrimitiveEncoding()
         invalid.appendDouble(std::numeric_limits<double>::quiet_NaN());
       },
       "NaN must be rejected");
+}
+
+void testFingerprintPayloadBoundaries()
+{
+  for (std::size_t domain_size = 0; domain_size < 128; ++domain_size) {
+    const std::string domain(domain_size, 'd');
+    for (const std::size_t size : {0U, 1U, 55U, 56U, 63U, 64U, 65U, 127U, 128U, 129U, 1024U}) {
+      std::vector<std::uint8_t> payload(size);
+      for (std::size_t index = 0; index < size; ++index)
+        payload[index] = static_cast<std::uint8_t>(index % 251);
+      CanonicalEncoder legacy;
+      legacy.appendDomain(domain);
+      legacy.appendBytes(payload);
+      require(componentFingerprint(domain, payload) == sha256Hex(legacy.bytes()), "component fingerprint changed at a split boundary");
+
+      if (domain_size == 0) {
+        FingerprintPayloads payloads;
+        payloads.timing_input = payload;
+        const auto identity = makeSnapshotIdentity(1, 0, payloads);
+        CanonicalEncoder composite;
+        composite.appendDomain("timing-input-composite");
+        composite.appendString(identity.topology_fingerprint);
+        composite.appendString(identity.clock_constraint_fingerprint);
+        composite.appendString(identity.library_fingerprint);
+        composite.appendString(identity.corner_fingerprint);
+        composite.appendString(identity.parasitic_fingerprint);
+        composite.appendBytes(payload);
+        require(identity.timing_input_fingerprint == sha256Hex(composite.bytes()), "timing composite encoding changed");
+      }
+    }
+  }
+}
+
+
+void testDirectKeyEncoding()
+{
+  CanonicalEncoder direct;
+  CanonicalEncoder legacy;
+  direct.appendDomain("key-sequence");
+  legacy.appendDomain("key-sequence");
+  for (const auto size : {0U, 1U, 55U, 64U, 257U, 4096U}) {
+    std::string name(size, 'x');
+    if (size != 0)
+      name[size / 2] = '\0';
+    for (const auto kind : {NodeKind::kPort, NodeKind::kInstancePin}) {
+      const NodeKey node{kind, name, "\xe6\x85\xa2", "Y"};
+      direct.appendNodeKeyBytes(node);
+      legacy.appendBytes(canonicalNodeKeyBytes(node));
+      require(direct.bytes() == legacy.bytes(), "direct node-key encoding changed bytes");
+      for (const auto arc_kind : {ArcKind::kNet, ArcKind::kCell}) {
+        ArcKey arc;
+        arc.base.source = node;
+        arc.base.sink = instancePin("sink:A", "sink", "A");
+        arc.base.kind = arc_kind;
+        arc.base.owner_name = name;
+        arc.base.library_source_port = "Y";
+        arc.base.library_sink_port = "A";
+        arc.parallel_ordinal = std::numeric_limits<std::uint64_t>::max();
+        if (arc_kind == ArcKind::kCell)
+          arc.base.library_arcs = {librarySignature(), librarySignature()};
+        direct.appendArcKeyBytes(arc);
+        legacy.appendBytes(canonicalArcKeyBytes(arc));
+        require(direct.bytes() == legacy.bytes(), "direct arc-key encoding changed bytes");
+      }
+    }
+  }
+  NodeKey bad_node = port("bad");
+  bad_node.kind = static_cast<NodeKind>(0xff);
+  requireInvalid([&] { direct.appendNodeKeyBytes(bad_node); }, "direct invalid node kind");
+  ArcKey bad_arc;
+  bad_arc.base.source = port("in");
+  bad_arc.base.sink = port("out");
+  bad_arc.base.kind = ArcKind::kCell;
+  bad_arc.base.library_arcs = {librarySignature()};
+  bad_arc.base.library_arcs[0].sense = static_cast<TimingSense>(0xff);
+  requireInvalid([&] { direct.appendArcKeyBytes(bad_arc); }, "direct invalid nested arc sense");
 }
 
 void testAnalysisContextKnownAnswers()
@@ -319,6 +395,8 @@ void testNestedBadEnums()
 int main()
 {
   testSha256AndPrimitiveEncoding();
+  testFingerprintPayloadBoundaries();
+  testDirectKeyEncoding();
   testAnalysisContextKnownAnswers();
   testSnapshotIdentityDomains();
   testNestedBadEnums();

@@ -16,15 +16,18 @@
 // ***************************************************************************************
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Arc.hpp"
 #include "CsrReferencePrimitives.hpp"
+#include "CsrReferenceCanonicalEncoder.hpp"
 #include "Database.hpp"
 #include "Pin.hpp"
 #include "TimingArc.hpp"
@@ -156,22 +159,18 @@ namespace native_semantic_key_detail {
 
 [[nodiscard]] inline std::vector<ArcKey> nativeSemanticArcKeys(const Database& database)
 {
-  std::vector<ArcKeyBase> bases;
-  bases.reserve(database.get_arc_list().size());
-  for (const Arc& arc : database.get_arc_list()) {
-    bases.push_back(native_semantic_key_detail::makeArcBase(database, arc));
-  }
-
+  const auto bytes_less = [](const auto& lhs, const auto& rhs) {
+    return std::lexicographical_compare(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
+  };
+  std::map<std::vector<std::uint8_t>, std::uint64_t, decltype(bytes_less)> next_ordinal;
   std::vector<ArcKey> keys;
-  keys.reserve(bases.size());
-  for (std::size_t index = 0; index < bases.size(); ++index) {
-    std::uint64_t ordinal = 0;
-    for (std::size_t prior = 0; prior < index; ++prior) {
-      if (bases[prior] == bases[index]) {
-        ++ordinal;
-      }
-    }
-    keys.push_back(ArcKey{bases[index], ordinal});
+  keys.reserve(database.get_arc_list().size());
+  for (const Arc& arc : database.get_arc_list()) {
+    ArcKey key{native_semantic_key_detail::makeArcBase(database, arc), 0};
+    // Count complete identities in native order without rescanning prior arcs.
+    auto& ordinal = next_ordinal[canonicalArcKeyBytes(key)];
+    key.parallel_ordinal = ordinal++;
+    keys.push_back(std::move(key));
   }
   return keys;
 }

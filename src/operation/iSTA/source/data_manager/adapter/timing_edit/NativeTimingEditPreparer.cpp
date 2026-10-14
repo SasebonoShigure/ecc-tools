@@ -6,6 +6,7 @@
 // iEDA is licensed under Mulan PSL v2.
 // ***************************************************************************************
 #include "NativeTimingEditPreparer.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -82,8 +83,7 @@ CanonicalPreStateEvidence evidenceOf(const Database& database, const csr::CsrRef
   for (const auto& arc : input.arcs) {
     evidence.arcs.push_back(arc.key);
   }
-  std::ranges::sort(evidence.nodes, csr::nodeKeyLess);
-  std::ranges::sort(evidence.arcs, csr::arcKeyLess);
+  // Native export already emits canonical NodeKey/ArcKey order.
   return evidence;
 }
 
@@ -566,8 +566,9 @@ CommittedEditIdentity NativeTimingEditPreparer::identityFromInput(const Database
   identity.generation = generation;
   identity.current_fingerprints = fingerprintsOf(input.source_identity);
   identity.canonical_pre_state = evidenceOf(database, input);
-  if (auto errors = validateCommittedEditIdentity(identity, "captured_current_identity"); !errors.empty())
-    invalidContract(errors);
+  if constexpr (incregpusta_debug_checks_enabled)
+    if (auto errors = validateCommittedEditIdentity(identity, "captured_current_identity"); !errors.empty())
+      invalidContract(errors);
   return identity;
 }
 

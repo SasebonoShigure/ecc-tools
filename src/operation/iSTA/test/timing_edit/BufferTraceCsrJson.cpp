@@ -352,7 +352,8 @@ Json startSeed(const csr::StartSeedModel& value)
            })},
           {"crpr_transition", optionalValue(value.crpr_transition, [](csr::Transition item) {
              return Json(csr::token(item));
-           })}};
+           })},
+          {"output_load", optionalValue(value.output_load, loadMatrix)}};
 }
 
 template <typename T, typename Convert>

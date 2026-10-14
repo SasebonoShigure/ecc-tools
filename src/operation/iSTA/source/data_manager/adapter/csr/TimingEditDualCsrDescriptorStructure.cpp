@@ -19,6 +19,7 @@
 #include <variant>
 #include <vector>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowTimingCaptureInternal.hpp"
 #include "TimingEditDualCsrDescriptorBuilder.hpp"
 
@@ -216,21 +217,23 @@ void buildOutgoingAndAux(const DualCsrState& state,
     if (!expected_sources.contains(source.value())
         || !captured_sources.insert(source.value()).second)
       invalid("candidate outgoing rows do not exactly cover affected sources");
-    std::vector<csr::ArcId> expected_post;
-    if (source.value() < descriptor.before.node_slots) {
-      expected_post = fullOutgoingRow(state, source);
-      expected_post.erase(
-          std::remove_if(expected_post.begin(), expected_post.end(),
-                         [&](csr::ArcId id) {
-                           return deactivated(descriptor, id);
-                         }),
-          expected_post.end());
+    if constexpr (incregpusta_debug_checks_enabled) {
+      std::vector<csr::ArcId> expected_post;
+      if (source.value() < descriptor.before.node_slots) {
+        expected_post = fullOutgoingRow(state, source);
+        expected_post.erase(
+            std::remove_if(expected_post.begin(), expected_post.end(),
+                           [&](csr::ArcId id) {
+                             return deactivated(descriptor, id);
+                           }),
+            expected_post.end());
+      }
+      for (const auto& append : descriptor.arc_appends)
+        if (append.source == source)
+          expected_post.push_back(append.id);
+      requireExactIds(expected_post, captured.active_arc_ids,
+                      "outgoing row");
     }
-    for (const auto& append : descriptor.arc_appends)
-      if (append.source == source)
-        expected_post.push_back(append.id);
-    requireExactIds(expected_post, captured.active_arc_ids,
-                    "outgoing row");
 
     if (source.value() >= descriptor.before.node_slots) {
       descriptor.appended_base_out_rows.push_back(
@@ -238,9 +241,6 @@ void buildOutgoingAndAux(const DualCsrState& state,
       continue;
     }
 
-    const auto expected = fullOutgoingRow(state, source);
-    descriptor.affected_base_out_rows.push_back(
-        {source, expected, captured.active_arc_ids});
     const auto begin = state.base_out.row_offsets.at(source.value());
     const auto end = state.base_out.row_offsets.at(source.value() + 1);
     const auto capacity = static_cast<std::size_t>(end - begin);
@@ -271,10 +271,6 @@ void buildOutgoingAndAux(const DualCsrState& state,
   if (captured_sources != expected_sources)
     invalid("candidate outgoing rows omit an affected source");
   std::ranges::sort(descriptor.appended_base_out_rows,
-                    [](const auto& lhs, const auto& rhs) {
-                      return lhs.source.value() < rhs.source.value();
-                    });
-  std::ranges::sort(descriptor.affected_base_out_rows,
                     [](const auto& lhs, const auto& rhs) {
                       return lhs.source.value() < rhs.source.value();
                     });
@@ -358,18 +354,20 @@ void buildIncoming(const PendingStructuredBatch& pending,
     std::vector<csr::ArcId> expected;
     if (sink.value() < descriptor.before.node_slots)
       expected = baseInRow(state, sink);
-    auto expected_post = expected;
-    expected_post.erase(
-        std::remove_if(expected_post.begin(), expected_post.end(),
-                       [&](csr::ArcId id) {
-                         return deactivated(descriptor, id);
-                       }),
-        expected_post.end());
-    for (const auto& append : descriptor.arc_appends)
-      if (append.sink == sink)
-        expected_post.push_back(append.id);
-    requireExactIds(expected_post, captured.active_arc_ids,
-                    "incoming row");
+    if constexpr (incregpusta_debug_checks_enabled) {
+      auto expected_post = expected;
+      expected_post.erase(
+          std::remove_if(expected_post.begin(), expected_post.end(),
+                         [&](csr::ArcId id) {
+                           return deactivated(descriptor, id);
+                         }),
+          expected_post.end());
+      for (const auto& append : descriptor.arc_appends)
+        if (append.sink == sink)
+          expected_post.push_back(append.id);
+      requireExactIds(expected_post, captured.active_arc_ids,
+                      "incoming row");
+    }
     descriptor.affected_base_in_rows.push_back(
         {sink, expected, captured.active_arc_ids});
     if (sink.value() >= descriptor.before.node_slots)
@@ -464,23 +462,18 @@ DualCsrBatchDescriptor basicDescriptor(
       descriptor.payload_changes.push_back(
           {captured.id, expected.payload, captured.payload});
   }
-  std::map<timing_edit::StableArcRef, const AffectedArcCapture*> requests;
-  for (const auto& request : pending.capturePlan().arcs)
-    if (!requests.emplace(request.ref, &request).second)
-      invalid("arc_index_requests has duplicate records");
   for (const auto& captured : records.arcs) {
-    const auto found = requests.find(captured.ref);
-    if (found == requests.end())
-      invalid("arc_index_requests is missing a planned record");
-    const auto& request = *found->second;
+    std::optional<csr::ArcKey> expected;
+    if (captured.id.value() < descriptor.before.arc_slots) {
+      const auto* indexed = pending.expectedBefore().arcGroupIndex().slot(captured.id);
+      if (!indexed || indexed->ref != captured.ref || !indexed->current_active_key)
+        invalid("captured arc has no live committed index binding");
+      expected = indexed->current_active_key;
+    }
     const std::optional<csr::ArcKey> replacement
-        = captured.active
-              ? std::optional<csr::ArcKey>{captured.payload.key}
-              : std::nullopt;
-    if (request.expected_current_key != replacement)
-      descriptor.arc_group_index_delta.push_back(
-          {captured.id, captured.ref, request.expected_current_key,
-           replacement});
+        = captured.active ? std::optional<csr::ArcKey>{captured.payload.key} : std::nullopt;
+    if (expected != replacement)
+      descriptor.arc_group_index_delta.push_back({captured.id, captured.ref, std::move(expected), replacement});
   }
   std::ranges::sort(descriptor.arc_appends,
                     [](const auto& lhs, const auto& rhs) {

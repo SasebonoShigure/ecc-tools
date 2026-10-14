@@ -293,7 +293,7 @@ def _validate_descriptor(value: object, index: int, session: int,
             "target_generation", "before", "after", "node_appends",
             "arc_appends", "node_payload_changes", "removes", "changes",
             "reverse_changes", "payload_changes", "logical_deactivations",
-            "aux_rows", "appended_base_out_rows", "affected_base_out_rows",
+            "aux_rows", "appended_base_out_rows",
             "affected_base_in_rows", "reference_payload",
             "arc_group_index_delta"}
     item = _object(value, keys, label, require)
@@ -353,15 +353,12 @@ def _validate_descriptor(value: object, index: int, session: int,
                                   "expected_active"},
         "aux_rows": {"source", "expected_arc_ids", "replacement_arc_ids"},
         "appended_base_out_rows": {"source", "arc_ids"},
-        "affected_base_out_rows": {"source", "expected_arc_ids",
-                                   "replacement_arc_ids"},
         "affected_base_in_rows": {"sink", "expected_arc_ids",
                                   "replacement_arc_ids"},
         "arc_group_index_delta": {"id", "ref", "expected_active_key",
                                   "replacement_active_key"},
     }
     row_owner = {"appended_base_out_rows": "source",
-                 "affected_base_out_rows": "source",
                  "affected_base_in_rows": "sink"}
     for field, expected_keys in record_keys.items():
         records = _array(item[field], f"{label}.{field}", require)

@@ -64,6 +64,19 @@ __global__ void changePayloads(DeviceView view, DevicePatch patch)
     else
       arc = record.replacement;
   }
+  for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < patch.seed_load_count;
+       i += static_cast<Index>(gridDim.x) * blockDim.x) {
+    const auto& record = patch.seed_loads[i];
+    auto& seed = patch.seed_nodes[record.slot].state.sequential;
+    bool matches = seed.kind == SeedKind::output && seed.rc_binding == absent;
+    for (unsigned lane = 0; lane < 4; ++lane)
+      matches = matches && seed.output_load[lane] == record.expected[lane];
+    if (!matches)
+      recordFailure(view.status, Status::invariant);
+    else
+      for (unsigned lane = 0; lane < 4; ++lane)
+        seed.output_load[lane] = record.replacement[lane];
+  }
 }
 __global__ void changeSlots(DeviceView view, DevicePatch patch)
 {
@@ -119,7 +132,7 @@ __global__ void bindAux(DeviceView view, const AuxBinding* bindings, Index count
       const_cast<AuxRow*>(view.aux_rows)[binding.source] = binding.before;
   }
 }
-__global__ void captureUndo(DeviceView view, SlotUndo* slots, Index slot_count, ArcUndo* arcs, Index arc_count)
+__global__ void captureUndo(DeviceView view, SlotUndo* slots, Index slot_count, ArcUndo* arcs, Index arc_count, NodeSeed* seeds, SeedLoadUndo* loads, Index load_count)
 {
   for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < slot_count;
        i += static_cast<Index>(gridDim.x) * blockDim.x)
@@ -127,8 +140,12 @@ __global__ void captureUndo(DeviceView view, SlotUndo* slots, Index slot_count, 
   for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < arc_count;
        i += static_cast<Index>(gridDim.x) * blockDim.x)
     arcs[i].value = view.arcs[arcs[i].id];
+  for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < load_count;
+       i += static_cast<Index>(gridDim.x) * blockDim.x)
+    for (unsigned lane = 0; lane < 4; ++lane)
+      loads[i].value[lane] = seeds[loads[i].slot].state.sequential.output_load[lane];
 }
-__global__ void restoreUndo(DeviceView view, const SlotUndo* slots, Index slot_count, const ArcUndo* arcs, Index arc_count)
+__global__ void restoreUndo(DeviceView view, const SlotUndo* slots, Index slot_count, const ArcUndo* arcs, Index arc_count, NodeSeed* seeds, const SeedLoadUndo* loads, Index load_count)
 {
   // Restoration consumes actual saved values even when the patch failed midway.
   for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < slot_count;
@@ -137,6 +154,10 @@ __global__ void restoreUndo(DeviceView view, const SlotUndo* slots, Index slot_c
   for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < arc_count;
        i += static_cast<Index>(gridDim.x) * blockDim.x)
     const_cast<Arc*>(view.arcs)[arcs[i].id] = arcs[i].value;
+  for (Index i = static_cast<Index>(blockIdx.x) * blockDim.x + threadIdx.x; i < load_count;
+       i += static_cast<Index>(gridDim.x) * blockDim.x)
+    for (unsigned lane = 0; lane < 4; ++lane)
+      seeds[loads[i].slot].state.sequential.output_load[lane] = loads[i].value[lane];
 }
 }  // namespace
 void launchAuxBindings(DeviceView view, const AuxBinding* bindings, Index count, Index capacity, cudaStream_t stream, unsigned threads)
@@ -145,18 +166,20 @@ void launchAuxBindings(DeviceView view, const AuxBinding* bindings, Index count,
   check(cudaGetLastError(), "CUDA Aux row binding launch");
 }
 void launchCaptureUndo(DeviceView view, SlotUndo* slots, Index slot_count, ArcUndo* arcs, Index arc_count,
+                       NodeSeed* seeds, SeedLoadUndo* loads, Index load_count,
                        cudaStream_t stream, unsigned threads)
 {
-  if (slot_count || arc_count) {
-    captureUndo<<<kernelBlocks(std::max(slot_count, arc_count), threads), threads, 0, stream>>>(view, slots, slot_count, arcs, arc_count);
+  if (slot_count || arc_count || load_count) {
+    captureUndo<<<kernelBlocks(std::max({slot_count, arc_count, load_count}), threads), threads, 0, stream>>>(view, slots, slot_count, arcs, arc_count, seeds, loads, load_count);
     check(cudaGetLastError(), "CUDA capture local undo launch");
   }
 }
 void launchRestoreUndo(DeviceView view, const SlotUndo* slots, Index slot_count, const ArcUndo* arcs, Index arc_count,
+                       NodeSeed* seeds, const SeedLoadUndo* loads, Index load_count,
                        cudaStream_t stream, unsigned threads)
 {
-  if (slot_count || arc_count) {
-    restoreUndo<<<kernelBlocks(std::max(slot_count, arc_count), threads), threads, 0, stream>>>(view, slots, slot_count, arcs, arc_count);
+  if (slot_count || arc_count || load_count) {
+    restoreUndo<<<kernelBlocks(std::max({slot_count, arc_count, load_count}), threads), threads, 0, stream>>>(view, slots, slot_count, arcs, arc_count, seeds, loads, load_count);
     check(cudaGetLastError(), "CUDA restore local undo launch");
   }
 }
@@ -174,8 +197,8 @@ std::uint64_t launchTargetedPatch(DeviceView view, DevicePatch patch, cudaStream
     ++launches;
   }
   // Payloads must be complete before any slot validates replacement metadata.
-  if (patch.payload_count) {
-    changePayloads<<<kernelBlocks(patch.payload_count, threads), threads, 0, stream>>>(view, patch);
+  if (patch.payload_count || patch.seed_load_count) {
+    changePayloads<<<kernelBlocks(std::max(patch.payload_count, patch.seed_load_count), threads), threads, 0, stream>>>(view, patch);
     check(cudaGetLastError(), "CUDA payload change launch");
     ++launches;
   }

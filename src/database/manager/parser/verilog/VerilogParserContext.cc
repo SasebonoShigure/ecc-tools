@@ -520,7 +520,8 @@ class CppVerilogModule
   void addStmt(CppVerilogStmt* stmt)
   {
     _stmts.push_back(stmt);
-    refreshCStruct();
+    _stmt_handles.push_back(stmt);
+    _c.module_stmts = makeVerilogVec(_stmt_handles);
   }
 
   void eraseStmt(CppVerilogStmt* stmt)

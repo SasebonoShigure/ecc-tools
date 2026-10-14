@@ -227,7 +227,6 @@ CsrReferenceInput materializedCellInput()
   net_arc.transfer.delay = 0.0;
   net_arc.transfer.delay_min = 0.0;
   net_arc.transfer.delay_max = 0.0;
-  net_arc.output_load = outputLoad(0.1);
 
   input.arcs = {net_arc, cell_arc};
   input.arc_ids_by_key = {{input.arcs[0].key, ArcId{0}}, {input.arcs[1].key, ArcId{1}}};

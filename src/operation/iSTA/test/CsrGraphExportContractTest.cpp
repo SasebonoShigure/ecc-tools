@@ -234,6 +234,7 @@ int main()
                               NativeGraphFixtureCase::kFlags,
                               NativeGraphFixtureCase::kSparseAdjacency,
                               NativeGraphFixtureCase::kUnboundFallback,
+                              NativeGraphFixtureCase::kMixedFallback,
                               NativeGraphFixtureCase::kBoundSignature,
                               NativeGraphFixtureCase::kUtf8};
     for (std::size_t index = 0; index < cases.size(); ++index) {

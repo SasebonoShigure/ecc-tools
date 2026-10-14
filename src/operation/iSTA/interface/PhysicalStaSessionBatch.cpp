@@ -185,6 +185,7 @@ PhysicalStaBatchResult PhysicalStaSessionState::applyBatchImpl(Database& databas
     }
 #endif
     _report_generation.reset();
+    _csr_report_generation.reset();
     if (cuda || incremental)
       _timing_generation.reset();
     else

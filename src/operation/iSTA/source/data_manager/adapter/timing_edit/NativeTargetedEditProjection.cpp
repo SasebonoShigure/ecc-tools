@@ -114,8 +114,7 @@ csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditS
   return node;
 }
 
-namespace {
-csr::ArcOutputLoadMatrix netLoad(const Database& database, const NativeTargetedEditState& state, const std::string& name,
+csr::ArcOutputLoadMatrix targetedNetLoad(const Database& database, const NativeTargetedEditState& state, const std::string& name,
                              const std::set<std::string>& starts, const std::set<std::string>& ends)
 {
   if (name.empty())
@@ -140,7 +139,6 @@ csr::ArcOutputLoadMatrix netLoad(const Database& database, const NativeTargetedE
   }
   return csr::detail::projectCanonicalNoParasiticNetLoad(database, name, facts);
 }
-}  // namespace
 
 csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTargetedEditState& state, std::size_t rank,
                                     std::map<std::string, csr::ArcOutputLoadMatrix>& loads,
@@ -193,10 +191,10 @@ csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTarget
         || tree->terminals[record.parasitic.terminal] != record.sink
         || (record.kind == csr::ArcKind::kCell ? record.sink : record.source) != tree->terminals.front())
       throw std::invalid_argument("targeted RC payload has a stale driver or terminal");
-  } else {
+  } else if (record.kind == csr::ArcKind::kCell) {
     auto load = loads.find(nodes[1].net_name);
     if (load == loads.end())
-      load = loads.emplace(nodes[1].net_name, netLoad(database, state, nodes[1].net_name, starts, ends)).first;
+      load = loads.emplace(nodes[1].net_name, targetedNetLoad(database, state, nodes[1].net_name, starts, ends)).first;
     record.output_load = load->second;
   }
   return {record.key,

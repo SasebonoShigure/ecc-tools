@@ -349,7 +349,7 @@
       "additionalProperties": false,
       "required": ["schema_version", "topology", "clock_constraint", "library", "corner", "parasitic", "timing_input"],
       "properties": {
-        "schema_version": {"const": "1.0.0"},
+        "schema_version": {"const": "2.0.0"},
         "topology": {"$ref": "#/$defs/sha256"},
         "clock_constraint": {"$ref": "#/$defs/sha256"},
         "library": {"$ref": "#/$defs/sha256"},

@@ -126,6 +126,18 @@ void StaCsrSessionContext::materializeCudaTiming(Database& database, const timin
     throw;
   }
 }
+const std::pair<std::string, std::string>& StaCsrSessionContext::readCudaReport(Database& database,
+    const timing_edit::NativeExecutionAuthority& authority)
+{
+  if (!authority.readyForQuery() || &database != &STADM.getDatabase())
+    throw std::logic_error("CUDA report requires the committed session owner");
+  try {
+    return cudaState(authority).readReport(database, authority);
+  } catch (...) {
+    if (_cuda && (_cuda->_poisoned || _cuda->device.poisoned())) authority.poison();
+    throw;
+  }
+}
 void StaCsrSessionContext::prepareCudaReport(Database& database, const timing_edit::NativeExecutionAuthority& authority)
 {
   materializeCudaTiming(database, authority);

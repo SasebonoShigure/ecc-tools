@@ -31,7 +31,7 @@ using namespace detail;
 std::vector<CsrContractViolation> validateReferenceInputIntrinsic(const CsrReferenceInput& input)
 {
   Violations errors;
-  if (input.schema_version != kCsrSchemaVersion)
+  if (input.schema_version != kCsrReferenceInputSchemaVersion)
     reject(errors, "schema_version", "unsupported schema version");
   appendViolations(errors, validateAnalysisContextIntrinsic(input.analysis_context));
   appendViolations(errors, detail::validateParasiticContextCrossField(input));

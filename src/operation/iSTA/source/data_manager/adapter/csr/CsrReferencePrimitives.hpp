@@ -26,6 +26,8 @@
 namespace ista::csr {
 
 inline constexpr const char* kCsrSchemaVersion = "1.0.0";
+inline constexpr const char* kCsrFingerprintSchemaVersion = "2.0.0";
+inline constexpr const char* kCsrReferenceInputSchemaVersion = "2.0.0";
 inline constexpr std::size_t kAnalysisCount = 2;
 inline constexpr std::size_t kTransitionCount = 2;
 inline constexpr std::size_t kPathSourceCount = 2;
@@ -273,7 +275,7 @@ struct StaAnalysisContext
 
 struct CsrSnapshotIdentity
 {
-  std::string fingerprint_schema_version{kCsrSchemaVersion};
+  std::string fingerprint_schema_version{kCsrFingerprintSchemaVersion};
   std::uint64_t session_token{0};
   std::uint64_t graph_generation{0};
   std::string topology_fingerprint;

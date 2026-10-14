@@ -1,6 +1,8 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
+#include <algorithm>
 #include <iostream>
+#include "IncreGpuStaBuildConfig.hpp"
 #include <stdexcept>
 
 #include "CanonicalTimingRecordProjectorInternal.hpp"
@@ -9,6 +11,8 @@
 #include "DualCsrTransactionCoordinator.hpp"
 #include "SemanticCsrNativeView.hpp"
 #include "Instance.hpp"
+#include "CanonicalGraphConstruction.hpp"
+#include "NativeDatabaseValidation.hpp"
 #include "Pin.hpp"
 #include "TimingPoint.hpp"
 #include "NativeBufferInsertionInternal.hpp"
@@ -16,11 +20,13 @@
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "DualCsrArcGroupIndexValidation.hpp"
 #include "DualCsrStateValidation.hpp"
+#include "DualCsrValidationInternal.hpp"
 #include "DualCsrStructuredBatchTestSupport.hpp"
 #include "DualCsrUpdaterInternal.hpp"
 #include "TimingEditTransactionNativeSupport.hpp"
 #include "TimingEditValidation.hpp"
 #include "TimingGraphCsrAdapter.hpp"
+#include "TimingResultScatterInternal.hpp"
 
 namespace ista::timing_dual_csr::test {
 namespace {
@@ -41,10 +47,11 @@ VerifiedStructuredBatch build(timing_edit::test::GuardedTestSession& session,
   require(result.has_value(), "guarded direct edit produced no result");
   return std::move(*result);
 }
-void directEdit(bool fanout, bool non_graph_prefix)
+void directEdit(bool fanout, bool non_graph_prefix, double input_capacitance, bool partial_fanout, bool reordered = false)
 {
   timing_edit::test::installNativeTransactionBaseline();
   auto& database = STADM.getDatabase();
+  database.get_timing_library().get_cell_map().at("BUF_X1").get_port_map().at("A").set_capacitance(input_capacitance);
   if (non_graph_prefix) {
     auto& arcs = database.get_timing_library().get_cell_map().at("BUF_X1").get_cell_arc_list();
     auto other = arcs.front();
@@ -55,6 +62,26 @@ void directEdit(bool fanout, bool non_graph_prefix)
   timing_edit::test::GuardedTestSession session;
   auto fixture = fanout ? structured_support::makeStructuredFanoutFixture(database, session.token())
                         : structured_support::makeStructuredFixture(database, session.token());
+  if (partial_fanout) fixture.plan.edits.front().moved_sinks.pop_back();
+  if (reordered) {
+    require(fanout, "reordered fixture needs retained fanout");
+    auto& moved = fixture.plan.edits.front().moved_sinks;
+    std::reverse(moved.begin(), moved.end());
+    auto& base = fixture.graph.base_out;
+    for (std::size_t row = 0; row + 1 < base.row_offsets.size(); ++row)
+      std::reverse(base.physical_slots.begin() + base.row_offsets[row],
+                   base.physical_slots.begin() + base.row_offsets[row + 1]);
+    require(validateDualCsrState(fixture.graph).empty(), "reordered Base/Aux fixture is invalid");
+  }
+  auto malformed_graph = fixture.graph;
+  require(!malformed_graph.base_out.physical_slots.empty(), "fixture has no outgoing arcs");
+  malformed_graph.base_out.physical_slots.front().reset();
+  std::vector<DualCsrArcGroupIndexBinding> bindings;
+  for (std::size_t id = 0; id < fixture.arc_group_index.slots.size(); ++id)
+    bindings.push_back({csr::ArcId{id}, fixture.arc_group_index.slots[id].ref});
+  require(!buildDualCsrArcGroupIndex(malformed_graph, bindings).success(),
+          "public index factory accepted an incomplete graph");
+
   const auto native_before = csr::exportCsrGraphSnapshot(database);
   csr::detail::NativeLibraryModels models(database);
   auto foreign = timing_edit::test::makeNativeEditFixture();
@@ -66,12 +93,28 @@ void directEdit(bool fanout, bool non_graph_prefix)
     foreign_rejected = std::string(error.what()).find("another Database") != std::string::npos;
   }
   require(foreign_rejected, "direct edit accepted models from another Database");
-  auto direct = build(session, structured_support::prepare(fixture), models);
+  auto pending = structured_support::prepare(fixture);
+  auto direct = build(session, std::move(pending), models);
   require(!direct.captureAudit(), "direct CSR edit invented a native capture audit");
   require(csr::exportCsrGraphSnapshot(database) == native_before, "direct edit mutated the native Database");
   if constexpr (incregpusta_debug_checks_enabled) {
     auto native = structured_support::captureAndBuildVerifiedBatch(session, fixture);
     require(native.descriptor() == direct.descriptor(), "direct CSR descriptor differs from independent native candidate");
+  }
+  require(detail::validateConstructedDualCsrDescriptor(fixture.graph, direct.descriptor()).empty(),
+          "controlled descriptor failed applicability checks");
+  for (unsigned mutation = 0; mutation != 6; ++mutation) {
+    auto malformed = direct.descriptor();
+    switch (mutation) {
+      case 0: malformed.expected_generation = timing_edit::TransactionGeneration{9}; break;
+      case 1: malformed.before.arc_slots += 1; break;
+      case 2: malformed.logical_deactivations.front().expected_active = false; break;
+      case 3: malformed.reverse_changes.front().expected_arc = csr::ArcId{malformed.after.arc_slots}; break;
+      case 4: malformed.node_appends.front().id = csr::NodeId{malformed.after.node_slots}; break;
+      case 5: malformed.reference_payload.source_identity.reset(); break;
+    }
+    require(!detail::validateConstructedDualCsrDescriptor(fixture.graph, malformed).empty(),
+            "controlled descriptor accepted stale, malformed or mismatched old values");
   }
   const auto before = fixture.graph;
   const auto resolver_before = fixture.resolver;
@@ -106,11 +149,59 @@ void directEdit(bool fanout, bool non_graph_prefix)
   require(rejected, "direct edit accepted stale preparation");
   require(session.closeAndRelease().ok(), "direct edit session close failed");
 }
-void lazySemanticView()
+void addParallelLibraryInstance(Database& database)
+{
+  auto& children = database.get_timing_library().get_cell_map().at("INV_X1").get_cell_arc_list();
+  auto duplicate = children.front();
+  duplicate.set_delay(0.07);
+  duplicate.set_delay_min(0.06);
+  duplicate.set_delay_max(0.08);
+  children.push_back(std::move(duplicate));
+  Instance instance;
+  instance.set_instance_name("parallel");
+  instance.set_cell_name("INV_X1");
+  instance.get_output_pin_name() = "parallel:Y";
+  instance.set_pin_name_list({"parallel:A", "parallel:Y"});
+  database.get_instance_map().emplace("parallel", std::move(instance));
+  for (const auto& port : {std::string("A"), std::string("Y")}) {
+    const std::string name = "parallel:" + port;
+    Pin pin;
+    pin.set_full_name(name);
+    pin.set_instance_name("parallel");
+    pin.set_pin_name(port);
+    pin.set_direction(port == "A" ? PinDirection::kInput : PinDirection::kOutput);
+    pin.set_net_name(port == "A" ? "n0" : "parallel_out");
+    database.get_pin_map().emplace(name, std::move(pin));
+    database.get_timing_point_map()[name].set_level(port == "A" ? 2 : 3);
+    database.get_timing_order_list().push_back(name);
+  }
+  auto& input = database.get_net_map().at("n0");
+  input.get_pin_name_list().push_back("parallel:A");
+  canonical_graph::refreshNetDriverLoad(database, input);
+  Net output;
+  output.set_net_name("parallel_out");
+  output.set_pin_name_list({"parallel:Y"});
+  canonical_graph::refreshNetDriverLoad(database, output);
+  database.get_net_map().emplace("parallel_out", std::move(output));
+  canonical_graph::appendArc(database, canonical_graph::makeNetArc(database, "in", "parallel:A", ArcType::kNet, "n0"));
+  require(canonical_graph::appendLibraryCellArcs(database, database.get_instance_map().at("parallel")),
+          "parallel fixture did not construct its library arcs");
+}
+void lazySemanticView(bool move_created_input, bool parallel = false)
 {
   using namespace timing_edit;
   timing_edit::test::installNativeTransactionBaseline();
   auto& database = STADM.getDatabase();
+  if (parallel) {
+    addParallelLibraryInstance(database);
+    timing_edit::requireValidNativeDatabase(database);
+    const auto exported = csr::exportCsrGraphSnapshot(database);
+    if (const auto* failure = std::get_if<csr::CsrGraphExportFailure>(&exported))
+      throw std::runtime_error("parallel graph export: " + std::string(csr::token(failure->code)));
+    const auto reference = csr::exportCsrReferenceInputCandidate(database, timing_edit::test::editTestAnalysisContext(), 31337);
+    if (const auto* failure = std::get_if<csr::CsrReferenceInputExportFailure>(&reference))
+      throw std::runtime_error("parallel reference export: " + std::string(csr::token(failure->code)) + " phase=" + std::to_string(static_cast<int>(failure->failed_phase)));
+  }
   timing_edit::test::GuardedTestSession session;
   auto fixture = structured_support::makeStructuredFixture(database, session.token());
   csr::detail::NativeLibraryModels models(database);
@@ -121,8 +212,13 @@ void lazySemanticView()
     const auto generation = coordinator.committed().generation;
     auto edit = fixture.plan.edits.front();
     edit.creation_token.batch_ordinal = generation.value() + 1;
-    if (!history.empty())
-      edit.original_net = CreatedNetRef{history.back().edits.front().creation_token, CreatedNetRole::kOutputNet};
+    if (!history.empty()) {
+      const auto previous = history.back().edits.front().creation_token;
+      if (move_created_input)
+        edit.moved_sinks = {CreatedNodeRef{previous, CreatedNodeRole::kInput}};
+      else
+        edit.original_net = CreatedNetRef{previous, CreatedNetRole::kOutputNet};
+    }
     history.push_back({generation, {std::move(edit)}});
     auto direct = build(session, coordinator.prepareBatch(history.back()), models);
     auto attempt = makeStagedDualCsrAnalysisState(coordinator, std::move(direct));
@@ -151,6 +247,30 @@ void lazySemanticView()
   require(materialize(coordinator.committed().timing.values), "semantic view could not retry after final scatter failure");
   const auto two_batches = csr::exportCsrGraphSnapshot(database);
   require(two_batches != original, "successful semantic view did not publish new topology");
+  if constexpr (incregpusta_debug_checks_enabled)
+  for (unsigned mutation = 0; mutation != 3; ++mutation) {
+    auto bad_identity = coordinator.committed().graph;
+    const auto active = std::ranges::find_if(bad_identity.arc_slots, [](const auto& slot) { return slot.active; });
+    require(active != bad_identity.arc_slots.end(), "semantic view fixture has no active arc");
+    switch (mutation) {
+      case 0: ++active->payload.key.parallel_ordinal; break;
+      case 1: active->payload.key.base.owner_name += "_wrong"; break;
+      case 2: active->payload.key.base.library_source_port += "_wrong"; break;
+    }
+    bool bad_identity_rejected = false;
+    const auto check = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
+        session.session(), [&](std::uint64_t, StaCsrSessionContext&, const NativeExecutionAuthority&) {
+          try {
+            static_cast<void>(csr::detail::prepareDualCsrTimingResult(
+                database, bad_identity, coordinator.committed().timing.values));
+          } catch (const std::exception&) {
+            bad_identity_rejected = true;
+          }
+          return StaStatus::success(session.session().state());
+        });
+    require(check.ok() && bad_identity_rejected && csr::exportCsrGraphSnapshot(database) == two_batches,
+            "native view accepted altered arc identity or published a partial scatter");
+  }
   require(materialize(coordinator.committed().timing.values)
               && csr::exportCsrGraphSnapshot(database) == two_batches, "same-generation semantic view changed its graph");
   commit();
@@ -161,6 +281,30 @@ void lazySemanticView()
   for (const auto& node : current.graph.nodes)
     require(database.get_pin_map().at(node.key.full_name).get_net_name() == node.net_name,
             "semantic final native connection differs from committed CSR");
+  if (parallel) {
+    const auto& children = database.get_timing_library().get_cell_map().at("INV_X1").get_cell_arc_list();
+    std::vector<const csr::ArcSemanticPayload*> payloads;
+    for (std::size_t id = 0; id < current.graph.arc_slots.size(); ++id) {
+      const auto& slot = current.graph.arc_slots[id];
+      if (!slot.active || slot.payload.key.base.owner_name != "parallel") continue;
+      const auto& payload = slot.payload;
+      payloads.push_back(&payload);
+      const auto* child = &children.at(*payload.native_cell_arc_ordinal);
+      const auto found = std::ranges::find_if(database.get_arc_list(), [&](const auto& arc) {
+        return arc.get_owner_name() == "parallel" && arc.get_timing_cell_arc() == child;
+      });
+      require(found != database.get_arc_list().end(), "native query lost a parallel library arc");
+      const auto& values = current.timing.values.arcs;
+      require(found->get_delay() == values.delays.values.at(id)
+                  && found->get_delay_min() == values.min_delays.values.at(id)
+                  && found->get_delay_max() == values.max_delays.values.at(id),
+              "parallel child result mapped to another native arc");
+    }
+    require(payloads.size() == children.size() && payloads.size() > 1
+                && payloads.front()->key.base == payloads.back()->key.base
+                && payloads.front()->native_cell_arc_ordinal != payloads.back()->native_cell_arc_ordinal,
+            "fixture did not exercise distinct children sharing canonical signatures");
+  }
   require(session.closeAndRelease().ok(), "semantic lazy-view session close failed");
 }
 void sinkPolicy()
@@ -263,10 +407,17 @@ int main()
     ista::timing_edit::test::NativeTransactionRuntime runtime;
     for (bool fanout : {false, true})
       for (bool non_graph : {false, true})
-        ista::timing_dual_csr::test::directEdit(fanout, non_graph);
+        for (double capacitance : {0.0, 3.0})
+          for (bool partial : {false, true})
+            ista::timing_dual_csr::test::directEdit(fanout, non_graph, capacitance, partial);
+    ista::timing_dual_csr::test::directEdit(true, false, 3.0, true, true);
+    ista::timing_dual_csr::test::directEdit(true, false, 0.123456789, false, true);
     ista::timing_dual_csr::test::fullNameCollision();
     ista::timing_dual_csr::test::sinkPolicy();
-    ista::timing_dual_csr::test::lazySemanticView();
+    ista::timing_dual_csr::test::lazySemanticView(false);
+    ista::timing_dual_csr::test::lazySemanticView(true);
+    ista::timing_dual_csr::test::lazySemanticView(false, true);
+    ista::timing_dual_csr::test::lazySemanticView(true, true);
   } catch (const std::exception& error) {
     std::cerr << error.what() << std::endl;
     return 1;

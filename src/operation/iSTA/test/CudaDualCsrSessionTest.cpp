@@ -22,11 +22,13 @@
 #include "NativeCandidateExecutor.hpp"
 #include "PublicTimingJson.hpp"
 #include "StaCsrSessionContext.hpp"
+#include "StaProductionLifecycle.hpp"
 #include "StaCudaSessionState.hpp"
 #include "TimingEditDualCsrDescriptorBuilder.hpp"
 #include "TimingResultScatterInternal.hpp"
 #include "timing_edit/BufferTraceReplayInput.hpp"
 #include "timing_dual_csr/DualCsrTargetedArtifactSupport.hpp"
+#include "DualCsrArcGroupResolverValidation.hpp"
 #include "DualCsrEdgeViewImpl.hpp"
 #include "DualCsrTimingPayloadViewImpl.hpp"
 #include "timing_dual_csr/DualCsrTestSupport.hpp"
@@ -66,7 +68,6 @@ void compareFreshFull(const CsrReferenceInput& baseline, const CudaDualCsrPatch&
     input.node_ids_by_key.push_back({input.nodes.back().key, NodeId{3}});
     input.arcs[1] = arcRecord(1, input.nodes[3], input.nodes[2], 0);
     input.arcs[1].key.base.owner_name = "n2";
-    input.arcs[1].output_load = csr::test::outputLoad(0.0);
     input.arc_ids_by_key[1] = {input.arcs[1].key, ArcId{1}};
     input.out_row_offsets = {0, 1, 1, 1, 2};
     input.out_arc_ids = {ArcId{0}, ArcId{1}};
@@ -292,7 +293,6 @@ void auxSequence(nlohmann::json* snapshots, CudaLevelizationMode mode)
   second.arc_appends = {appendArc(2, NodeId{3}, NodeId{2}, source.key, sink.key, 0)};
   second.arc_appends[0].payload.key.base.owner_name = "n2";
   second.arc_appends[0].key = second.arc_appends[0].payload.key;
-  second.arc_appends[0].payload.output_load = csr::test::outputLoad(0.0);
   second.aux_rows = {{NodeId{0}, {ArcId{1}}, {}}};
   second.logical_deactivations = {{ArcId{1}, first.arc_appends[0].key, NodeId{0}, NodeId{2}, LogicalArcDeactivateReason::kAuxCleared, true}};
   second.reverse_changes = {{NodeId{2}, 1, ArcId{1}, ArcId{2}}};
@@ -400,7 +400,8 @@ void queryAllocationRetry(const timing_edit::oracle::ProductionFreshSessionView&
     TimingAnalyzer::destroyInst();
     STADC.destroy();
     failed = false;
-    ista_test_allocation::armFailure(count - 1);
+    // The guarded lifecycle has different allocations from the bare analyzer.
+    ista_test_allocation::armFailure(0);
     try {
       context.prepareCudaReport(loaded.database, loaded.authority);
     } catch (const std::exception&) {
@@ -409,17 +410,78 @@ void queryAllocationRetry(const timing_edit::oracle::ProductionFreshSessionView&
       static_cast<void>(ista_test_allocation::disable());
       throw;
     }
+    const bool report_failure_injected = ista_test_allocation::failureInjected();
     static_cast<void>(ista_test_allocation::disable());
-    require(failed, "guarded report query did not exercise allocation failure");
+    require(failed && report_failure_injected && summary.worst_slack == 123456.0 && groups.data() == storage,
+            "guarded report failure changed the prior result or did not inject");
     context.prepareCudaReport(loaded.database, loaded.authority);
     require(summary.worst_slack == saved_slack, "report preparation retry failed");
+    auto& owned = context.cudaState(loaded.authority);
+    const auto& graph = owned.host->graph;
+    const auto targets = csr::detail::resolveDualCsrTimingTargets(loaded.database, graph);
+    const auto& layout = graph.reference_payload;
+    const auto& values = owned.device.timingValues();
+    std::size_t csr_allocations{};
+    const auto counted = executeStaLifecyclePipeline(
+        {{"CSR report allocation count", [] {}, [&] {
+          ista_test_allocation::armCountOnly();
+          try {
+            csr::detail::CsrReportNodeReader reader(targets,
+                {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, values);
+            static_cast<void>(TimingReporter::readCsrReport(reader));
+          } catch (...) {
+            static_cast<void>(ista_test_allocation::disable());
+            throw;
+          }
+          csr_allocations = ista_test_allocation::disable();
+        }, [] {}}},
+        StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+    require(counted.succeeded && csr_allocations > 1, "CSR report allocation count failed");
+    const auto expected = ista::test::capturePublicTiming();
+    storage = groups.data();
+    failed = false;
+    ista_test_allocation::armFailure(csr_allocations - 1);
+    try {
+      static_cast<void>(context.readCudaReport(loaded.database, loaded.authority));
+    } catch (const std::exception&) {
+      failed = true;
+    } catch (...) {
+      static_cast<void>(ista_test_allocation::disable());
+      throw;
+    }
+    const bool injected = ista_test_allocation::failureInjected();
+    static_cast<void>(ista_test_allocation::disable());
+    require(failed && injected && loaded.authority.readyForQuery() && !owned.device.poisoned(),
+            "CSR report allocation failure did not preserve the committed session");
+    require(groups.data() == storage && summary.worst_slack == saved_slack,
+            "failed CSR report query changed native report state");
+    const auto& serialized = context.readCudaReport(loaded.database, loaded.authority);
+    const nlohmann::json actual{{"qor", nlohmann::json::parse(serialized.first)},
+                                {"paths", nlohmann::json::parse(serialized.second)}};
+    require(actual == expected, "CSR report allocation retry differs from native result");
+    const auto* cached = &serialized;
+    ista_test_allocation::armFailure(0);
+    try {
+      const auto* repeated = &context.readCudaReport(loaded.database, loaded.authority);
+      const auto allocations = ista_test_allocation::disable();
+      require(repeated == cached && allocations == 0, "CSR report cache hit allocated or replaced its result");
+    } catch (...) {
+      static_cast<void>(ista_test_allocation::disable());
+      throw;
+    }
+
   }
 }
 
 nlohmann::json captureCudaPublic(const timing_edit::oracle::ProductionFreshSessionView& loaded)
 {
+  const auto& serialized = loaded.session_context.readCudaReport(loaded.database, loaded.authority);
+  const nlohmann::json direct{{"qor", nlohmann::json::parse(serialized.first)},
+                              {"paths", nlohmann::json::parse(serialized.second)}};
   loaded.session_context.prepareCudaReport(loaded.database, loaded.authority);
-  return ista::test::capturePublicTiming();
+  const auto native = ista::test::capturePublicTiming();
+  require(direct == native, "guarded CSR report differs from complete native materialization");
+  return direct;
 }
 
 void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mode, nlohmann::json& snapshots)
@@ -439,8 +501,42 @@ void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mo
           if (!recovering)
             original_session = loaded.session_token;
           auto& owned = loaded.session_context.cudaState(loaded.authority);
+          if (recovering) {
+            require(loaded.database.get_timing_path_group_list().empty(), "unrequested baseline report was prepared");
+            const auto before_query = owned.device.telemetry().cuda.d2h_bytes;
+            loaded.session_context.prepareCudaReport(loaded.database, loaded.authority);
+            const auto baseline_public = ista::test::capturePublicTiming();
+            const auto after_query = owned.device.telemetry().cuda.d2h_bytes;
+            if constexpr (!incregpusta_debug_checks_enabled)
+              require(after_query > before_query, "unrequested baseline timing was already materialized");
+            loaded.session_context.prepareCudaReport(loaded.database, loaded.authority);
+            require(ista::test::capturePublicTiming() == baseline_public
+                        && owned.device.telemetry().cuda.d2h_bytes == after_query,
+                    "repeat baseline query changed results or repeated D2H");
+          }
           owned.bindEdits(loaded.database, loaded.reference_input, program.baseline());
           auto& state = *owned.host;
+          {
+            const auto before_resolver = state.resolver;
+            const auto before_index = state.index;
+            const auto before_graph = [&] {
+              auto direct = timing_dual_csr::TimingEditDualCsrDescriptorBuilder::buildDirect(
+                  state.prepareBatch(plans.front()), loaded.authority, loaded.session_context.libraryModels(loaded.database));
+              CudaCsrEditState::Patch abandoned(state, std::move(direct));
+              // Preparation retains grown capacity even when the applied batch is abandoned.
+              auto prepared_graph = state.graph;
+              abandoned.apply();
+              return prepared_graph;
+            }();
+            require(state.graph == before_graph && state.resolver == before_resolver && state.index == before_index
+                        && owned.device.generation() == state.graph.generation,
+                    "abandoned first host batch changed the baseline before retry");
+          }
+          const auto bindings = captureFullDualCsrArcGroupBindings(state.resolver);
+          require(bindings.success(), "baseline resolver could not form independent bindings");
+          const auto rebuilt = buildDualCsrArcGroupIndex(state.graph, bindings.bindings);
+          require(rebuilt.success() && *rebuilt.index == state.index,
+                  "direct native baseline index differs from independent resolver construction");
           owned.history.reserve(plans.size());
           auto& owner = owned.device;
           require(!owner.computationCode(), "cross-build CUDA baseline failed");
@@ -465,6 +561,13 @@ void replayCrossBuild(const std::filesystem::path& path, CudaLevelizationMode mo
               pending_rejected = true;
             }
             require(pending_rejected, "CSR pending transaction served cached timing");
+            pending_rejected = false;
+            try {
+              static_cast<void>(loaded.session_context.readCudaReport(loaded.database, loaded.authority));
+            } catch (const std::logic_error&) {
+              pending_rejected = true;
+            }
+            require(pending_rejected, "CSR pending transaction served cached report");
             CudaTargetedTraceBatch batch;
             auto candidate = csr::detail::stageCudaTargetedBatch(owner, device_patch, strategy, StaFallbackPolicy::kError, batch.execution, batch.rejected_mixed_attempt);
             require(!candidate.computationCode() && !candidate.poisoned()

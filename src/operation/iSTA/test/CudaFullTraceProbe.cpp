@@ -176,6 +176,7 @@ int main(int argc, char** argv)
         }, StaBackend::kCuda);
         timing_edit::oracle::ProductionFreshSessionLoader::run(artifacts.artifacts(), [&](const auto& view) {
           static_cast<void>(csr::CudaFullTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority, program, 1));
+          view.session_context.materializeCudaTiming(view.database, view.authority);
           auto expected = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
           require(std::holds_alternative<csr::CsrReferenceInput>(expected)
                       && restored_input == csr::canonicalReferenceInputBytes(std::get<csr::CsrReferenceInput>(expected)),
@@ -191,7 +192,9 @@ int main(int argc, char** argv)
             // Explicit cross-build consumer test; ordinary performance does not serialize public results.
             if (mode == "public") {
               ista::test::requireTimingOnlyFiles(artifacts.artifacts().run_directory);
-              const auto streamed = ista::TimingReporterProbeAccess::read();
+              const auto& report = view.session_context.readCudaReport(view.database, view.authority);
+              const Json streamed{{"qor", Json::parse(report.first)}, {"paths", Json::parse(report.second)}};
+              view.session_context.prepareCudaReport(view.database, view.authority);
               output["public"] = ista::test::capturePublicTiming();
               require(output["public"] == streamed, "stream/file public timing output differs");
             }

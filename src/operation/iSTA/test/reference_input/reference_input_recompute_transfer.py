@@ -22,6 +22,7 @@ class TransferFacts:
     raw_cells: dict[str, model.RawReferencedLibraryCell]
     capacitances: tuple[model.CandidatePinCapacitance, ...]
     loads: tuple[tuple[tuple[float, float], tuple[float, float]] | None, ...]
+    net_loads: dict[str, tuple[tuple[float, float], tuple[float, float]]]
 
 
 def _fail(message: str) -> NoReturn:
@@ -589,7 +590,10 @@ def _loads(
     raw: model.RawReferenceInput,
     facts: graph_oracle.GraphFacts,
     capacitances: tuple[model.CandidatePinCapacitance, ...],
-) -> tuple[tuple[tuple[float, float], tuple[float, float]] | None, ...]:
+) -> tuple[
+    tuple[tuple[tuple[float, float], tuple[float, float]] | None, ...],
+    dict[str, tuple[tuple[float, float], tuple[float, float]]],
+]:
     constraints = index_port_constraints(candidate)
     caps = {item.node: item for item in capacitances}
     net_loads: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {}
@@ -634,13 +638,13 @@ def _loads(
         )
     zero = ((0.0, 0.0), (0.0, 0.0))
     expected = tuple(
-        None if candidate.nodes[arc.sink].net_name in rc_nets
+        None if arc.kind == model.ArcKind.NET or candidate.nodes[arc.sink].net_name in rc_nets
         else net_loads.get(candidate.nodes[arc.sink].net_name, zero)
         for arc in candidate.arcs
     )
     if tuple(arc.output_load for arc in candidate.arcs) != expected:
         _fail("candidate output loads differ from raw ordered net loads")
-    return expected
+    return expected, net_loads
 
 
 def _parasitics(candidate: model.CandidateInput, raw: model.RawReferenceInput) -> None:
@@ -711,6 +715,6 @@ def recompute_transfer(
     _graph_transfers(candidate, raw_cells, facts)
     _parasitics(candidate, raw)
     capacitances = _capacitances(candidate, facts, raw_cells)
-    loads = _loads(candidate, raw, facts, capacitances)
+    loads, net_loads = _loads(candidate, raw, facts, capacitances)
     _preflight_converted_loads(candidate)
-    return TransferFacts(raw_cells, capacitances, loads)
+    return TransferFacts(raw_cells, capacitances, loads, net_loads)

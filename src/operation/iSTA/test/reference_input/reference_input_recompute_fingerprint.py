@@ -367,7 +367,7 @@ def _parasitic(input_value: model.CandidateInput) -> bytes:
 
 def _timing_input(input_value: model.CandidateInput) -> bytes:
     writer = CanonicalWriter()
-    _domain(writer, "reference-timing-input-payload", input_value.schema_version)
+    _domain(writer, "reference-timing-input-model-digest-v1", input_value.schema_version)
     writer.boolean(
         not input_value.nodes
         and not input_value.arcs
@@ -408,7 +408,20 @@ def _timing_input(input_value: model.CandidateInput) -> bytes:
         writer.boolean(arc.eligibility.data_slew)
         writer.boolean(arc.eligibility.clock)
         writer.optional(arc.native_cell_arc_ordinal, writer.u64)
-        _transfer(writer, arc.transfer)
+        transfer = arc.transfer
+        _double(writer, transfer.delay)
+        _double(writer, transfer.delay_min)
+        _double(writer, transfer.delay_max)
+        writer.boolean(transfer.is_clock_arc)
+        writer.boolean(transfer.is_disabled)
+        writer.boolean(transfer.is_clear_or_preset)
+        writer.u64(len(transfer.children))
+        if transfer.children:
+            child_writer = CanonicalWriter()
+            child_writer.vector(
+                transfer.children, lambda child, output=child_writer: _child(output, child)
+            )
+            writer.string(_component("reference-child-model", child_writer.result()))
         writer.boolean(arc.output_load is not None)
         if arc.output_load is not None:
             for row in arc.output_load:
@@ -453,6 +466,11 @@ def _timing_input(input_value: model.CandidateInput) -> bytes:
         _optional_matrix(writer, seed.slew)
         _optional_u64(writer, seed.crpr_node)
         writer.optional(seed.crpr_transition, lambda value: writer.string(_token(value)))
+        writer.boolean(seed.output_load is not None)
+        if seed.output_load is not None:
+            for row in seed.output_load:
+                for value in row:
+                    _double(writer, value)
     writer.u64(len(input_value.endpoint_required))
     for endpoint in input_value.endpoint_required:
         writer.u64(endpoint.node)
@@ -507,7 +525,7 @@ def recompute_identity(
         composite.string(value)
     composite.raw_bytes(payloads.timing_input)
     return model.SnapshotIdentity(
-        input_value.schema_version,
+        "2.0.0",
         session_token,
         generation,
         topology,

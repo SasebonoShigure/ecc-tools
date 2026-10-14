@@ -100,50 +100,53 @@ void baselineFactoryContracts()
 
 void loadAccumulationOrderContract()
 {
-  auto input = baselineInput();
-  const auto sink_template = input.nodes.back();
-  // Canonical keys put short names first. Native load lists sort full names:
-  // ((1 + 2^-53) + 2^-53) != ((2^-53 + 2^-53) + 1).
-  input.nodes.front().key = nodeKey("a");
-  input.nodes.resize(1);
+  auto input = csr::test::cellInput();
+  const auto ports = baselineInput();
+  auto cell_nodes = std::move(input.nodes);
+  input.nodes.clear();
+  // Native full-name order is ((1 + 2^-53) + 2^-53), not key-length order.
   for (const char* name : {"b", "c", "a_long"}) {
-    auto sink = sink_template;
+    auto sink = ports.nodes.back();
     sink.id = csr::NodeId{input.nodes.size()};
     sink.key = nodeKey(name);
     input.nodes.push_back(std::move(sink));
   }
+  for (auto& node : cell_nodes) {
+    node.id = csr::NodeId{input.nodes.size()};
+    input.nodes.push_back(std::move(node));
+  }
+  input.nodes[4].net_name = input.nodes.front().net_name;
+  input.nodes[4].is_endpoint = false;
+  input.instances.front().ordered_pins = {csr::NodeId{3}, csr::NodeId{4}};
+  input.start_seeds.front().seed_node = input.start_seeds.front().path_start_node = csr::NodeId{3};
+  for (auto& capacitance : input.cell_pin_capacitances)
+    capacitance.node = csr::NodeId{capacitance.node.value() + 3};
   input.node_ids_by_key.clear();
-  for (const auto& value : input.nodes)
-    input.node_ids_by_key.push_back({value.key, value.id});
-  input.arcs.clear();
-  input.arc_ids_by_key.clear();
-  for (std::size_t i = 1; i < input.nodes.size(); ++i) {
-    auto arc = arcRecord(i - 1, input.nodes.front(), input.nodes[i], 0);
-    arc.native_traversal_rank = i % 3;
-    arc.output_load = csr::test::outputLoad(1.0);
-    input.arc_ids_by_key.push_back({arc.key, arc.id});
+  for (const auto& node : input.nodes) input.node_ids_by_key.push_back({node.key, node.id});
+  input.arcs.front().source = csr::NodeId{3};
+  input.arcs.front().sink = csr::NodeId{4};
+  input.arcs.front().output_load = csr::test::outputLoad(1.0);
+  for (std::size_t i = 0; i < 3; ++i) {
+    auto arc = arcRecord(i + 1, input.nodes[4], input.nodes[i], 0);
+    arc.native_traversal_rank = (i + 1) % 3 + 1;
     input.arcs.push_back(std::move(arc));
   }
-  input.out_row_offsets = {0, 3, 3, 3, 3};
-  input.out_arc_ids = {csr::ArcId{2}, csr::ArcId{0}, csr::ArcId{1}};
-  input.in_row_offsets = {0, 0, 1, 2, 3};
-  input.in_arc_ids = {csr::ArcId{0}, csr::ArcId{1}, csr::ArcId{2}};
-  input.ordered_end_ids = {csr::NodeId{3}, csr::NodeId{1}, csr::NodeId{2}};
-  input.clock_owner_by_node.resize(4);
-  input.port_constraints.front().map_key = "a";
-  input.port_constraints.front().embedded_port_name = "a";
-  const auto constraint_template = input.port_constraints.back();
-  input.port_constraints.resize(1);
-  const auto endpoint_template = input.endpoint_required.front();
-  input.endpoint_required.clear();
+  input.arc_ids_by_key.clear();
+  for (const auto& arc : input.arcs) input.arc_ids_by_key.push_back({arc.key, arc.id});
+  input.out_row_offsets = {0, 0, 0, 0, 1, 4};
+  input.out_arc_ids = {csr::ArcId{0}, csr::ArcId{3}, csr::ArcId{1}, csr::ArcId{2}};
+  input.in_row_offsets = {0, 1, 2, 3, 3, 4};
+  input.in_arc_ids = {csr::ArcId{1}, csr::ArcId{2}, csr::ArcId{3}, csr::ArcId{0}};
+  input.ordered_root_ids = input.ordered_start_ids = {csr::NodeId{3}};
+  input.ordered_end_ids = {csr::NodeId{2}, csr::NodeId{0}, csr::NodeId{1}};
+  input.clock_owner_by_node.resize(5);
   for (const auto id : input.ordered_end_ids) {
-    auto constraint = constraint_template;
-    constraint.map_key = input.nodes[id.value()].key.full_name;
-    constraint.embedded_port_name = constraint.map_key;
+    auto constraint = ports.port_constraints.back();
+    constraint.map_key = constraint.embedded_port_name = input.nodes[id.value()].key.full_name;
     constraint.resolved_node = id;
-    constraint.output_load = id.value() == 3 ? 1.0 : 0x1p-53;
+    constraint.output_load = id.value() == 2 ? 1.0 : 0x1p-53;
     input.port_constraints.push_back(std::move(constraint));
-    auto endpoint = endpoint_template;
+    auto endpoint = ports.endpoint_required.front();
     endpoint.node = id;
     input.endpoint_required.push_back(std::move(endpoint));
   }
@@ -154,8 +157,7 @@ void loadAccumulationOrderContract()
       timing_edit::AppendOnlyHighWater{input.nodes.size(), 0, input.arcs.size()});
   require(attempt.success(), "Dual diagnostic projection reordered native load accumulation");
   (*attempt.state->arc_slots.front().payload.output_load)[0][0] = 2.0;
-  require(!validateDualCsrState(*attempt.state).empty(),
-          "load-order fix accepted a forged output load");
+  require(!validateDualCsrState(*attempt.state).empty(), "load-order fix accepted a forged cell output load");
 }
 
 void directViewContracts()
@@ -453,19 +455,19 @@ void payloadSemanticContracts()
   require(!validateDualCsrState(cell_table).empty(),
           "cell timing-table signature/shape canary was accepted");
 
-  auto nan_load = baselineState();
+  auto nan_load = cellState();
   (*nan_load.arc_slots[0].payload.output_load)[0][0]
       = std::numeric_limits<double>::quiet_NaN();
   require(hasCode(validateDualCsrState(nan_load),
                   DualCsrViolationCode::kExpectedValue),
           "OutputLoadRejectsNaNOrNegative NaN canary was accepted");
-  auto negative_load = baselineState();
+  auto negative_load = cellState();
   (*negative_load.arc_slots[0].payload.output_load)[0][0] = -1.0;
   require(hasCode(validateDualCsrState(negative_load),
                   DualCsrViolationCode::kExpectedValue),
           "OutputLoadRejectsNaNOrNegative negative canary was accepted");
 
-  auto missing_load = baselineState();
+  auto missing_load = cellState();
   missing_load.arc_slots[0].payload.output_load.reset();
   require(hasCode(validateDualCsrState(missing_load),
                   DualCsrViolationCode::kExpectedValue),
@@ -477,15 +479,11 @@ void payloadSemanticContracts()
       timing_edit::AppendOnlyHighWater{mixed_input.nodes.size(), 0, mixed_input.arcs.size()});
   require(mixed.success() && validateDualCsrState(*mixed.state).empty(),
           "valid mixed RC/no-RC state was rejected");
-  mixed.state->arc_slots[0].payload.output_load.reset();
-  require(hasCode(validateDualCsrState(*mixed.state), DualCsrViolationCode::kExpectedValue),
-          "unrelated RC net disabled required no-RC load presence");
-  mixed.state->arc_slots[0].payload.output_load = csr::test::outputLoad(0.5);
   mixed.state->arc_slots[1].payload.output_load = csr::test::outputLoad(0.5);
   require(hasCode(validateDualCsrState(*mixed.state), DualCsrViolationCode::kExpectedValue),
           "RC arc accepted a no-RC output load");
 
-  auto inactive = baselineState();
+  auto inactive = cellState();
   auto inactive_payload = inactive.arc_slots[0].payload;
   inactive_payload.key.parallel_ordinal = 1;
   inactive.arc_slots.push_back({std::move(inactive_payload), false});

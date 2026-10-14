@@ -235,11 +235,13 @@ void verifySignatureFailures()
 
 void verifyFallbackCartesianFailure()
 {
-  expectMalformed("incomplete fallback Cartesian product", NativeGraphFixtureCase::kUnboundFallback, [](ista::Database& db) {
-    db.get_pin_map().emplace("fallback:B", makeInstancePin("fallback:B", "B"));
-    db.get_timing_point_map().emplace("fallback:B", ista::TimingPoint{});
-    db.get_instance_map().at("fallback").get_pin_name_list().insert(db.get_instance_map().at("fallback").get_pin_name_list().begin() + 1, "fallback:B");
-  });
+  for (const auto fixture_case : {NativeGraphFixtureCase::kUnboundFallback, NativeGraphFixtureCase::kMixedFallback}) {
+    expectMalformed("incomplete fallback Cartesian product", fixture_case, [](ista::Database& db) {
+      db.get_pin_map().emplace("fallback:B", makeInstancePin("fallback:B", "B"));
+      db.get_timing_point_map().emplace("fallback:B", ista::TimingPoint{});
+      db.get_instance_map().at("fallback").get_pin_name_list().insert(db.get_instance_map().at("fallback").get_pin_name_list().begin() + 1, "fallback:B");
+    });
+  }
 }
 
 CsrGraphSnapshot snapshotFor(NativeGraphFixtureCase fixture_case)

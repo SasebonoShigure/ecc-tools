@@ -68,7 +68,6 @@ CsrComputationWithTelemetry detail::propagateCsrCpuReferenceWithLevels(const Act
   const auto propagation_started = SteadyClock::now();
   CsrCpuReferenceWorkState work;
   work.telemetry = output.telemetry;
-  work.result.schema_version = payloads.schemaVersion();
   work.result.source_identity = payloads.sourceIdentity();
 
   CsrCpuReferenceStageStatus status = initializeCsrCpuReferenceResult(payloads, std::move(fifo), work);

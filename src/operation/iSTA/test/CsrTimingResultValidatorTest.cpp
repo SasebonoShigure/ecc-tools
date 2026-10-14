@@ -86,6 +86,8 @@ CsrReferenceInput singletonClockInput(bool startpoint)
   input.nodes = {NodeRecord{.id = NodeId{0},
                             .key = port(name),
                             .direction = startpoint ? PinDirection::kInput : PinDirection::kOutput,
+                            .instance_cell = {},
+                            .net_name = {},
                             .is_port = true,
                             .is_startpoint = startpoint}};
   input.node_ids_by_key = {{input.nodes[0].key, NodeId{0}}};
@@ -473,7 +475,7 @@ void testTypedClassificationAndLegacyProjection()
 
   CsrTimingResult identity_overlap = result;
   identity_overlap.schema_version = "2.0.0";
-  identity_overlap.source_identity.fingerprint_schema_version = "2.0.0";
+  identity_overlap.source_identity.fingerprint_schema_version = "1.0.0";
   identity_overlap.source_identity.session_token = 0;
   identity_overlap.source_identity.graph_generation = 1;
   identity_overlap.source_identity.topology_fingerprint.clear();
@@ -498,7 +500,7 @@ void testTypedClassificationAndLegacyProjection()
   }
 
   CsrReferenceInput malformed = input;
-  malformed.schema_version = "2.0.0";
+  malformed.schema_version = "unsupported-version";
   CsrTimingResult malformed_result = result;
   malformed_result.schema_version = "2.0.0";
   const auto malformed_errors = validateTimingResult(malformed, malformed_result);

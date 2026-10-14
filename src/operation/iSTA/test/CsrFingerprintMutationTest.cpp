@@ -80,8 +80,8 @@ CsrReferenceInput inputFixture()
   CsrReferenceInput input;
   input.source_identity = identity();
   input.analysis_context = {"slow", "25", "rc0"};
-  input.nodes = {NodeRecord{.id = NodeId{0}, .key = port("a"), .direction = PinDirection::kInput, .is_port = true, .is_startpoint = true},
-                 NodeRecord{.id = NodeId{1}, .key = port("bb"), .direction = PinDirection::kOutput, .is_port = true, .is_endpoint = true},
+  input.nodes = {NodeRecord{.id = NodeId{0}, .key = port("a"), .direction = PinDirection::kInput, .instance_cell = {}, .net_name = {}, .is_port = true, .is_startpoint = true},
+                 NodeRecord{.id = NodeId{1}, .key = port("bb"), .direction = PinDirection::kOutput, .instance_cell = {}, .net_name = {}, .is_port = true, .is_endpoint = true},
                  NodeRecord{.id = NodeId{2},
                             .key = pin("u1:A", "A"),
                             .direction = PinDirection::kInput,
@@ -119,7 +119,9 @@ CsrReferenceInput inputFixture()
                 .sink = NodeId{3},
                 .kind = ArcKind::kCell,
                 .native_traversal_rank = 0,
-                .eligibility = {true, true, true, false}};
+                .eligibility = {true, true, true, false},
+                .transfer = {},
+                .output_load = {}};
   arc.transfer.delay = 0.1;
   arc.transfer.delay_min = 0.05;
   arc.transfer.delay_max = 0.2;
@@ -171,11 +173,13 @@ CsrReferenceInput inputFixture()
       seed.arrival[analysis][transition] = 0.1 + analysis * 2 + transition;
       seed.slew[analysis][transition] = 0.2 + analysis * 2 + transition;
     }
+  seed.output_load = ArcOutputLoadMatrix{};
   StartSeedModel second_seed = seed;
   second_seed.seed_node = NodeId{2};
   second_seed.path_start_node = NodeId{2};
   second_seed.clock_tag = "tag2";
   second_seed.path_source.reset();
+  second_seed.output_load.reset();
   for (auto& analysis : second_seed.arrival)
     for (auto& value : analysis)
       value.reset();
@@ -208,7 +212,7 @@ struct MutationCase
 
 void addTopLevelCases(std::vector<MutationCase>& cases)
 {
-  cases.emplace_back("schema", [](auto& value) { value.schema_version = "2.0.0"; });
+  cases.emplace_back("schema", [](auto& value) { value.schema_version = "unsupported-version"; });
   cases.emplace_back("context liberty", [](auto& value) { value.analysis_context.liberty_corner = "fast"; });
   cases.emplace_back("context temperature", [](auto& value) { value.analysis_context.temperature = "125"; });
   cases.emplace_back("context rc", [](auto& value) { value.analysis_context.rc_corner = "rc1"; });
@@ -375,6 +379,11 @@ void addSeedEndpointAndSupportCases(std::vector<MutationCase>& cases)
   cases.emplace_back("seed source value", [](auto& value) { *value.start_seeds[0].path_source = PathSource::kRegister; });
   cases.emplace_back("seed source present to absent", [](auto& value) { value.start_seeds[0].path_source.reset(); });
   cases.emplace_back("seed source absent to present", [](auto& value) { value.start_seeds[1].path_source = PathSource::kInput; });
+  cases.emplace_back("seed load presence", [](auto& value) { value.start_seeds[0].output_load.reset(); });
+  cases.emplace_back("seed load absent to present", [](auto& value) { value.start_seeds[1].output_load = ArcOutputLoadMatrix{}; });
+  for (std::size_t a = 0; a < kAnalysisCount; ++a)
+    for (std::size_t t = 0; t < kTransitionCount; ++t)
+      cases.emplace_back("seed load lane", [=](auto& value) { (*value.start_seeds[0].output_load)[a][t] = 1.0; });
   cases.emplace_back("seed tag", [](auto& value) { value.start_seeds[0].clock_tag = "tag2"; });
   cases.emplace_back("seed CRPR node", [](auto& value) { value.start_seeds[0].crpr_node = NodeId{2}; });
   cases.emplace_back("seed CRPR transition", [](auto& value) { value.start_seeds[0].crpr_transition = Transition::kRise; });

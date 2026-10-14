@@ -50,16 +50,25 @@ int main()
   using namespace ista::csr;
   using namespace ista::csr::test;
 
+  CanonicalEncoder owned;
+  owned.appendDomain("encoder-ownership");
+  owned.appendString(std::string(65536, 'x'));
+  const auto expected_bytes = owned.bytes();
+  const auto* allocation = owned.bytes().data();
+  const auto transferred = std::move(owned).takeBytes();
+  require(transferred == expected_bytes, "encoder move changed canonical bytes");
+  require(transferred.data() == allocation, "encoder move copied the owned buffer");
+
   const CsrReferenceInput first = makeReferenceInputTestFixture(1);
   const CsrReferenceInput second = makeReferenceInputTestFixture(2);
   // These are production reference payloads, not generic analysis-context bytes.
   const std::array<std::pair<StaAnalysisContext, const char*>, 3> corners{{
       {{"__direct__", "__unspecified_temperature__", "__no_rc_corner__"},
-       "762ed637a7b3f10653e1212cf54480f9d8b319108418663f301a9b45b5e97dcf"},
+       "739bf723fd46ded1ed8680a85106c5b6130fc76000d3451cb2fef3a031137fa1"},
       {{"slow", "25", "__no_rc_corner__"},
-       "3e1ae07c69c21623632f49b62cac0604e6b62d5acabdd2ba5c992a08ea2d9de0"},
+       "81dfbe151c36c23b0a13b1ef157f65cdfd29e3655f221cc3eb1f2709b6066880"},
       {{"慢", "25", "__no_rc_corner__"},
-       "71ebe214003ff803fcf733046f836fa7e5b9cf37f2a94de04f1ca42d6cbd2c89"},
+       "727ce5dae6867218de168bd11b5d94ca228a3e260ff50fc2ccc518de573412ee"},
   }};
   for (const auto& [context, expected] : corners) {
     CsrReferenceInput input = first;

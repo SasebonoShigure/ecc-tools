@@ -279,7 +279,8 @@ void validateArcPayload(const DualCsrState& state,
                  field + ".output_load",
                  "load must be finite and nonnegative");
   if (active && endpoints_valid) {
-    const bool loads_present = !state.parasitic_net_slots.contains(state.nodes[payload.sink.value()].net_name);
+    const bool loads_present = payload.kind == csr::ArcKind::kCell
+        && !state.parasitic_net_slots.contains(state.nodes[payload.sink.value()].net_name);
     if (payload.output_load.has_value() != loads_present)
       reject(violations, DualCsrViolationCode::kExpectedValue,
              field + ".output_load", "load presence must follow its output net's parasitic state");

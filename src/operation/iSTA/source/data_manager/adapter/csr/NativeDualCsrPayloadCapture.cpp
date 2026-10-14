@@ -107,6 +107,30 @@ class CaptureBuilder final
     if (const auto error = detail::finalizeNativeDualCsrReferenceCapture(
             _committed, _plan, captured_node_keys, _run.records()))
       abortCapture(*error);
+    const auto& before = _committed.referencePayload();
+    if (before.parasitics.nets.empty()) {
+      StartSeedDelta seeds{before.start_seeds.size(), {}, {}};
+      for (const auto& request : _plan.load_nets) {
+        const auto native_net = _database.get_net_map().find(request.expected_name);
+        if (native_net == _database.get_net_map().end()) abortCapture(NarrowCaptureError::kMalformedNativeRecord);
+        const auto& driver = native_net->second.get_driver_pin();
+        const auto seed = std::lower_bound(before.start_seeds.begin(), before.start_seeds.end(), driver,
+            [&](const auto& value, const auto& name) {
+              const auto node = _committed.nodeById(value.seed_node);
+              if (!node) abortCapture(NarrowCaptureError::kMalformedNativeRecord);
+              return csr::detail::referenceByteStringLess(node.value().key.full_name, name);
+            });
+        if (seed == before.start_seeds.end()) continue;
+        const auto node = _committed.nodeById(seed->seed_node);
+        if (!node || node.value().key.full_name != driver || !node.value().is_output_pin
+            || seed->availability != csr::StartSeedAvailability::kDeferredSequential) continue;
+        auto after = *seed;
+        after.output_load = _load_by_net.at(request.expected_name);
+        if (after != *seed)
+          seeds.changes.push_back({static_cast<std::uint64_t>(seed - before.start_seeds.begin()), *seed, std::move(after)});
+      }
+      if (!seeds.changes.empty()) _run.records().reference_payload.start_seeds = std::move(seeds);
+    }
     if (_native)
       if (const auto error = detail::captureNativeDualCsrParasitics(
               _database, *_native, _committed, _plan, _run.records()))
@@ -531,7 +555,9 @@ class CaptureBuilder final
         record, sink, sink_clock_reachable, replayed_clock_arc);
     record.transfer = projected.transfer;
     const auto load = _load_by_net.find(sink.net_name);
-    if (load != _load_by_net.end()) {
+    if (record.kind == csr::ArcKind::kNet) {
+      record.output_load.reset();
+    } else if (load != _load_by_net.end()) {
       record.output_load = load->second;
     } else if (old != nullptr) {
       record.output_load = old->output_load;
@@ -548,7 +574,7 @@ class CaptureBuilder final
             || record.parasitic.tree->terminals.front() != (record.kind == csr::ArcKind::kNet ? record.source : record.sink)
             || record.output_load)
           abortCapture(NarrowCaptureError::kMalformedNativeRecord);
-      } else if (!record.output_load)
+      } else if (record.kind == csr::ArcKind::kCell && !record.output_load)
         abortCapture(NarrowCaptureError::kUnplannedDependency);
     }
     return {record.key,

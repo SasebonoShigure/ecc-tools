@@ -11,7 +11,7 @@
 import reference_input_model as model
 from reference_input_canonical import CanonicalError, CanonicalReader, CanonicalWriter
 
-CANDIDATE_DOMAIN = "ista-csr-reference-input-test-wire/2.0.0"
+CANDIDATE_DOMAIN = "ista-csr-reference-input-test-wire/3.0.0"
 _DoublePair = tuple[float, float]
 _OptionalDoublePair = tuple[float | None, float | None]
 _DoubleMatrix = tuple[_DoublePair, _DoublePair]
@@ -345,6 +345,7 @@ def _start_seed(reader: CanonicalReader) -> model.CandidateStartSeed:
         _optional_matrix(reader),
         reader.optional(reader.u64),
         reader.optional(lambda: reader.enum(model.Transition, "start_seed.crpr_transition")),
+        reader.optional(lambda: _load_matrix(reader)),
     )
 
 
@@ -574,6 +575,7 @@ class _FullCandidateEncoder:
         self._optional_matrix(seed.slew)
         self.w.optional(seed.crpr_node, self.w.u64)
         self.w.optional(seed.crpr_transition, self.w.enum)
+        self.w.optional(seed.output_load, self._matrix)
 
     def _endpoint(self, endpoint: model.CandidateEndpointRequired) -> None:
         self.w.u64(endpoint.node)

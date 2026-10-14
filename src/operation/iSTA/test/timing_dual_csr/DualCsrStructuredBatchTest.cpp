@@ -398,8 +398,7 @@ const ArcAppendRecord& appendedArc(const DualCsrBatchDescriptor& descriptor,
   return *found;
 }
 
-void requireCandidatePhysicalOrder(const StructuredFixture& fixture,
-                                   const VerifiedStructuredBatch& verified)
+void requireCandidatePhysicalOrder(const VerifiedStructuredBatch& verified)
 {
   const auto& descriptor = verified.descriptor();
   const auto& staged = verified.preparedBatch();
@@ -416,14 +415,6 @@ void requireCandidatePhysicalOrder(const StructuredFixture& fixture,
   require(csr::arcKeyLess(appendedArc(descriptor, z).key,
                           appendedArc(descriptor, out).key),
           "FIFO canary is not opposite canonical ArcKey order");
-  const auto existing = std::ranges::find_if(
-      descriptor.affected_base_out_rows, [&](const auto& item) {
-        return item.expected_arc_ids
-               == std::vector<csr::ArcId>{fixture.base_arc,
-                                          fixture.aux_arc};
-      });
-  require(existing != descriptor.affected_base_out_rows.end(),
-          "old BaseOut/Aux exact candidate row evidence is absent");
 }
 
 void requireVerifiedDescriptor(const StructuredFixture& fixture,
@@ -449,6 +440,17 @@ void requireVerifiedDescriptor(const StructuredFixture& fixture,
               return error.field == "reference_payload.instances" || error.field == "reference_payload.cell_pin_capacitances";
             }), "malformed appended pin closure passed the public descriptor boundary");
   }
+  {
+    auto conflicting = before;
+    auto malformed = descriptor;
+    conflicting.reference_payload.instances.push_back(descriptor.reference_payload.instances->values.front());
+    ++malformed.reference_payload.instances->expected_size;
+    const auto errors = validateDualCsrDescriptor(conflicting, malformed);
+    require(std::ranges::any_of(errors, [](const auto& error) {
+              return error.field == "reference_payload.instances"
+                     && error.message == "appended instance names must be nonempty and new";
+            }), "public descriptor accepted an existing instance name");
+  }
   require(verified.preparedBatch().sessionToken() == before.session_token
               && verified.preparedBatch().expectedGeneration() == before.generation,
           "verified batch lost its session/generation binding");
@@ -460,7 +462,6 @@ void requireVerifiedDescriptor(const StructuredFixture& fixture,
               && descriptor.removes.empty()
               && descriptor.aux_rows.size() == 1
               && descriptor.appended_base_out_rows.size() == 2
-              && descriptor.affected_base_out_rows.size() == 1
               && descriptor.affected_base_in_rows.size() == 4
               && descriptor.reverse_changes.size() == 2,
           "successful structured descriptor has the wrong delta shape");
@@ -495,7 +496,7 @@ void requireVerifiedDescriptor(const StructuredFixture& fixture,
               }),
           "reconnected arcs did not use typed kReplaced deactivation");
   requireReversePairs(fixture, verified);
-  requireCandidatePhysicalOrder(fixture, verified);
+  requireCandidatePhysicalOrder(verified);
 
   {
     auto graph = before;
@@ -602,42 +603,45 @@ void fullSinkNetFanoutLoadContracts()
 
   VerifiedStructuredBatch verified
       = captureAndBuildVerifiedBatch(session, fixture);
-  const auto& descriptor = verified.descriptor();
+  auto descriptor = verified.descriptor();
+  std::ranges::reverse(descriptor.payload_changes);
+  std::ranges::reverse(descriptor.node_payload_changes);
   const auto change = std::ranges::find(
       descriptor.payload_changes, fanout,
       &ArcPayloadChangeDescriptor::id);
-  require(change != descriptor.payload_changes.end()
-              && change->expected.output_load
-              && change->replacement.output_load
-              && change->expected.output_load
-                     != change->replacement.output_load,
-          "unmoved fanout arc did not receive the candidate net load");
+  require(change == descriptor.payload_changes.end(),
+          "unmoved Net fanout received a redundant load payload change");
 
   const csr::ArcId driver
       = createdOldNetArcId(verified.preparedBatch());
-  const auto old_source_row = std::ranges::find_if(
-      descriptor.affected_base_out_rows, [&](const auto& row) {
-        return std::ranges::find(row.expected_arc_ids, fanout)
-               != row.expected_arc_ids.end();
-      });
-  require(old_source_row != descriptor.affected_base_out_rows.end()
-              && old_source_row->expected_arc_ids
-                     == std::vector<csr::ArcId>{fixture.base_arc, fanout,
-                                                fixture.aux_arc}
-              && old_source_row->replacement_arc_ids
-                     == std::vector<csr::ArcId>{driver, fanout}
-              && csr::arcKeyLess(
-                     fixture.graph.arc_slots.at(
-                         static_cast<std::size_t>(fanout.value()))
-                         .payload.key,
-                     appendedArc(descriptor, driver).key),
-          "old-source survivor row lost candidate FIFO order");
+  auto after = fixture.graph;
+  auto index = fixture.arc_group_index;
+  detail::PreparedDualCsrIndexPatch index_patch(after, index, descriptor);
+  detail::PreparedDualCsrGraphPatch patch(after, descriptor);
+  patch.apply();
+  index_patch.apply();
+  require(validateDualCsrArcGroupIndex(after, index).empty(),
+          "fanout membership delta disagrees with independently rebuilt groups");
+  const auto source = after.arc_slots.at(fanout.value()).payload.source.value();
+  std::vector<csr::ArcId> actual;
+  for (auto slot = after.base_out.row_offsets.at(source);
+       slot < after.base_out.row_offsets.at(source + 1); ++slot)
+    if (after.base_out.physical_slots.at(slot))
+      actual.push_back(*after.base_out.physical_slots.at(slot));
+  const auto aux = after.aux_out.source_to_aux_row.at(source);
+  if (aux >= 0) {
+    const auto& row = after.aux_out.row_arcs.at(static_cast<std::size_t>(aux));
+    actual.insert(actual.end(), row.begin(), row.end());
+  }
+  require(actual == std::vector<csr::ArcId>{driver, fanout}
+              && csr::arcKeyLess(after.arc_slots.at(fanout.value()).payload.key,
+                                 appendedArc(descriptor, driver).key),
+          "applied old-source survivor row lost candidate FIFO order");
   const auto driver_append = std::ranges::find(
       descriptor.arc_appends, driver, &ArcAppendRecord::id);
   require(driver_append != descriptor.arc_appends.end()
-              && driver_append->payload.output_load
-                     == change->replacement.output_load,
-          "same sink-net arcs disagree on the captured output load");
+              && !driver_append->payload.output_load,
+          "new Net arc retained a redundant output load");
   for (const auto id : committed_group->active_arc_ids) {
     if (id == fanout)
       continue;
@@ -646,6 +650,10 @@ void fullSinkNetFanoutLoadContracts()
                 &LogicalArcDeactivate::id) == 1,
             "sink-net closure neither updated nor deactivated an old arc");
   }
+  index_patch.rollback();
+  patch.rollback();
+  require(index == fixture.arc_group_index,
+          "fanout membership rollback lost original groups");
   require(session.closeAndRelease().ok(),
           "fanout load test session close failed");
 }

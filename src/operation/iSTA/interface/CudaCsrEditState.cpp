@@ -23,16 +23,16 @@ CudaCsrEditState::CudaCsrEditState(Database& database, const csr::CsrReferenceIn
   auto initial = DualCsrBaselineFactory::fromNativeExport(input, session, resolver.highWater());
   if (!initial.success()) throw std::invalid_argument("CUDA host baseline is invalid");
   graph = std::move(*initial.state);
-  auto bindings = captureFullDualCsrArcGroupBindings(resolver);
-  if (!bindings.success()) throw std::invalid_argument("CUDA host resolver is invalid");
-  auto indexed = buildDualCsrArcGroupIndex(graph, bindings.bindings);
+  auto indexed = DualCsrArcGroupIndex::fromNativeExport(graph);
   if (!indexed.success()) throw std::invalid_argument("CUDA host index is invalid");
   index = std::move(*indexed.index);
-  identity = timing_edit::NativeTimingEditPreparer::identityFromInput(
+  auto initial_identity = timing_edit::NativeTimingEditPreparer::identityFromInput(
       database, input, timing_edit::TransactionGeneration{0});
+  if constexpr (incregpusta_debug_checks_enabled)
+    identity = initial_identity;
   baseline = std::make_shared<const timing_edit::BaselineSemanticIdentity>(
-      timing_edit::BaselineSemanticIdentity{database.get_design_name(), identity->current_fingerprints,
-                                            identity->canonical_pre_state});
+      timing_edit::BaselineSemanticIdentity{database.get_design_name(), std::move(initial_identity.current_fingerprints),
+                                            std::move(initial_identity.canonical_pre_state)});
 }
 
 timing_dual_csr::PendingStructuredBatch CudaCsrEditState::prepareBatch(timing_edit::EditBatch edits)

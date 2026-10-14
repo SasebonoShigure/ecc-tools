@@ -582,6 +582,7 @@ class CandidateStartSeed:
     slew: tuple[tuple[float | None, float | None], tuple[float | None, float | None]]
     crpr_node: int | None
     crpr_transition: Transition | None
+    output_load: tuple[tuple[float, float], tuple[float, float]] | None
 
 
 @dataclass(frozen=True)

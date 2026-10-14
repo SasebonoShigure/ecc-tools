@@ -135,7 +135,8 @@ Json startSeed(const DualCsrProjectedStartSeed& value)
                                   value.crpr_transition,
                                   [](csr::Transition present) {
                                     return Json(csr::token(present));
-                                  })}};
+                                  })},
+          {"output_load", optionalValue(value.output_load, loadMatrix)}};
 }
 
 Json endpoint(const DualCsrProjectedEndpointRequired& value)

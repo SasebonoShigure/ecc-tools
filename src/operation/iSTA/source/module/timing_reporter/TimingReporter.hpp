@@ -22,6 +22,8 @@
 #include "StartEndType.hpp"
 
 namespace ista {
+class TimingAnalyzer;
+namespace csr::detail { class CsrReportNodeReader; }
 
 #define STATR (ista::TimingReporter::getInst())
 
@@ -33,12 +35,19 @@ class TimingReporter
   static void destroyInst();
   // function
   void report();
+  // Results and path expansion remain owned by this guarded query.
+  static std::pair<std::string, std::string> readCsrReport(csr::detail::CsrReportNodeReader& points, bool summary_only = false);
 
  private:
   // self
   static TimingReporter* _tr_instance;
 
   TimingReporter() = default;
+  TimingReporter(std::vector<TimingPathGroup>& groups, TimingAnalyzer& analyzer) : _groups(&groups), _analyzer(&analyzer) {}
+  std::vector<TimingPathGroup>* _groups{nullptr};
+  TimingAnalyzer* _analyzer{nullptr};
+  std::vector<TimingPathGroup>& pathGroups();
+  void materializeReportPath(TimingPath& path);
   TimingReporter(const TimingReporter& other) = delete;
   TimingReporter(TimingReporter&& other) = delete;
   ~TimingReporter() = default;
@@ -55,9 +64,6 @@ class TimingReporter
   std::vector<std::pair<std::string, TimingPath*>> getReportTimingPathList(DelayType delay_type, StartEndType start_end_type);
   std::vector<std::pair<std::string, TimingPath*>> getSortedReportTimingPathList(DelayType delay_type,
                                                                                  StartEndType start_end_type);
-  std::vector<TimingPath*> getSortedTimingPathList(TimingPathGroup& timing_path_group, DelayType delay_type,
-                                                   StartEndType start_end_type);
-  std::vector<TimingPath*> getEndpointWorstTimingPathList(std::vector<TimingPath*>& timing_path_list);
   bool isMatchReportSlack(TimingPath& timing_path);
   friend class TimingReporterProbeAccess;
   friend class PhysicalStaSessionState;

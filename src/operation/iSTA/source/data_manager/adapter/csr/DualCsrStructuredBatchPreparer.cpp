@@ -628,16 +628,31 @@ PendingStructuredBatch DualCsrStructuredBatchPreparer::prepareBound(
   // them above. Full arbitrary PreparedBatch validation remains at create().
   auto prepared = timing_edit::PreparedBatch(std::move(data));
   auto staged = committed_resolver.prepare(prepared);
-  auto capture_plan = detail::makeStructuredCapturePlan(
-      prepared, committed_resolver, timing_edit::TimingEditResolverView{committed_resolver, staged}, committed_arc_group_index,
-      committed_view);
-  detail::requireStructuredSelectedBefore(
-      exact_committed_graph, committed_resolver,
-      committed_arc_group_index, committed_view, capture_plan);
   ExpectedBeforeBinding binding{exact_committed_graph, committed_resolver, committed_arc_group_index};
-  return PendingStructuredBatch{std::move(prepared), std::move(staged),
-                                std::move(capture_plan),
-                                std::move(binding)};
+  PendingStructuredBatch pending{std::move(prepared), std::move(staged), std::move(binding)};
+  if constexpr (incregpusta_debug_checks_enabled)
+    static_cast<void>(pending.capturePlan());
+  return pending;
+}
+
+const AffectedCapturePlan& PendingStructuredBatch::capturePlan() const
+{
+  const auto& graph = _expected_before.graph();
+  const auto& index = _expected_before.arcGroupIndex();
+  if (graph.session_token != _prepared_batch.sessionToken()
+      || graph.generation != _prepared_batch.expectedGeneration()
+      || graph.high_water != _prepared_batch.slotPlan().before
+      || index.session_token != graph.session_token || index.generation != graph.generation
+      || _expected_before.resolver().highWater() != graph.high_water)
+    invalid("native capture requested after the bound state changed");
+  if (!_capture_plan) {
+    const DualSemanticReadView view(graph);
+    auto plan = detail::makeStructuredCapturePlan(_prepared_batch, _expected_before.resolver(),
+                                                 stagedResolver(), index, view);
+    detail::requireStructuredSelectedBefore(graph, _expected_before.resolver(), index, view, plan);
+    _capture_plan = std::move(plan);
+  }
+  return *_capture_plan;
 }
 
 }  // namespace ista::timing_dual_csr

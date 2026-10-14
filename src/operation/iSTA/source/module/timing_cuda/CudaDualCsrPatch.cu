@@ -157,6 +157,19 @@ void CudaDualCsrSession::Impl::validatePatch(const Impl& prior, const CudaDualCs
       demand(static_cast<int>(counts.added[direction]) - static_cast<int>(counts.removed[direction]) == delta,
              "CUDA patch does not preserve complete arc incidence");
   }
+  std::set<Index> changed_loads;
+  for (const auto& change : patch.seed_load_changes) {
+    demand(changed_loads.insert(change.node.value()).second, "CUDA duplicate Q load change");
+    const auto seed = std::ranges::lower_bound(prior.host->node_seeds, change.node.value(), {}, &NodeSeed::node);
+    demand(seed != prior.host->node_seeds.end() && seed->node == change.node.value()
+               && seed->state.sequential.kind == SeedKind::output && seed->state.sequential.rc_binding == absent,
+           "CUDA Q load target is not a non-parasitic output seed");
+    for (unsigned a = 0; a < 2; ++a)
+      for (unsigned t = 0; t < 2; ++t)
+        demand(seed->state.sequential.output_load[a * 2 + t] == change.expected[a][t]
+                   && std::isfinite(change.replacement[a][t]) && change.replacement[a][t] >= 0.0,
+               "CUDA Q load old value or replacement is invalid");
+  }
   std::set<std::pair<Index, std::string>> seed_keys;
   for (const auto& seed : patch.appended_start_seeds) {
     demand(seed_keys.emplace(seed.seed_node.value(), seed.clock_tag).second, "CUDA duplicate appended seed");
@@ -198,6 +211,8 @@ PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDual
   packed.changes.clear();
   packed.reverse_changes.clear();
   packed.payloads.clear();
+  packed.seed_loads.clear();
+  packed.seeds.clear();
   packed.deactivations.clear();
   packed.appends.clear();
   packed.aux_patches.clear();
@@ -378,6 +393,23 @@ PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDual
       for (Index i = 0; i < current.child_count; ++i)
         undo.child_indices.emplace_back(current.child_begin + i, host->layout.child_indices[current.child_begin + i]);
   }
+  undo.seed_loads.clear();
+  packed.seed_loads.reserve(patch.seed_load_changes.size());
+  undo.seed_loads.reserve(patch.seed_load_changes.size());
+  for (const auto& change : patch.seed_load_changes) {
+    const auto seed = std::ranges::lower_bound(host->node_seeds, change.node.value(), {}, &NodeSeed::node);
+    SeedLoadPatch update{static_cast<Index>(seed - host->node_seeds.begin())};
+    SeedLoadUndo saved{update.slot};
+    for (unsigned a = 0; a < 2; ++a)
+      for (unsigned t = 0; t < 2; ++t) {
+        const auto lane = a * 2 + t;
+        saved.value[lane] = seed->state.sequential.output_load[lane];
+        update.expected[lane] = change.expected[a][t];
+        update.replacement[lane] = change.replacement[a][t];
+      }
+    packed.seed_loads.push_back(update);
+    undo.seed_loads.push_back(saved);
+  }
   undo.nodes = prior.view.node_count;
   undo.arcs = prior.view.arc_count;
   undo.children = host->layout.child_indices.size();
@@ -437,6 +469,9 @@ PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDual
       host->bindings[id.value()].storage_kind = EdgeStorageKind::kAuxOut;
   for (auto& name : clock_names)
     host->layout.clock_names.push_back(std::move(name));
+  for (const auto& change : packed.seed_loads)
+    for (unsigned lane = 0; lane < 4; ++lane)
+      host->node_seeds[change.slot].state.sequential.output_load[lane] = change.replacement[lane];
   host->node_seeds.insert(host->node_seeds.end(), node_seeds.begin(), node_seeds.end());
   host->path_seeds.insert(host->path_seeds.end(), path_seeds.begin(), path_seeds.end());
   if (!changed_nodes.empty() || patch.after.node_slots != prior.view.node_count) {

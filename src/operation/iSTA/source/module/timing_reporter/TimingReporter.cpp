@@ -14,6 +14,7 @@
 //
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
+#include "TimingAnalyzer.hpp"
 #include "TimingReporter.hpp"
 
 #include "DataManager.hpp"
@@ -304,9 +305,8 @@ std::vector<std::pair<std::string, TimingPath*>> TimingReporter::getReportTiming
 std::vector<std::pair<std::string, TimingPath*>> TimingReporter::getSortedReportTimingPathList(DelayType delay_type,
                                                                                                StartEndType start_end_type)
 {
-  Database& database = STADM.getDatabase();
   std::vector<std::pair<std::string, TimingPath*>> timing_path_list;
-  for (TimingPathGroup& timing_path_group : database.get_timing_path_group_list()) {
+  for (TimingPathGroup& timing_path_group : pathGroups()) {
     std::string& group_name = timing_path_group.get_group_name();
     for (auto& [end_point, timing_path_end] : timing_path_group.get_timing_path_end_map()) {
       for (TimingPath& timing_path : timing_path_end.get_timing_path_list()) {
@@ -345,39 +345,6 @@ std::vector<std::pair<std::string, TimingPath*>> TimingReporter::getSortedReport
   return endpoint_limited_timing_path_list;
 }
 
-std::vector<TimingPath*> TimingReporter::getSortedTimingPathList(TimingPathGroup& timing_path_group, DelayType delay_type,
-                                                                 StartEndType start_end_type)
-{
-  std::vector<TimingPath*> timing_path_list;
-  for (auto& [end_point, timing_path_end] : timing_path_group.get_timing_path_end_map()) {
-    for (TimingPath& timing_path : timing_path_end.get_timing_path_list()) {
-      if (isMatchAnalysisType(timing_path, delay_type) && isMatchStartEndType(timing_path, start_end_type)) {
-        timing_path_list.push_back(&timing_path);
-      }
-    }
-  }
-  timing_path_list = getEndpointWorstTimingPathList(timing_path_list);
-  std::sort(timing_path_list.begin(), timing_path_list.end(), [](TimingPath* left, TimingPath* right) { return left->get_slack() < right->get_slack(); });
-  return timing_path_list;
-}
-
-std::vector<TimingPath*> TimingReporter::getEndpointWorstTimingPathList(std::vector<TimingPath*>& timing_path_list)
-{
-  std::map<std::string, TimingPath*> end_point_timing_path_map;
-  for (TimingPath* timing_path : timing_path_list) {
-    std::string& end_point = timing_path->get_end_point();
-    if (end_point_timing_path_map.count(end_point) == 0 || timing_path->get_slack() < end_point_timing_path_map[end_point]->get_slack()) {
-      end_point_timing_path_map[end_point] = timing_path;
-    }
-  }
-
-  std::vector<TimingPath*> endpoint_worst_timing_path_list;
-  for (std::pair<const std::string, TimingPath*>& timing_path_pair : end_point_timing_path_map) {
-    endpoint_worst_timing_path_list.push_back(timing_path_pair.second);
-  }
-  return endpoint_worst_timing_path_list;
-}
-
 bool TimingReporter::isMatchReportSlack(TimingPath& timing_path)
 {
   double slack = timing_path.get_slack();
@@ -395,7 +362,6 @@ bool TimingReporter::isMatchReportSlack(TimingPath& timing_path)
 
 void TimingReporter::outputQorSummaryReport(std::ostream* json_output)
 {
-  Database& database = STADM.getDatabase();
   std::map<std::string, double> setup_wns_map;
   std::map<std::string, double> setup_tns_map;
   std::map<std::string, int32_t> setup_nvp_map;
@@ -404,7 +370,7 @@ void TimingReporter::outputQorSummaryReport(std::ostream* json_output)
   std::map<std::string, double> hold_tns_map;
   std::map<std::string, int32_t> hold_nvp_map;
 
-  for (TimingPathGroup& timing_path_group : database.get_timing_path_group_list()) {
+  for (TimingPathGroup& timing_path_group : pathGroups()) {
     std::string& group_name = timing_path_group.get_group_name();
     std::vector<TimingPath*> setup_timing_path_list = getQorTimingPathList(timing_path_group, DelayType::kMax);
     if (!setup_timing_path_list.empty()) {
@@ -673,7 +639,6 @@ std::string TimingReporter::getQorSummaryJsonFilePath()
 
 void TimingReporter::outputTimingPathsJson(std::ostream* json_output)
 {
-  Database& database = STADM.getDatabase();
   std::optional<std::ofstream> owned_file;
     if (!json_output) owned_file.emplace(STAUTIL.openOutputFile(getTimingPathsJsonFilePath()));
   std::ostream* json_file = json_output ? json_output : &*owned_file;
@@ -685,7 +650,7 @@ void TimingReporter::outputTimingPathsJson(std::ostream* json_output)
   bool first_path = true;
   for (DelayType delay_type : {DelayType::kMax, DelayType::kMin}) {
     std::vector<std::pair<std::string, TimingPath*>> timing_paths;
-    for (TimingPathGroup& timing_path_group : database.get_timing_path_group_list()) {
+    for (TimingPathGroup& timing_path_group : pathGroups()) {
       std::vector<TimingPath*> group_paths = getQorTimingPathList(timing_path_group, delay_type);
       for (TimingPath* timing_path : group_paths) {
         timing_paths.emplace_back(timing_path_group.get_group_name(), timing_path);
@@ -734,6 +699,7 @@ std::string TimingReporter::getTimingPathsJsonFilePath()
 void TimingReporter::outputTimingPathJson(std::ostream* json_file, TimingPath& timing_path, std::string& path_group_name,
                                           DelayType delay_type)
 {
+  materializeReportPath(timing_path);
   const std::string analysis_type = delay_type == DelayType::kMax ? "setup" : "hold";
   const std::string clock_name = getClockName(timing_path);
   const std::string check_type = GetTimingCheckTypeName()(timing_path.get_check_type());
@@ -794,14 +760,16 @@ std::string TimingReporter::getTimingPathId(TimingPath& timing_path, std::string
 std::vector<TimingPath*> TimingReporter::getQorTimingPathList(TimingPathGroup& timing_path_group, DelayType delay_type)
 {
   std::vector<TimingPath*> timing_path_list;
-  for (std::pair<const std::string, TimingPathEnd>& timing_path_end_pair : timing_path_group.get_timing_path_end_map()) {
-    for (TimingPath& timing_path : timing_path_end_pair.second.get_timing_path_list()) {
-      if (isMatchAnalysisType(timing_path, delay_type)) {
-        timing_path_list.push_back(&timing_path);
+  for (auto& [end_point, timing_path_end] : timing_path_group.get_timing_path_end_map()) {
+    static_cast<void>(end_point);
+    TimingPath* worst = nullptr;
+    for (TimingPath& timing_path : timing_path_end.get_timing_path_list()) {
+      if (isMatchAnalysisType(timing_path, delay_type) && (worst == nullptr || timing_path.get_slack() < worst->get_slack())) {
+        worst = &timing_path;
       }
     }
+    if (worst != nullptr) timing_path_list.push_back(worst);
   }
-  timing_path_list = getEndpointWorstTimingPathList(timing_path_list);
   std::sort(timing_path_list.begin(), timing_path_list.end(), [](TimingPath* left, TimingPath* right) { return left->get_slack() < right->get_slack(); });
   return timing_path_list;
 }
@@ -964,6 +932,7 @@ bool TimingReporter::isRegisterEndPoint(std::string& pin_name)
 bool TimingReporter::hasClockPoint(std::string& pin_name)
 {
   Database& database = STADM.getDatabase();
+  if (_analyzer) return _analyzer->hasClockPoint(pin_name);
   return database.get_timing_point_map().count(pin_name) > 0 && database.get_timing_point_map()[pin_name].get_is_clock_point();
 }
 
@@ -985,6 +954,7 @@ bool TimingReporter::isClockSourceStartPoint(std::string& pin_name)
 void TimingReporter::outputTimingPath(std::ofstream* report_file, TimingPath& timing_path, std::string& path_group_name,
                                       DelayType delay_type)
 {
+  materializeReportPath(timing_path);
   outputTimingPathHeader(report_file, timing_path, path_group_name, delay_type);
   std::size_t label_width = outputTimingPointList(report_file, timing_path, delay_type);
   outputTimingPathSummary(report_file, timing_path, label_width);

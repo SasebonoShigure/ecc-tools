@@ -135,7 +135,8 @@ TimingEditResolverState TimingEditResolverState::bindRecords(const Database& dat
   TimingEditResolverState result;
   for (std::size_t index = 0; index < input.nodes.size(); ++index) {
     const auto& key = input.nodes[index].key;
-    if (!result._nodes.emplace(ExistingNodeRef{key}, NativeSlotBinding{AppendOnlySlot{index}, key.full_name, false}).second) {
+    result._nodes.emplace_hint(result._nodes.end(), ExistingNodeRef{key}, NativeSlotBinding{AppendOnlySlot{index}, key.full_name, false});
+    if (result._nodes.size() != index + 1) {
       invalid("baseline NodeKey collision");
     }
   }
@@ -144,14 +145,17 @@ TimingEditResolverState TimingEditResolverState::bindRecords(const Database& dat
   std::uint64_t net_slot = 0;
   for (const auto& [name, net] : database.get_net_map()) {
     static_cast<void>(net);
-    if (!result._nets.emplace(ExistingNetRef{name}, NativeSlotBinding{AppendOnlySlot{net_slot++}, name, false}).second) {
+    result._nets.emplace_hint(result._nets.end(), ExistingNetRef{name}, NativeSlotBinding{AppendOnlySlot{net_slot++}, name, false});
+    if (result._nets.size() != net_slot) {
       invalid("baseline net-name collision");
     }
   }
   result._high_water.net_slots = net_slot;
 
   for (std::size_t index = 0; index < input.arcs.size(); ++index) {
-    if (!result._arcs.emplace(ExistingArcRef{input.arcs[index].key}, NativeSlotBinding{AppendOnlySlot{index}, {}, false}).second) {
+    result._arcs.emplace_hint(result._arcs.end(), ExistingArcRef{input.arcs[index].key},
+                              NativeSlotBinding{AppendOnlySlot{index}, {}, false});
+    if (result._arcs.size() != index + 1) {
       invalid("baseline ArcKey collision");
     }
   }

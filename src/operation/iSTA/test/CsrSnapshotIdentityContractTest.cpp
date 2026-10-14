@@ -43,7 +43,7 @@ constexpr std::array<CsrCoreCompiledContract, 8> kCompiledContracts = {
                             "valid", "-", "-", "-"},
     CsrCoreCompiledContract{"identity_syntax_zero_token", "identity.syntax.gen0", "replace_value", "identity.session_token", "0", "-", "invalid",
                             "identity.session_token", "-", "must be nonzero"},
-    CsrCoreCompiledContract{"identity_syntax_bad_version", "identity.syntax.gen0", "replace_value", "identity.fingerprint_schema_version", "2.0.0", "-",
+    CsrCoreCompiledContract{"identity_syntax_bad_version", "identity.syntax.gen0", "replace_value", "identity.fingerprint_schema_version", "1.0.0", "-",
                             "invalid", "identity.fingerprint_schema_version", "-", "unsupported schema version"},
     CsrCoreCompiledContract{"identity_syntax_bad_topology_hash", "identity.syntax.gen0", "replace_value", "identity.topology_fingerprint", "uppercase", "-",
                             "invalid", "identity.topology_fingerprint", "-", "must be 64 lowercase hexadecimal characters"},
@@ -127,7 +127,7 @@ void testPrefixAndOrdering()
   require(only_dots.size() == 1 && only_dots.front().field == "session_token", "dot-only prefix must emit a bare field");
 
   CsrSnapshotIdentity malformed = identity();
-  malformed.fingerprint_schema_version = "2.0.0";
+  malformed.fingerprint_schema_version = "1.0.0";
   malformed.session_token = 0;
   malformed.graph_generation = 1;
   malformed.topology_fingerprint.clear();

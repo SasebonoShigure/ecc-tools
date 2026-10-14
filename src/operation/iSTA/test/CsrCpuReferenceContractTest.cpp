@@ -161,7 +161,6 @@ void testWholeResultLiteral()
 {
   const CsrReferenceInput input = wholeLiteralInput();
   CsrTimingResult expected;
-  expected.schema_version = input.schema_version;
   expected.source_identity = input.source_identity;
   expected.level_offsets = {0, 2, 3, 4};
   expected.level_nodes = {NodeId{0}, NodeId{3}, NodeId{1}, NodeId{2}};

@@ -149,7 +149,6 @@ CsrReferenceInput incomingClockSourceInput()
   input.instances = {InstanceRecord{"u1", "BUF_X1", {NodeId{1}}, false, false, false, false}};
   auto& arc = input.arcs.front();
   arc.key.base.sink = sink.key;
-  arc.output_load = outputLoad(0.1);
   input.arc_ids_by_key.front().key = arc.key;
   input.ordered_end_ids.clear();
   input.clocks = {ClockConstraintModel{"B", "E", {RawNodeReference{"u1:P", NodeId{1}}}, 10.0, {2.0, 7.0}, false}};

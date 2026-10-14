@@ -135,7 +135,6 @@ inline CsrReferenceInput referenceInput()
   arc.transfer.delay = 0.0;
   arc.transfer.delay_min = 0.0;
   arc.transfer.delay_max = 0.0;
-  arc.output_load = outputLoad(0.5);
   input.arcs = {arc};
   input.arc_ids_by_key = {{arc.key, arc.id}};
   input.out_row_offsets = {0, 1, 1};

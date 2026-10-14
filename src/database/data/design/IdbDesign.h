@@ -106,7 +106,13 @@ class IdbDesign
   // setter
   void set_version(std::string version) { _version = version; }
   void set_design_name(std::string name) { _design_name = name; }
-  void set_units(IdbUnits* units) { _units = units; }
+  void set_units(IdbUnits* units)
+  {
+    if (_units != units) {
+      delete _units;
+      _units = units;
+    }
+  }
   void set_instance_list(IdbInstanceList* instance_list) { _instance_list = instance_list; }
   void set_io_pin_list(IdbPins* pin_list) { _io_pin_list = pin_list; }
   void set_net_list(IdbNetList* net_list) { _net_list = net_list; }

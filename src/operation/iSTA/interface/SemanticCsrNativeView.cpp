@@ -3,6 +3,7 @@
 #include "SemanticCsrNativeView.hpp"
 #include <stdexcept>
 #include <vector>
+#include <utility>
 #include "DataManager.hpp"
 #include "DualCsrState.hpp"
 #include "NativeBufferInsertionInternal.hpp"
@@ -12,9 +13,23 @@
 #include "TimingResultScatterInternal.hpp"
 
 namespace ista {
+void SemanticCsrNativeView::prepareMetadata(Database& database, const timing_edit::NativeExecutionAuthority& authority,
+    const timing_dual_csr::DualCsrState& graph, const timing_edit::TimingEditResolverState& resolver,
+    std::span<const timing_edit::EditBatch> committed_batches)
+{
+  prepareView(database, authority, graph, resolver, committed_batches, nullptr);
+}
+
 void SemanticCsrNativeView::materialize(Database& database, const timing_edit::NativeExecutionAuthority& authority,
     const timing_dual_csr::DualCsrState& graph, const timing_edit::TimingEditResolverState& resolver,
     std::span<const timing_edit::EditBatch> committed_batches, const csr::CsrTimingValues& values)
+{
+  prepareView(database, authority, graph, resolver, committed_batches, &values);
+}
+
+void SemanticCsrNativeView::prepareView(Database& database, const timing_edit::NativeExecutionAuthority& authority,
+    const timing_dual_csr::DualCsrState& graph, const timing_edit::TimingEditResolverState& resolver,
+    std::span<const timing_edit::EditBatch> committed_batches, const csr::CsrTimingValues* values)
 {
   using namespace timing_edit;
   if (!authority.readyForQuery() || authority.sessionToken() != _session || graph.session_token != _session
@@ -22,8 +37,10 @@ void SemanticCsrNativeView::materialize(Database& database, const timing_edit::N
       || committed_batches.size() != graph.generation.value())
     throw std::invalid_argument("semantic native view lost its committed owner or generation");
   if (_generation == graph.generation) {
-    auto result = csr::detail::prepareDualCsrTimingResult(database, graph, values);
-    csr::detail::publishPreparedTimingResult(result);
+    if (values) {
+      auto result = csr::detail::prepareDualCsrTimingResult(database, graph, *values);
+      csr::detail::publishPreparedTimingResult(result);
+    }
     return;
   }
   // One raw transaction covers the entire unmaterialized suffix, including a failed final build.
@@ -39,11 +56,15 @@ void SemanticCsrNativeView::materialize(Database& database, const timing_edit::N
       edits.push_back(edit);
     }
   }
-  auto transaction = NativeEditTransaction::prepareFull(
-      authority, edits, TimingEditResolverView(resolver), timing_edit::detail::nextNativeInstanceId(database));
-  NativeCandidateExecutor::prepareFullGraph(transaction);
-  auto result = csr::detail::prepareDualCsrTimingResult(database, graph, values);
-  csr::detail::publishPreparedTimingResult(result);
+  auto transaction = NativeEditTransaction::beginTargeted(authority);
+  auto raw = timing_edit::detail::prepareNativeBufferInsertions(
+      database, edits, TimingEditResolverView(resolver), timing_edit::detail::nextNativeInstanceId(database));
+  auto patch = timing_edit::detail::prepareNativeBufferGraph(database, raw, edits, TimingEditResolverView(resolver));
+  transaction.applyTargeted(std::move(raw), std::move(patch));
+  if (values) {
+    auto result = csr::detail::prepareDualCsrTimingResult(database, graph, *values);
+    csr::detail::publishPreparedTimingResult(result);
+  }
   transaction.commit();
   _generation = graph.generation;
 }

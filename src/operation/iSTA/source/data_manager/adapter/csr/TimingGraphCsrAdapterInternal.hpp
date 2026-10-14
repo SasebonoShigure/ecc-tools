@@ -61,6 +61,7 @@ struct GraphBuildState
 };
 
 [[nodiscard]] PinDirection convertPinDirection(ista::PinDirection direction);
+void exportGraph(GraphBuildState& state);
 void exportNodesAndInstances(GraphBuildState& state);
 void exportArcs(GraphBuildState& state);
 void exportAdjacencyAndOrder(GraphBuildState& state);

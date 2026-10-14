@@ -62,10 +62,22 @@ struct ArcUndo
   Index id{};
   Arc value;
 };
+struct SeedLoadPatch
+{
+  Index slot{};
+  double expected[4]{}, replacement[4]{};
+};
+struct SeedLoadUndo
+{
+  Index slot{};
+  double value[4]{};
+};
 struct PackedPatch
 {
   std::vector<SlotPatch> removes, changes, reverse_changes;
   std::vector<PayloadPatch> payloads;
+  std::vector<SeedLoadPatch> seed_loads;
+  std::vector<SeedLoadUndo> seeds;
   std::vector<DeactivatePatch> deactivations;
   std::vector<Arc> appends;
   std::vector<AuxPatch> aux_patches;
@@ -80,6 +92,9 @@ struct DevicePatch
   Index remove_count{}, change_count{}, reverse_count{};
   const PayloadPatch* payloads{};
   Index payload_count{};
+  NodeSeed* seed_nodes{};
+  const SeedLoadPatch* seed_loads{};
+  Index seed_load_count{};
   const DeactivatePatch* deactivations{};
   Index deactivate_count{};
   const AuxPatch* aux_patches{};
@@ -108,6 +123,7 @@ struct HostGraphUndo
   std::shared_ptr<HostGraphState> target;
   Index nodes{}, arcs{}, children{}, names{}, node_seeds{}, path_seeds{};
   std::vector<std::pair<Index, ArcBinding>> bindings;
+  std::vector<SeedLoadUndo> seed_loads;
   std::vector<std::pair<Index, ArcLayout>> layouts;
   std::vector<std::pair<Index, std::int32_t>> child_indices;
   struct RowSize { Index node, incoming, outgoing; };
@@ -123,6 +139,7 @@ struct HostGraphUndo
   {
     target.reset();
     bindings.clear();
+    seed_loads.clear();
     layouts.clear();
     child_indices.clear();
     adjacency.clear();
@@ -162,6 +179,9 @@ struct HostGraphUndo
     target->layout.arcs.resize(arcs);
     target->layout.child_indices.resize(children);
     target->layout.clock_names.resize(names);
+    for (const auto& saved : seed_loads)
+      for (unsigned lane = 0; lane < 4; ++lane)
+        target->node_seeds[saved.slot].state.sequential.output_load[lane] = saved.value[lane];
     target->node_seeds.resize(node_seeds);
     target->path_seeds.resize(path_seeds);
     if (roots)
@@ -260,18 +280,20 @@ struct DeviceStorage
   PathDomainBuffers domains[2];
   DeviceBuffer<SlotPatch> removes, changes, reverse_changes;
   DeviceBuffer<PayloadPatch> payloads;
+  DeviceBuffer<SeedLoadPatch> seed_loads;
+  DeviceBuffer<SeedLoadUndo> seed_undo;
   DeviceBuffer<DeactivatePatch> deactivations;
   DeviceBuffer<AuxPatch> aux_patches;
   DeviceBuffer<Index> aux_values;
   DeviceBuffer<SlotUndo> slot_undo;
   DeviceBuffer<ArcUndo> arc_undo;
   DeviceBuffer<NewNodePlacement> placements;
-  Index slot_undo_count{}, arc_undo_count{};
+  Index slot_undo_count{}, arc_undo_count{}, seed_undo_count{};
   bool pending{false}, undo_captured{false}, poisoned{false}, closed{false};
 };
 void launchAuxBindings(DeviceView view, const AuxBinding* bindings, Index count, Index capacity, cudaStream_t stream, unsigned threads);
-void launchCaptureUndo(DeviceView view, SlotUndo* slots, Index slot_count, ArcUndo* arcs, Index arc_count, cudaStream_t stream, unsigned threads);
-void launchRestoreUndo(DeviceView view, const SlotUndo* slots, Index slot_count, const ArcUndo* arcs, Index arc_count, cudaStream_t stream, unsigned threads);
+void launchCaptureUndo(DeviceView view, SlotUndo* slots, Index slot_count, ArcUndo* arcs, Index arc_count, NodeSeed* seeds, SeedLoadUndo* loads, Index load_count, cudaStream_t stream, unsigned threads);
+void launchRestoreUndo(DeviceView view, const SlotUndo* slots, Index slot_count, const ArcUndo* arcs, Index arc_count, NodeSeed* seeds, const SeedLoadUndo* loads, Index load_count, cudaStream_t stream, unsigned threads);
 std::uint64_t launchTargetedPatch(DeviceView view, DevicePatch patch, cudaStream_t stream, unsigned threads);
 }  // namespace ista::csr::cuda_detail
 

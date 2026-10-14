@@ -53,6 +53,7 @@ NativeDatabaseValidationResult validateNamedObjects(const Database& database)
     }
   }
 
+  std::size_t connected_pins = 0;
   for (const auto& [name, pin] : database.get_pin_map()) {
     if (name != pin.get_full_name()) {
       return failure(NativeDatabaseValidationCode::kNamedObjectMismatch, name, "pin map key does not equal full name");
@@ -66,13 +67,14 @@ NativeDatabaseValidationResult validateNamedObjects(const Database& database)
     }
     if (!pin.get_net_name().empty()) {
       const auto net = database.get_net_map().find(pin.get_net_name());
-      if (net == database.get_net_map().end()
-          || std::ranges::find(net->second.get_pin_name_list(), name) == net->second.get_pin_name_list().end()) {
+      if (net == database.get_net_map().end()) {
         return failure(NativeDatabaseValidationCode::kMembershipMismatch, name, "pin is missing from its net");
       }
+      ++connected_pins;
     }
   }
 
+  std::size_t listed_pins = 0;
   for (const auto& [name, net] : database.get_net_map()) {
     if (name != net.get_net_name()) {
       return failure(NativeDatabaseValidationCode::kNamedObjectMismatch, name, "net map key does not equal net name");
@@ -87,6 +89,8 @@ NativeDatabaseValidationResult validateNamedObjects(const Database& database)
         return failure(NativeDatabaseValidationCode::kMembershipMismatch, name, "net pin membership is not bidirectional");
       }
     }
+
+    listed_pins += pins.size();
 
     std::set<std::string> expected_drivers;
     std::set<std::string> expected_loads;
@@ -108,6 +112,10 @@ NativeDatabaseValidationResult validateNamedObjects(const Database& database)
     if (net.get_driver_pin() != expected_driver) {
       return failure(NativeDatabaseValidationCode::kMembershipMismatch, name, "net singular driver cache is inconsistent");
     }
+  }
+  // Unique forward memberships plus equal cardinality prove reverse coverage without rescanning each net per pin.
+  if (listed_pins != connected_pins) {
+    return failure(NativeDatabaseValidationCode::kMembershipMismatch, "net_map", "connected pins are missing from net membership");
   }
   return std::nullopt;
 }

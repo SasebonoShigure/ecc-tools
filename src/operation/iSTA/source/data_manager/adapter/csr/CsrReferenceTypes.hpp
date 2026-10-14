@@ -50,7 +50,7 @@ struct CsrCurrentFingerprints
 
 struct CsrReferenceInput
 {
-  std::string schema_version{kCsrSchemaVersion};
+  std::string schema_version{kCsrReferenceInputSchemaVersion};
   CsrSnapshotIdentity source_identity;
   StaAnalysisContext analysis_context;
   std::array<AnalysisMode, kAnalysisCount> analysis_order{AnalysisMode::kMax, AnalysisMode::kMin};

@@ -98,7 +98,7 @@ LibraryCellRef bufferCell()
 ComponentFingerprints fingerprints(char value)
 {
   const std::string digest(64, value);
-  return ComponentFingerprints{csr::kCsrSchemaVersion, digest, digest, digest, digest, digest, digest};
+  return ComponentFingerprints{csr::kCsrFingerprintSchemaVersion, digest, digest, digest, digest, digest, digest};
 }
 
 struct Fixture

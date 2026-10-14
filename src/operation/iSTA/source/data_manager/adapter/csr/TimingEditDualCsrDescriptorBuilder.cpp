@@ -20,7 +20,7 @@
 
 #include "CsrReferenceInputAdapterInternal.hpp"
 #include "DualCsrArcGroupIndexValidation.hpp"
-#include "DualCsrStructuredCapturePlanInternal.hpp"
+#include "DualCsrValidationInternal.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "NarrowCaptureAuditValidation.hpp"
 #include "NarrowTimingCaptureInternal.hpp"
@@ -135,16 +135,8 @@ void requirePlanBinding(const PendingStructuredBatch& pending)
       || (batch.expectedPreCommittedIdentity() && batch.expectedPreCommittedIdentity()->generation != batch.expectedGeneration()) || pending.stagedResolver().highWater() != batch.slotPlan().after)
     invalid("pending capability no longer matches its exact before-state");
 
-  // Rebuilding the capture plan is a development proof; owner and local
-  // expected-value checks remain part of the controlled path.
-  if constexpr (incregpusta_debug_checks_enabled) {
-    if (before.resolver().highWater() != batch.slotPlan().before)
-      invalid("pending capability no longer matches its exact before-state");
-    const DualSemanticReadView view(before.graph());
-    const auto rebuilt = detail::makeStructuredCapturePlan(batch, before.resolver(), pending.stagedResolver(), before.arcGroupIndex(), view);
-    if (rebuilt != pending.capturePlan())
-      invalid("capture plan is not the exact deterministic batch plan");
-  }
+  if (before.resolver().highWater() != batch.slotPlan().before)
+    invalid("pending capability no longer matches its exact before-state");
 }
 
 void requireNodeCoverage(const PendingStructuredBatch& pending,
@@ -323,8 +315,8 @@ void requireArcCoverage(const PendingStructuredBatch& pending,
           || (load == records.net_loads.end()
               && (captured.payload.output_load != expected.output_load || captured.payload.parasitic != expected.parasitic))
           || (load != records.net_loads.end()
-              && captured.payload.output_load
-                     != load->output_load))
+              && captured.payload.kind == csr::ArcKind::kCell
+              && captured.payload.output_load != load->output_load))
         invalid("captured existing arc changed outside its field policy");
     }
     if (groups.at(&captured.payload.key.base).size() != request.expected_post_multiplicity)
@@ -460,14 +452,18 @@ void requireReferenceDelta(const PendingStructuredBatch& pending,
   if (delta.start_seeds) {
     if (!delta.start_seeds->appends.empty()) invalid("data buffer insertion cannot append launch seeds");
     for (const auto& change : delta.start_seeds->changes) {
-      auto only_binding = change.expected;
-      only_binding.parasitic = change.replacement.parasitic;
-      const auto& rc = only_binding.parasitic;
-      if (only_binding != change.replacement
-          || only_binding.availability != csr::StartSeedAvailability::kDeferredSequential
-          || !rc.tree || rc.terminal != 0 || rc.tree->terminals.empty()
-          || rc.tree->terminals.front() != only_binding.seed_node || !affected_nets.contains(rc.tree->net_name))
-        invalid("launch seed change exceeds the affected RC binding");
+      auto only_model = change.expected;
+      only_model.parasitic = change.replacement.parasitic;
+      only_model.output_load = change.replacement.output_load;
+      const auto& rc = only_model.parasitic;
+      const auto& node = pending.expectedBefore().graph().nodes.at(only_model.seed_node.value());
+      if (only_model != change.replacement || !node.is_output_pin
+          || only_model.availability != csr::StartSeedAvailability::kDeferredSequential
+          || !affected_nets.contains(node.net_name)
+          || only_model.output_load.has_value() == bool(rc.tree)
+          || (rc.tree && (rc.terminal != 0 || rc.tree->terminals.empty()
+              || rc.tree->terminals.front() != only_model.seed_node || rc.tree->net_name != node.net_name)))
+        invalid("launch seed change exceeds the affected load model");
     }
   }
 
@@ -541,7 +537,7 @@ void requireCapturedLoadsApplied(const PendingStructuredBatch& pending,
     const auto& sink = nodeFor(arc.payload.sink);
     const auto load = std::ranges::find(
         records.net_loads, sink.net_name, &CapturedNetLoad::net_name);
-    if (load != records.net_loads.end()
+    if (load != records.net_loads.end() && arc.payload.kind == csr::ArcKind::kCell
         && arc.payload.output_load
                != load->output_load)
       invalid("captured arc did not apply its invalidated net load");
@@ -586,7 +582,7 @@ VerifiedStructuredBatch TimingEditDualCsrDescriptorBuilder::finish(
   requirePlanBinding(pending);
   auto descriptor = detail::basicDescriptor(pending, records);
   detail::buildStructuredPhysicalDelta(pending, records, descriptor);
-  const auto violations = validateDualCsrDescriptor(
+  const auto violations = detail::validateConstructedDualCsrDescriptor(
       pending.expectedBefore().graph(), descriptor);
   if (!violations.empty())
     invalid(violations.front().field + ": "

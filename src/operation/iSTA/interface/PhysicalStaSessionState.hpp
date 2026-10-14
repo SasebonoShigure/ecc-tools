@@ -1,6 +1,7 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #pragma once
+#include <utility>
 #include "PhysicalTimingEdit.hpp"
 #include "PhysicalPlacementRows.hpp"
 #include "PhysicalStaJournal.hpp"
@@ -50,6 +51,12 @@ class PhysicalStaSessionState final
   std::unique_ptr<CudaCsrEditState> cuda_graph;
 #endif
  private:
+  void prepareCsrView(Database& database, const timing_edit::NativeExecutionAuthority& authority,
+      const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues* values);
+  PhysicalStaCurrentResult readCsr(Database& database, const timing_edit::NativeExecutionAuthority& authority,
+      const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues& values, bool summary_only);
+  std::pair<std::string, std::string> _csr_report;
+  std::optional<timing_edit::TransactionGeneration> _csr_report_generation;
   void materializeCsr(Database& database, const timing_edit::NativeExecutionAuthority& authority,
       const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues& values);
   PhysicalStaBatchResult applyBatchImpl(Database& database, StaCsrSessionContext& context,

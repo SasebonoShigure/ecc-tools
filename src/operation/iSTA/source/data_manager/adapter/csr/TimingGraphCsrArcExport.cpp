@@ -69,15 +69,22 @@ bool isOutputLike(PinDirection direction)
 using CellArcCounts = std::map<std::pair<std::string, std::string>, std::size_t>;
 using CellArcsByOwner = std::unordered_map<std::string, CellArcCounts>;
 
-CellArcsByOwner indexCellArcsByOwner(const ista::Database& database)
+CellArcsByOwner indexCellArcsByOwner(const GraphBuildState& state)
 {
   CellArcsByOwner result;
-  result.reserve(database.get_instance_map().size());
-  for (const auto& arc : database.get_arc_list()) {
+  for (const auto& [name, instance] : state.database.get_instance_map()) {
+    const auto* cell = findTimingCell(state, instance);
+    if (cell == nullptr || cell->get_cell_arc_list().empty())
+      result.try_emplace(name);
+  }
+  if (result.empty())
+    return result;
+  for (const auto& arc : state.database.get_arc_list()) {
     if (arc.get_type() != ista::ArcType::kCell)
       continue;
-    auto [owner, inserted] = result.try_emplace(arc.get_owner_name());
-    static_cast<void>(inserted);
+    const auto owner = result.find(arc.get_owner_name());
+    if (owner == result.end())
+      continue;
     auto [count, first] = owner->second.try_emplace({arc.get_source_pin(), arc.get_sink_pin()}, 0);
     static_cast<void>(first);
     ++count->second;
@@ -164,7 +171,7 @@ void exportArcs(GraphBuildState& state)
   } catch (const std::invalid_argument&) {
     malformed();
   }
-  const auto arcs_by_owner = indexCellArcsByOwner(state.database);
+  const auto arcs_by_owner = indexCellArcsByOwner(state);
   for (const auto& [name, instance] : state.database.get_instance_map())
     validateFallbackCartesianProduct(state, name, instance, arcs_by_owner);
   assignCanonicalArcs(state);

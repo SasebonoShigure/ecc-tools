@@ -26,10 +26,68 @@ Index row(Index node, unsigned analysis, unsigned source, unsigned transition, I
 {
   return (((node * 2 + analysis) * 2 + source) * 2 + transition) * 2 + tag;
 }
+void seedLoadPatchUndoContract()
+{
+  constexpr Index count = 513;
+  CsrCudaTelemetry telemetry;
+  Runtime memory(telemetry);
+  DeviceView view;
+  view.status = memory.allocate<Status>(1);
+  DevicePatch patch;
+  patch.seed_nodes = memory.allocate<NodeSeed>(count);
+  auto* changes_device = memory.allocate<SeedLoadPatch>(count);
+  auto* saved_device = memory.allocate<SeedLoadUndo>(count);
+  patch.seed_loads = changes_device;
+  patch.seed_load_count = count;
+  std::vector<NodeSeed> original(count), result(count);
+  std::vector<SeedLoadPatch> changes(count);
+  std::vector<SeedLoadUndo> saved(count);
+  for (Index i = 0; i < count; ++i) {
+    original[i].node = i;
+    original[i].state.sequential.kind = SeedKind::output;
+    changes[i].slot = saved[i].slot = i;
+    for (unsigned lane = 0; lane < 4; ++lane) {
+      const double load = 1.0 + i + lane * 0.25;
+      original[i].state.sequential.output_load[lane] = changes[i].expected[lane] = load;
+      changes[i].replacement[lane] = load + 2.0;
+      saved[i].value[lane] = -1.0;  // Capture must read actual device values.
+    }
+  }
+  for (unsigned threads : {37U, 256U}) {
+    Status status = Status::success;
+    memory.upload(original, patch.seed_nodes);
+    memory.upload(changes, changes_device);
+    memory.upload(saved, saved_device);
+    memory.upload(&status, view.status, 1);
+    launchCaptureUndo(view, nullptr, 0, nullptr, 0, patch.seed_nodes, saved_device, count, memory.stream(), threads);
+    launchTargetedPatch(view, patch, memory.stream(), threads);
+    memory.download(view.status, &status, 1);
+    memory.download(patch.seed_nodes, result);
+    memory.synchronize();
+    demand(status == Status::success, "CUDA Q seed load patch failed");
+    for (Index i = 0; i < count; ++i)
+      for (unsigned lane = 0; lane < 4; ++lane)
+        demand(result[i].state.sequential.output_load[lane] == changes[i].replacement[lane],
+               "CUDA Q seed patch omitted a unique target");
+    // The second patch has stale expectations after real writes by the first.
+    launchTargetedPatch(view, patch, memory.stream(), threads);
+    memory.download(view.status, &status, 1);
+    memory.synchronize();
+    demand(status == Status::invariant, "CUDA Q seed patch accepted stale loads");
+    launchRestoreUndo(view, nullptr, 0, nullptr, 0, patch.seed_nodes, saved_device, count, memory.stream(), threads);
+    memory.download(patch.seed_nodes, result);
+    memory.synchronize();
+    for (Index i = 0; i < count; ++i)
+      for (unsigned lane = 0; lane < 4; ++lane)
+        demand(result[i].state.sequential.output_load[lane] == original[i].state.sequential.output_load[lane],
+               "CUDA Q seed rollback did not restore actual captured values");
+  }
+}
 }  // namespace
 
 void runCudaSequentialContracts()
 {
+  seedLoadPatchUndoContract();
   CsrCudaTelemetry telemetry;
   Runtime memory(telemetry);
   DeviceView view;
@@ -84,11 +142,10 @@ void runCudaSequentialContracts()
     seeds[0].physical_clock[lane].slew = {lane % 2 == 0 ? 99.0 : (lane < 2 ? 4.0 : 2.0), true};
     seeds[2].physical_clock[lane].arrival = {999.0, true};
     seeds[2].physical_clock[lane].slew = {999.0, true};
-    arcs[0].load[lane] = 2.0;
+    seeds[1].sequential.output_load[lane] = 2.0;
   }
   arcs[0].source = 1;
   arcs[0].sink = 2;
-  arcs[0].has_load = true;
   children[0].sense = 3;  // Non-unate, falling trigger, both output transitions.
   children[0].trigger = 1;
   for (unsigned transition = 0; transition < 2; ++transition) {
@@ -189,7 +246,7 @@ void runCudaSequentialContracts()
              && result[3].required == 97.5,
          "ideal clock consumed physical delay or slew");
   seeds[0].propagated_clock = true;
-  for (auto& load : arcs[0].load)
+  for (auto& load : seeds[1].sequential.output_load)
     load = 4.0;
   rise = fall0 = fall1 = {};
   demand(run() == Status::success && result[1].arrival == 12.0 && result[3].required == 91.0,
@@ -201,9 +258,9 @@ void runCudaSequentialContracts()
   children[1].time_scale = std::numeric_limits<double>::max();
   demand(run() == Status::numeric, "CUDA timing-check numeric overflow was not rejected");
   children[1].time_scale = 10.0;
-  arcs[0].has_load = false;
-  demand(run() == Status::invariant, "CUDA sequential Q accepted missing current output load");
-  arcs[0].has_load = true;
+  seeds[1].sequential.output_load[0] = std::numeric_limits<double>::quiet_NaN();
+  demand(run() == Status::numeric, "CUDA sequential Q accepted a non-finite output load");
+  seeds[1].sequential.output_load[0] = 4.0;
   for (Index node = 0; node < 2; ++node) {
     seeds[node].sequential.path_tag = absent;
     seeds[node].sequential.clock_node = absent;

@@ -1,3 +1,4 @@
+#include "TimingAnalyzer.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 // ***************************************************************************************
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
@@ -357,6 +358,7 @@ Json encodePathGroups(ista::Database& database)
     for (auto& [endpoint_name, endpoint] : group.get_timing_path_end_map()) {
       Json paths = Json::array();
       for (ista::TimingPath& path : endpoint.get_timing_path_list()) {
+        ista::TimingAnalyzer::materializePathTrace(path);
         Json points = Json::array();
         for (ista::TimingPathPoint& point : path.get_point_list()) {
           points.push_back(encodePathPoint(point));

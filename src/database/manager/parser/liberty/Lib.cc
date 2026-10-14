@@ -879,8 +879,23 @@ LibPort::LibPort(const char* port_name) : _port_name(port_name)
 {
 }
 
+LibPort::~LibPort()
+{
+  liberty_free_expr(_func_expr);
+}
+
+void LibPort::set_func_expr(::LibertyExpr* lib_expr)
+{
+  liberty_free_expr(_func_expr);
+  _func_expr = lib_expr;
+}
+
 LibPort::LibPort(LibPort&& other) noexcept
-    : _port_name(std::move(other._port_name)), _ower_cell(other._ower_cell), _port_type(other._port_type)
+    : _port_name(std::move(other._port_name)),
+      _ower_cell(other._ower_cell),
+      _port_type(other._port_type),
+      _func_expr(std::exchange(other._func_expr, nullptr)),
+      _func_expr_str(std::move(other._func_expr_str))
 {
 }
 
@@ -890,6 +905,8 @@ LibPort& LibPort::operator=(LibPort&& rhs) noexcept
     _port_name = std::move(rhs._port_name);
     _ower_cell = rhs._ower_cell;
     _port_type = rhs._port_type;
+    set_func_expr(std::exchange(rhs._func_expr, nullptr));
+    _func_expr_str = std::move(rhs._func_expr_str);
   }
 
   return *this;

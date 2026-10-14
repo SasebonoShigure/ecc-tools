@@ -35,7 +35,7 @@ struct CudaTargetedTraceBatch
 };
 struct CudaTargetedTraceResult
 {
-  double backend_setup_ms{};
+  double backend_setup_ms{}, edit_sta_loop_ms{};
   CudaDualCsrTelemetry initialization;
   std::vector<CudaTargetedTraceBatch> batches;
 };

@@ -460,8 +460,10 @@ def validate_real_electrical_change(functionals: list[dict[str, Any]]) -> None:
     require(len(functionals) >= 2, "real trace has no edited prefix")
     before = functionals[0]
     after = functionals[1]
-    before_load = numeric_values([arc["output_load"] for arc in before["final_csr_input"]["arcs"]])
-    after_load = numeric_values([arc["output_load"] for arc in after["final_csr_input"]["arcs"]])
+    before_load = numeric_values([item["output_load"] for group in ("arcs", "start_seeds")
+                                 for item in before["final_csr_input"][group]])
+    after_load = numeric_values([item["output_load"] for group in ("arcs", "start_seeds")
+                                for item in after["final_csr_input"][group]])
     before_delay = numeric_values(before["final_csr_timing"]["arcs"]["timing_arc_delays"])
     after_delay = numeric_values(after["final_csr_timing"]["arcs"]["timing_arc_delays"])
     before_slew = numeric_values(before["final_csr_timing"]["data_slews"])

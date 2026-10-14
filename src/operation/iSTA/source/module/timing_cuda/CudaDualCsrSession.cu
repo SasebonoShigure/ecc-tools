@@ -172,8 +172,8 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
     cleanup.kernel_launches += bindAuxRows();
     if (storage->undo_captured) {
       launchRestoreUndo(view, storage->slot_undo.data, storage->slot_undo_count,
-                        storage->arc_undo.data, storage->arc_undo_count, memory.stream(), storage->kernel_threads);
-      cleanup.kernel_launches += storage->slot_undo_count != 0 || storage->arc_undo_count != 0;
+                        storage->arc_undo.data, storage->arc_undo_count, seed_nodes, storage->seed_undo.data, storage->seed_undo_count, memory.stream(), storage->kernel_threads);
+      cleanup.kernel_launches += storage->slot_undo_count != 0 || storage->arc_undo_count != 0 || storage->seed_undo_count != 0;
     }
     memory.synchronize();
   } catch (...) {

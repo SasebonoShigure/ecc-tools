@@ -162,22 +162,30 @@ void exportNodesAndInstances(GraphBuildState& state)
     state.snapshot.instances.push_back(makeInstanceRecord(state, name, instance));
 }
 
+void exportGraph(GraphBuildState& state)
+{
+  if constexpr (incregpusta_debug_checks_enabled)
+    noteNativeFullGraphExport();
+  exportNodesAndInstances(state);
+  exportArcs(state);
+  exportAdjacencyAndOrder(state);
+  // Exporters validate native inputs; this rechecks the constructed snapshot.
+  if constexpr (incregpusta_debug_checks_enabled) {
+    const auto violations = validateCsrGraphSnapshot(state.snapshot);
+    if (!violations.empty())
+      throw GraphExportAbort(violations.front().code);
+  }
+}
+
 }  // namespace ista::csr::detail
 
 namespace ista::csr {
 
 CsrGraphExportResult exportCsrGraphSnapshot(const ista::Database& database)
 {
-  if constexpr (incregpusta_debug_checks_enabled)
-    detail::noteNativeFullGraphExport();
   try {
     detail::GraphBuildState state(database);
-    detail::exportNodesAndInstances(state);
-    detail::exportArcs(state);
-    detail::exportAdjacencyAndOrder(state);
-    const auto violations = validateCsrGraphSnapshot(state.snapshot);
-    if (!violations.empty())
-      throw detail::GraphExportAbort(violations.front().code);
+    detail::exportGraph(state);
     return std::move(state.snapshot);
   } catch (const detail::GraphExportAbort& error) {
     return CsrGraphExportFailure{error.code()};

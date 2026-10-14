@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "CsrReferenceValidator.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 #include "CsrReferenceNativeModelValidatorInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
@@ -363,6 +364,7 @@ void validateAppend(const std::optional<RecordAppend<T>>& change, const std::vec
   if (change->values.size() > current.max_size() - current.size())
     reject(violations, DualCsrViolationCode::kCapacity, field, "append exceeds container capacity");
 }
+template <bool CheckExistingInstanceNames>
 void validateReferenceAppends(const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor,
                              DualCsrViolations& violations)
 {
@@ -392,8 +394,13 @@ void validateReferenceAppends(const DualCsrState& committed, const DualCsrBatchD
   if (delta.instances) {
     std::set<std::string_view> names;
     for (const auto& instance : delta.instances->values) {
+      bool existing_name = false;
+      // Controlled edits already reject baseline and committed materialization collisions.
+      if constexpr (CheckExistingInstanceNames)
+        existing_name = std::ranges::find(current.instances, instance.instance_name, &csr::InstanceRecord::instance_name)
+                        != current.instances.end();
       if (instance.instance_name.empty() || instance.cell_name.empty() || !names.insert(instance.instance_name).second
-          || std::ranges::find(current.instances, instance.instance_name, &csr::InstanceRecord::instance_name) != current.instances.end())
+          || existing_name)
         rejectField("instances", "appended instance names must be nonempty and new");
       const auto old_cell = std::ranges::find(current.referenced_library_cells, instance.cell_name, &csr::ReferencedLibraryCellModel::cell_name);
       const csr::ReferencedLibraryCellModel* cell = old_cell == current.referenced_library_cells.end() ? nullptr : &*old_cell;
@@ -555,6 +562,11 @@ void validateStartSeedDelta(const std::optional<StartSeedDelta>& update,
         || (seed.crpr_transition && *seed.crpr_transition != csr::Transition::kRise
             && *seed.crpr_transition != csr::Transition::kFall))
       fail(DualCsrViolationCode::kShape, "invalid seed CRPR identity");
+    if (seed.output_load)
+      for (const auto& row : *seed.output_load)
+        for (double value : row)
+          if (!std::isfinite(value) || value < 0.0)
+            fail(DualCsrViolationCode::kExpectedValue, "invalid seed output load");
     for (const auto& row : seed.arrival)
       for (const auto value : row)
         if (value && !std::isfinite(*value))
@@ -580,9 +592,8 @@ void validateStartSeedDelta(const std::optional<StartSeedDelta>& update,
     check_seed(seed);
 }
 
-}  // namespace
-
-void validateReferenceDelta(const DualCsrState& committed,
+template <bool CheckExistingInstanceNames>
+void validateReferenceDeltaImpl(const DualCsrState& committed,
                             const DualCsrBatchDescriptor& descriptor,
                             DualCsrViolations& violations)
 {
@@ -647,7 +658,21 @@ void validateReferenceDelta(const DualCsrState& committed,
              "reference_payload.source_identity.replacement",
              "replacement identity must bind target session/generation");
   }
-  validateReferenceAppends(committed, descriptor, violations);
+  validateReferenceAppends<CheckExistingInstanceNames>(committed, descriptor, violations);
+}
+
+}  // namespace
+
+void validateReferenceDelta(const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor,
+                            DualCsrViolations& violations)
+{
+  validateReferenceDeltaImpl<true>(committed, descriptor, violations);
+}
+
+void validateConstructedReferenceDelta(const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor,
+                                       DualCsrViolations& violations)
+{
+  validateReferenceDeltaImpl<incregpusta_debug_checks_enabled>(committed, descriptor, violations);
 }
 
 void validateReferencePayload(const DualCsrState& state,

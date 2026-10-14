@@ -13,6 +13,7 @@
 // MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
+#include "TimingAnalyzer.hpp"
 #include "TimingCharacterizer.hpp"
 
 #include "DataManager.hpp"
@@ -427,6 +428,7 @@ TransType TimingCharacterizer::getRegisterClockTransType(TimingPath& timing_path
 
 std::string TimingCharacterizer::getDelayArcTimingSense(TimingPath& timing_path)
 {
+  TimingAnalyzer::materializePathTrace(timing_path);
   if (timing_path.get_point_list().empty()) {
     return "positive_unate";
   }

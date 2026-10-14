@@ -316,7 +316,8 @@ def _timing_check(value: object, label: str, require: Require) -> None:
 
 def _seed(value: object, label: str, require: Require) -> None:
     keys = {"seed_node", "path_start_node", "availability", "path_source",
-            "clock_tag", "arrival", "slew", "crpr_node", "crpr_transition"}
+            "clock_tag", "arrival", "slew", "crpr_node", "crpr_transition",
+            "output_load"}
     item = _object(value, keys, label, require)
     _count(item["seed_node"], f"{label}.seed_node", require)
     _count(item["path_start_node"], f"{label}.path_start_node", require)
@@ -327,6 +328,12 @@ def _seed(value: object, label: str, require: Require) -> None:
     _lane_matrix(item["arrival"], f"{label}.arrival", require)
     _lane_matrix(item["slew"], f"{label}.slew", require)
     _optional_id(item["crpr_node"], f"{label}.crpr_node", require)
+    if item["output_load"] is not None:
+        _lane_matrix(item["output_load"], f"{label}.output_load", require)
+        for row in item["output_load"]:
+            for load in row:
+                require(load is not None and load["kind"] == "finite" and load["value"] >= 0,
+                        f"{label}.output_load must be finite and nonnegative")
     if item["crpr_transition"] is not None:
         _enum(item["crpr_transition"], TRANSITIONS,
               f"{label}.crpr_transition", require)
@@ -428,7 +435,7 @@ def _analysis_context(value: object, label: str, require: Require) -> None:
 def validate_reference_value(field: str, value: object, label: str,
                              require: Require) -> None:
     if field == "schema_version":
-        require(value == "1.0.0", f"{label} exact schema differs")
+        require(value == "2.0.0", f"{label} exact schema differs")
     elif field == "source_identity":
         item = _object(value, {"fingerprint_schema_version", "session_token",
             "graph_generation", "topology_fingerprint",

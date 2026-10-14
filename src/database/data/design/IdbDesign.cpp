@@ -132,11 +132,13 @@ IdbDesign::IdbDesign(IdbLayout* layout)
 
 IdbDesign::~IdbDesign()
 {
+  delete _units;
   if (_instance_list != nullptr) {
     delete _instance_list;
     _instance_list = nullptr;
   }
   if (_io_pin_list != nullptr) {
+    _io_pin_list->reset();
     delete _io_pin_list;
     _io_pin_list = nullptr;
   }

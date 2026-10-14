@@ -143,6 +143,7 @@ struct SequentialSeed
   Index child_begin{0}, child_count{0};
   Index rc_binding{absent};
   double delay{0.0}, delay_min{0.0}, delay_max{0.0};
+  double output_load[4]{};
   std::uint8_t trigger{0};
 };
 

@@ -83,23 +83,27 @@ void publishClockState(ista::TimingPoint& target, PreparedClockState& prepared, 
 
 }  // namespace
 
+void publishPreparedTimingPoint(PreparedTimingPointState& node) noexcept
+{
+  node.target->set_arrival(node.arrival);
+  node.target->set_required(node.required);
+  node.target->set_slack(node.slack);
+  node.target->set_launch_time(node.launch);
+  node.target->set_level(node.level);
+  node.target->set_is_clock_point(node.is_clock_point);
+  node.target->get_predecessor().swap(node.predecessor);
+  node.target->get_clock_name().swap(node.clock_name);
+  node.target->set_predecessor_arc_idx(node.predecessor_arc_index);
+  publishClockState(*node.target, node.effective_clock, false);
+  publishClockState(*node.target, node.physical_clock, true);
+  node.target->get_data_slew_map().swap(node.data_slews);
+  node.target->get_path_state_map().swap(node.path_states);
+}
+
 void publishPreparedTimingResult(PreparedTimingResult& prepared) noexcept
 {
-  for (auto& node : prepared.nodes) {
-    node.target->set_arrival(node.arrival);
-    node.target->set_required(node.required);
-    node.target->set_slack(node.slack);
-    node.target->set_launch_time(node.launch);
-    node.target->set_level(node.level);
-    node.target->set_is_clock_point(node.is_clock_point);
-    node.target->get_predecessor().swap(node.predecessor);
-    node.target->get_clock_name().swap(node.clock_name);
-    node.target->set_predecessor_arc_idx(node.predecessor_arc_index);
-    publishClockState(*node.target, node.effective_clock, false);
-    publishClockState(*node.target, node.physical_clock, true);
-    node.target->get_data_slew_map().swap(node.data_slews);
-    node.target->get_path_state_map().swap(node.path_states);
-  }
+  for (auto& node : prepared.nodes)
+    publishPreparedTimingPoint(node);
 
   for (auto& arc : prepared.arcs) {
     arc.target->set_delay(arc.delay);

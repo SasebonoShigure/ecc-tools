@@ -53,7 +53,7 @@ def _digest(value: str) -> str:
 
 def _identity(case: str, token: int) -> dict[str, Any]:
     result: dict[str, Any] = {
-        "fingerprint_schema_version": "1.0.0",
+        "fingerprint_schema_version": "2.0.0",
         "session_token": token,
         "graph_generation": 0,
     }

@@ -150,3 +150,22 @@ set_tests_properties(
     ista_csr_timing_scatter_rerun
     PROPERTIES LABELS "ista_smoke" TIMEOUT 300
 )
+
+add_executable(ista_csr_report_contract_test CsrReportContractTest.cpp
+    ${ISTA_STEP6_COMMON_SOURCES} CsrTimingResultFromNativeOracle.cpp
+    timing_dual_csr/DualCsrTargetedArtifactSupport.cpp
+    timing_edit/oracle/ProductionFreshSessionLoader.cpp
+    timing_edit/StaTimingEditSessionProbeAccess.cpp)
+target_include_directories(ista_csr_report_contract_test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
+    ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
+target_link_libraries(ista_csr_report_contract_test PRIVATE
+    ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS} ista_timing_analyzer ista_timing_reporter)
+target_compile_options(ista_csr_report_contract_test PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
+foreach(trace IN ITEMS synthetic_two_batch real_buffer_fanout)
+  add_test(NAME ista_csr_report_${trace} COMMAND ista_csr_report_contract_test
+      ${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/${trace}.json)
+  set_tests_properties(ista_csr_report_${trace} PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/timing_edit"
+      LABELS "ista_cpu;ista_integration" TIMEOUT 300 RUN_SERIAL TRUE)
+endforeach()

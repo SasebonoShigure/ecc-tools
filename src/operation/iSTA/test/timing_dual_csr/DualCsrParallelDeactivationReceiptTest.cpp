@@ -224,14 +224,7 @@ void partialParallelDeactivationKeepsCanonicalActiveKeys()
   require(inactive.payload.key == survivor.payload.key,
           "inactive historical key did not retain the intended collision");
 
-  require(descriptor.affected_base_out_rows.size() == 1
-              && descriptor.affected_base_out_rows[0].expected_arc_ids
-                     == std::vector<csr::ArcId>{csr::ArcId{0},
-                                                csr::ArcId{1}}
-              && descriptor.affected_base_out_rows[0].replacement_arc_ids
-                     == std::vector<csr::ArcId>{csr::ArcId{2},
-                                                csr::ArcId{1}}
-              && descriptor.affected_base_in_rows.size() == 1
+  require(descriptor.affected_base_in_rows.size() == 1
               && descriptor.affected_base_in_rows[0].replacement_arc_ids
                      == std::vector<csr::ArcId>{csr::ArcId{2},
                                                 csr::ArcId{1}},

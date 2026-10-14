@@ -76,21 +76,8 @@ __device__ inline void sequentialNode(DeviceView view, Index id)
   }
   double loads[4]{};
   if (seed.kind == SeedKind::output && seed.rc_binding == absent) {
-    Index index;
-    for (auto edges = outgoing(view, id, 1); edges.next(index);) {
-      const Arc& arc = view.arcs[index];
-      if (!arc.net)
-        continue;
-      if (!arc.has_load) {
-        *view.status = Status::invariant;
-        return;
-      }
-      for (unsigned lane = 0; lane < 4; ++lane)
-        loads[lane] = arc.load[lane];
-      break;
-    }
-    if (*view.status != Status::success)
-      return;
+    for (unsigned lane = 0; lane < 4; ++lane)
+      loads[lane] = seed.output_load[lane];
   }
   for (unsigned analysis = 0; analysis < 2; ++analysis) {
     double launch = 0.0, slew = 0.0;

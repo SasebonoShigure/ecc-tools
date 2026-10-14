@@ -114,10 +114,16 @@ void exportLoads(ReferenceBuildState& state)
   const auto& rc_nets = state.database.get_parasitic_library().get_net_map();
   for (auto& arc : state.input.arcs) {
     const NodeRecord& sink = requireNode(state, arc.sink);
-    if (rc_nets.contains(sink.net_name))
+    if (arc.kind == ArcKind::kNet || rc_nets.contains(sink.net_name))
       arc.output_load.reset();
     else
       arc.output_load = projectCanonicalNoParasiticOutputLoad(sink.net_name, net_loads);
+  }
+  for (auto& seed : state.input.start_seeds) {
+    const auto& node = requireNode(state, seed.seed_node);
+    if (seed.availability == StartSeedAvailability::kDeferredSequential && node.is_output_pin
+        && !rc_nets.contains(node.net_name))
+      seed.output_load = projectCanonicalNoParasiticOutputLoad(node.net_name, net_loads);
   }
 }
 

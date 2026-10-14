@@ -14,9 +14,9 @@ void require(bool ok, const char* message) { if (!ok) throw std::runtime_error(m
 struct Fixture {
   idb::IdbViaMaster via_master;
   std::vector<std::unique_ptr<idb::IdbVia>> port_vias;
-  // Legacy master/obstruction lists are non-owning; keep fixture ownership explicit.
+  // Obstruction layers remain borrowed by the legacy obstruction list.
   std::unique_ptr<idb::IdbObsLayer> obstruction_owner;
-  std::unique_ptr<idb::IdbCellMaster> master_owner;
+  idb::IdbCellMaster* cell_master{};
   idb::IdbLayout layout;
   idb::IdbDesign design{&layout};
   std::array<izh::PhysicalBufferInsertion, 2> edits;
@@ -25,7 +25,7 @@ struct Fixture {
     via_master.set_name("physical_buffer_port_via_with_a_non_SSO_name");
     auto* layer = layout.get_layers()->set_layer("M1", "ROUTING");
     auto* master = layout.get_cell_master_list()->set_cell_master("BUF");
-    master_owner.reset(master);
+    cell_master = master;
     master->set_width(100); master->set_height(200); master->set_type(idb::CellMasterType::kCore);
     for (const auto output : {false, true}) {
       auto* term = master->add_term(output ? "Y" : "A");
@@ -62,13 +62,6 @@ struct Fixture {
         if (i < 35) edit.sinks.push_back(instance->get_pin("A"));
       }
     }
-  }
-  ~Fixture()
-  {
-    // This standalone fixture owns the IO pins and units; IdbDesign's legacy
-    // destructor treats these containers as non-owning.
-    design.get_io_pin_list()->reset();
-    delete design.get_units(); design.set_units(nullptr);
   }
   std::string state()
   {
@@ -108,7 +101,7 @@ void placementRows()
   Fixture f;
   auto* site = f.layout.get_sites()->add_site_list("site");
   site->set_width(100); site->set_height(200);
-  f.master_owner->set_site(site);
+  f.cell_master->set_site(site);
   auto* other_site = f.layout.get_sites()->add_site_list("same_size_different_site");
   other_site->set_width(100); other_site->set_height(200);
   for (int y : {0, 200, 400})
@@ -136,12 +129,12 @@ void placementRows()
       case 3: edits[1].x = edits[0].x; break;
       case 4: edits[0].x = 3000; edits[0].y = 0; edits[0].orientation = idb::IdbOrient::kN_R0; break;
       case 5: edits[0].x = 12000; break;
-      case 6: f.master_owner->set_site(other_site); break;
+      case 6: f.cell_master->set_site(other_site); break;
     }
     bool rejected = false;
     try { izh::PreparedPhysicalBatch batch(f.design, edits); static_cast<void>(rows.prepare(batch)); }
     catch (const std::invalid_argument&) { rejected = true; }
-    f.master_owner->set_site(site);
+    f.cell_master->set_site(site);
     require(rejected && rows.geometry() == baseline, "illegal placement changed row occupancy");
   }
   {

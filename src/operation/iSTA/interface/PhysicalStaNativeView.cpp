@@ -66,11 +66,20 @@ void restoreRawRc(Database& database, const csr::ParasiticModel& models)
 void PhysicalStaSessionState::materializeCsr(Database& database, const timing_edit::NativeExecutionAuthority& authority,
     const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues& values)
 {
+  prepareCsrView(database, authority, graph, &values);
+  _timing_generation = graph.generation;
+}
+
+void PhysicalStaSessionState::prepareCsrView(Database& database, const timing_edit::NativeExecutionAuthority& authority,
+    const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues* values)
+{
   require(authority.readyForQuery() && authority.sessionToken() == graph.session_token
               && &database == &STADM.getDatabase(), "native view requires the committed CSR owner");
   if (_native_generation == graph.generation) {
-    auto prepared = csr::detail::prepareDualCsrTimingResult(database, graph, values);
-    csr::detail::publishPreparedTimingResult(prepared);
+    if (values) {
+      auto prepared = csr::detail::prepareDualCsrTimingResult(database, graph, *values);
+      csr::detail::publishPreparedTimingResult(prepared);
+    }
   } else {
     auto derived = timing_edit::NativeEditTransaction::prepareFull(authority);
     RawViewUndo raw(database);
@@ -83,12 +92,13 @@ void PhysicalStaSessionState::materializeCsr(Database& database, const timing_ed
     STADM.buildInstanceTimingInfo();
     restoreRawRc(database, graph.reference_payload.parasitics);
     timing_edit::NativeCandidateExecutor::prepareFullGraph(derived);
-    auto prepared = csr::detail::prepareDualCsrTimingResult(database, graph, values);
-    csr::detail::publishPreparedTimingResult(prepared);
+    if (values) {
+      auto prepared = csr::detail::prepareDualCsrTimingResult(database, graph, *values);
+      csr::detail::publishPreparedTimingResult(prepared);
+    }
     derived.commit();
     raw.committed = true;
   }
   _native_generation = graph.generation;
-  _timing_generation = graph.generation;
 }
 }  // namespace ista

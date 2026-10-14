@@ -29,7 +29,6 @@ class TimingPath
 {
  public:
   TimingPath() = default;
-  ~TimingPath() = default;
   // getter
   std::string& get_start_point() { return _start_point; }
   std::string& get_end_point() { return _end_point; }
@@ -84,6 +83,8 @@ class TimingPath
   // function
 
  private:
+  friend class TimingAnalyzer;
+  bool _trace_pending = false;
   std::string _start_point;
   std::string _end_point;
   double _path_delay = 0.0;

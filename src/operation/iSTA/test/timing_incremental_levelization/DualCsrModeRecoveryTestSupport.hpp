@@ -43,6 +43,13 @@ class CumulativeBatchSource final
     _installed.emplace(timing_edit::NativeEditTransaction::prepareFull(
         _authority, pending.preparedBatch(), pending.stagedResolver()));
     _pending_generation = pending.preparedBatch().targetGeneration();
+    if constexpr (!incregpusta_debug_checks_enabled) {
+      // Preserve the recovery consumer's native view; CSR computes its timing.
+      timing_edit::NativeCandidateExecutor::prepareFullGraph(*_installed);
+      csr::detail::NativeLibraryModels models(_installed->database());
+      ++_mint_count;
+      return TimingEditDualCsrDescriptorBuilder::buildDirect(std::move(pending), _authority, models);
+    }
     timing_edit::NativeCandidateExecutor::executeFull(*_installed);
 
     csr::detail::NativeLibraryModels models(_installed->database());

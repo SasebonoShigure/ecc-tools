@@ -17,7 +17,7 @@
 
 namespace ista::timing_dual_csr {
 
-inline constexpr auto kDualCsrDescriptorSchema = "ista-dual-csr-update/3.0.0";
+inline constexpr auto kDualCsrDescriptorSchema = "ista-dual-csr-update/4.0.0";
 
 enum class DualCsrViolationCode : std::uint8_t
 {
@@ -58,7 +58,7 @@ struct ValueReplacement
 
 struct DualCsrReferencePayload
 {
-  std::string schema_version{csr::kCsrSchemaVersion};
+  std::string schema_version{csr::kCsrReferenceInputSchemaVersion};
   csr::CsrSnapshotIdentity source_identity;
   csr::StaAnalysisContext analysis_context;
   std::array<csr::AnalysisMode, csr::kAnalysisCount> analysis_order{

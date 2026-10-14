@@ -502,6 +502,22 @@ void validateLoads(const CsrReferenceInput& input, const std::vector<const PortC
     if (*arc.output_load != expected)
       reject(errors, "arcs.output_load", "no-parasitic load differs from exact native-order sink-net sum");
   }
+  for (const auto& seed : input.start_seeds) {
+    if (seed.seed_node.value() >= input.nodes.size()) continue;
+    const auto& node = input.nodes[seed.seed_node.value()];
+    const bool needs_load = seed.availability == StartSeedAvailability::kDeferredSequential
+        && node.is_output_pin && !rc_nets.contains(node.net_name);
+    if (seed.output_load.has_value() != needs_load) {
+      reject(errors, "start_seeds.output_load", "load belongs to a non-parasitic deferred Q seed");
+      continue;
+    }
+    if (seed.output_load) {
+      const auto found = net_loads.find(node.net_name);
+      const ArcOutputLoadMatrix expected = found == net_loads.end() ? ArcOutputLoadMatrix{} : found->second;
+      if (*seed.output_load != expected)
+        reject(errors, "start_seeds.output_load", "Q load differs from exact native-order net sum");
+    }
+  }
 }
 
 void validateClockTags(const CsrReferenceInput& input, Violations& errors)

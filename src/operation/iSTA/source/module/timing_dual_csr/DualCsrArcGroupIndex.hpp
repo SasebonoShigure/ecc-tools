@@ -15,7 +15,11 @@
 
 #include "DualCsrDescriptors.hpp"
 
+namespace ista { class CudaCsrEditState; }
+
 namespace ista::timing_dual_csr {
+
+struct DualCsrArcGroupIndexAttempt;
 
 struct DualCsrArcGroupIndexBinding
 {
@@ -98,6 +102,11 @@ struct DualCsrArcGroupIndex
 
   friend bool operator==(const DualCsrArcGroupIndex&,
                          const DualCsrArcGroupIndex&) = default;
+
+ private:
+  friend class ista::CudaCsrEditState;
+  [[nodiscard]] static DualCsrArcGroupIndexAttempt fromNativeExport(
+      const DualCsrState& graph);
 };
 
 void swap(DualCsrArcGroupIndex& lhs,

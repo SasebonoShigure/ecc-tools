@@ -39,7 +39,7 @@ void requireStructuredExactBefore(
       || &graph.reference_payload != &view.referencePayload()
       || resolver.highWater() != graph.high_water
       || (identity && identity->generation != graph.generation)
-      || ((incregpusta_debug_checks_enabled || graph.generation.value() == 0) && !identity)
+      || (incregpusta_debug_checks_enabled && !identity)
       || arc_group_index.session_token != graph.session_token
       || arc_group_index.generation != graph.generation
       || arc_group_index.arc_high_water != graph.high_water.arc_slots

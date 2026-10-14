@@ -104,8 +104,11 @@ void verifyPreDatabaseRejection()
 void verifyMalformedFailures()
 {
   auto adjacency = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kMalformedAdjacency);
-  requireFailure(exportCsrReferenceInputCandidate(adjacency.database(), referenceInputTestContext(), 1), CsrCaptureCode::kMalformedTopology,
-                 "malformed adjacency");
+  const auto adjacency_result = exportCsrReferenceInputCandidate(adjacency.database(), referenceInputTestContext(), 1);
+  const auto* adjacency_failure = std::get_if<CsrReferenceInputExportFailure>(&adjacency_result);
+  const CsrReferenceInputExportFailure expected_adjacency_failure{CsrCaptureCode::kMalformedTopology, CsrReferenceInputExportPhase::kTopology, {}};
+  require(adjacency_failure && *adjacency_failure == expected_adjacency_failure,
+          "malformed adjacency changed its topology failure or claimed completed fingerprints");
 
   auto library_identity = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
   library_identity.database().get_timing_library().get_cell_map().at("DFF_X1").set_library_name("");
@@ -146,6 +149,24 @@ void verifyTableFailures()
       .set_value_list({std::numeric_limits<double>::infinity()});
   requireFailure(exportCsrReferenceInputCandidate(nonfinite_table.database(), referenceInputTestContext(), 1), CsrCaptureCode::kIllegalNumeric,
                  "nonfinite table value");
+}
+
+void verifyFailureFingerprintPrefix()
+{
+  auto fixture = makeReferenceNativeFixture(ReferenceNativeFixtureCase::kChain);
+  const auto control = requireInput(exportCsrReferenceInputCandidate(fixture.database(), referenceInputTestContext(), 1), "failure prefix control");
+  auto& table = fixture.database().get_timing_library().get_cell_map().at("DFF_X1")
+                    .get_cell_arc_list().at(0).get_timing_arc_list().at(0).get_delay_table_map().at(ista::TransType::kRise);
+  table.set_value_list({0.1, 0.2});
+  auto exported = exportCsrReferenceInputCandidate(fixture.database(), referenceInputTestContext(), 1);
+  const auto* failure = std::get_if<CsrReferenceInputExportFailure>(&exported);
+  require(failure && failure->code == CsrCaptureCode::kInvalidTableShape
+              && failure->failed_phase == CsrReferenceInputExportPhase::kLibrary,
+          "failure prefix did not preserve the typed error and phase");
+  CsrCurrentFingerprints expected;
+  expected.topology_fingerprint = control.source_identity.topology_fingerprint;
+  expected.clock_constraint_fingerprint = control.source_identity.clock_constraint_fingerprint;
+  require(failure->current_fingerprints == expected, "failure prefix changed completed component identities or claimed unfinished components");
 }
 
 void verifyNumericFailures()
@@ -213,6 +234,7 @@ int main()
     verifyPreDatabaseRejection();
     verifyMalformedFailures();
     verifyTableFailures();
+    verifyFailureFingerprintPrefix();
     verifyNumericFailures();
     verifyParasiticSentinelFailure();
     verifyNativeClockOverlap();

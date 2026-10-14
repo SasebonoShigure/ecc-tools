@@ -50,6 +50,8 @@ std::map<csr::NodeId, csr::CsrParasiticBinding> prepareTargetedParasitics(
 void bindTargetedBaselineParasitics(NativeTargetedEditState& state, const csr::CsrReferenceInput& input);
 csr::NodeRecord targetedNode(const Database& database, const NativeTargetedEditState& state, const std::string& name,
                              const std::set<std::string>& starts, const std::set<std::string>& ends);
+csr::ArcOutputLoadMatrix targetedNetLoad(const Database& database, const NativeTargetedEditState& state, const std::string& name,
+                                        const std::set<std::string>& starts, const std::set<std::string>& ends);
 csr::ArcSemanticPayload targetedArc(const Database& database, const NativeTargetedEditState& state, std::size_t rank,
                                     std::map<std::string, csr::ArcOutputLoadMatrix>& loads,
                                      const std::set<std::string>& starts, const std::set<std::string>& ends);

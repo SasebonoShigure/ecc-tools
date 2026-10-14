@@ -161,7 +161,8 @@ DualCsrProjectedStartSeed projectStartSeed(
       .arrival = source.arrival,
       .slew = source.slew,
       .crpr_node = projectedNode(state, source.crpr_node),
-      .crpr_transition = source.crpr_transition};
+      .crpr_transition = source.crpr_transition,
+      .output_load = source.output_load};
 }
 
 DualCsrProjectedEndpointRequired projectEndpointRequired(

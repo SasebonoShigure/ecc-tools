@@ -547,7 +547,7 @@ class LibPort : public LibObject
   };
 
   explicit LibPort(const char* port_name);
-  ~LibPort() override = default;
+  ~LibPort() override;
 
   LibPort(LibPort&& other) noexcept;
   LibPort& operator=(LibPort&& rhs) noexcept;
@@ -583,7 +583,7 @@ class LibPort : public LibObject
   void set_port_slew_limit(AnalysisMode mode, double slew_limit);
   std::optional<double> get_port_slew_limit(AnalysisMode mode);
 
-  void set_func_expr(::LibertyExpr* lib_expr) { _func_expr = lib_expr; }
+  void set_func_expr(::LibertyExpr* lib_expr);
   ::LibertyExpr* get_func_expr() { return _func_expr; }
 
   void set_func_expr_str(const char* func_expr_str) { _func_expr_str = func_expr_str; }

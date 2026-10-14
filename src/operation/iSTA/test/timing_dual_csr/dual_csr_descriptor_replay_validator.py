@@ -562,7 +562,7 @@ def run_descriptor_replay_self_test(require: Require) -> None:
                              "replacement": payload(number1, semantic=False)}],
         "removes": [], "changes": [], "reverse_changes": [],
         "aux_rows": [], "appended_base_out_rows": [],
-        "affected_base_out_rows": [], "affected_base_in_rows": []}
+        "affected_base_in_rows": []}
     functional = {"graph": {"nodes": functional_nodes,
                               "active_arcs": [payload(number1, semantic=True)]}}
     structural = {"high_water": {"node_slots": 2, "net_slots": 1, "arc_slots": 1},

@@ -24,6 +24,8 @@ CsrReferenceInput sequentialFixture()
     node.instance_cell = index == 2 ? "" : "DFF";
     node.is_port = index == 2;
     node.is_sequential = index != 2;
+    node.is_clock_pin = index == 0;
+    node.is_output_pin = index == 1;
   }
   input.clock_tags = {"clk"};
   input.clock_owner_by_node.resize(4);
@@ -43,6 +45,8 @@ CsrReferenceInput sequentialFixture()
       seed.crpr_node = NodeId{0};
       seed.crpr_transition = Transition::kFall;
     }
+    if (node == NodeId{1})
+      seed.output_load = ArcOutputLoadMatrix{{{{2.0, 2.0}}, {{2.0, 2.0}}}};
     input.start_seeds.push_back(seed);
   }
   ReferencedLibraryCellModel cell;
@@ -69,7 +73,6 @@ CsrReferenceInput sequentialFixture()
   net.sink = NodeId{2};
   net.kind = ArcKind::kNet;
   net.eligibility = {true, true, true, false};
-  net.output_load = ArcOutputLoadMatrix{{{{2.0, 2.0}}, {{2.0, 2.0}}}};
   input.arcs.push_back(net);
   input.out_row_offsets = {0, 0, 1, 1, 1};
   input.out_arc_ids = {ArcId{0}};
@@ -138,7 +141,7 @@ void runCpuReferenceSequentialContracts()
                           && work.result.paths.crpr_nodes.presence[flat] == 1 && work.result.paths.crpr_nodes.values[flat] == NodeId{0}
                           && work.result.paths.crpr_transitions.values[flat] == Transition::kFall,
                       "published register path lost timing or CRPR identity");
-  input.arcs.front().output_load = ArcOutputLoadMatrix{{{{4.0, 4.0}}, {{4.0, 4.0}}}};
+  input.start_seeds[1].output_load = ArcOutputLoadMatrix{{{{4.0, 4.0}}, {{4.0, 4.0}}}};
   const auto loaded = initialize(input, true);
   requireCpuReference(loaded.result.nodes.arrivals.values == std::vector<double>{7.0, 12.0, -std::numeric_limits<double>::infinity(), 0.0},
                       "Q delay did not use changed output load");

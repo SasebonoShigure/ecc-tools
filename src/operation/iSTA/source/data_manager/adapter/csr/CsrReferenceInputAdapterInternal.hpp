@@ -46,9 +46,9 @@ class ReferenceExportAbort final : public std::exception
 struct ReferenceExportProgress
 {
   CsrReferenceInputExportPhase failed_phase{CsrReferenceInputExportPhase::kAnalysisContextPreflight};
-  CsrCurrentFingerprints current_fingerprints;
 
   [[nodiscard]] CsrReferenceInputExportFailure failure(CsrCaptureCode code) const;
+  [[nodiscard]] CsrReferenceInputExportFailure failure(CsrCaptureCode code, const CsrReferenceInput& input) const;
 };
 
 struct NativeFullExportCounters
@@ -73,9 +73,11 @@ void requireFiniteReference(double value);
 void requireNonnegativeReference(double value);
 [[nodiscard]] bool referenceByteStringLess(const std::string& lhs, const std::string& rhs);
 
+struct GraphBuildState;
+
 struct ReferenceBuildState
 {
-  ReferenceBuildState(const ista::Database& native_database, CsrGraphSnapshot graph, StaAnalysisContext context, NativeLibraryModels& models);
+  ReferenceBuildState(GraphBuildState graph, StaAnalysisContext context, NativeLibraryModels& models);
 
   const ista::Database& database;
   NativeLibraryModels& models;
@@ -98,7 +100,6 @@ struct ReferenceBuildState
 [[nodiscard]] const ista::Instance& requireNativeInstance(const ReferenceBuildState& state, const std::string& instance_name);
 [[nodiscard]] const ista::TimingCell* findNativeTimingCell(const ReferenceBuildState& state, const std::string& cell_name);
 [[nodiscard]] bool nativeArcMatchesReferenceRecord(const ista::Arc& native_arc, const ArcRecord& arc, const NodeRecord& source, const NodeRecord& sink);
-[[nodiscard]] const ista::Arc& requireNativeArc(const ReferenceBuildState& state, const ArcRecord& arc);
 
 [[nodiscard]] Transition convertReferenceTransition(ista::TransType transition);
 [[nodiscard]] TimingSense convertReferenceTimingSense(ista::TimingArcSense sense);

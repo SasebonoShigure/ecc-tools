@@ -72,7 +72,6 @@ CsrTimingResult projectCudaTargetedTiming(const CsrReferenceInput& input, const 
   std::vector<std::optional<NodeId>> node_map(stable_names.size());
   std::vector<std::optional<ArcId>> arc_map(stable_ranks.size());
   CsrTimingResult result;
-  result.schema_version = input.schema_version;
   result.source_identity = input.source_identity;
   for (const auto& node : input.nodes) {
     const auto old = nodes_by_name.at(node.key.full_name);

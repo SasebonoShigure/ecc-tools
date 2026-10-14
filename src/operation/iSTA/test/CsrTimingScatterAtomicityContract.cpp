@@ -6,7 +6,9 @@
 // iEDA is licensed under Mulan PSL v2.
 // You may use this software according to the terms and conditions of the Mulan PSL v2.
 // ***************************************************************************************
+#include <atomic>
 #include <cstddef>
+#include <omp.h>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -18,6 +20,8 @@
 #include "CsrTimingScatterTestFixture.hpp"
 
 namespace csr_scatter_allocation_failpoint {
+std::atomic<bool> fail_worker{false};
+std::atomic<bool> worker_failed{false};
 namespace {
 
 struct AllocationState
@@ -32,6 +36,11 @@ thread_local AllocationState state;
 
 void beforeAllocation()
 {
+  if (fail_worker.load(std::memory_order_relaxed) && omp_in_parallel() && omp_get_thread_num() != 0
+      && fail_worker.exchange(false, std::memory_order_relaxed)) {
+    worker_failed.store(true, std::memory_order_relaxed);
+    throw std::bad_alloc{};
+  }
   if (!state.enabled)
     return;
   const std::size_t ordinal = state.allocation_count++;
@@ -294,12 +303,37 @@ void verifyBeyondEndSuccess(std::size_t allocation_count)
   requireForbiddenState(fixture, forbidden_before, "allocation beyond-end scatter");
 }
 
+void verifyWorkerAllocationFailure()
+{
+  auto fixture = makePoisonedAtomicFixture();
+  const auto before = readNativeTimingOracle(fixture.database());
+  const auto forbidden = timingScatterForbiddenBytes(fixture.database());
+  bool caught = false;
+  omp_set_dynamic(0);
+  omp_set_num_threads(8);
+  csr_scatter_allocation_failpoint::fail_worker = true;
+  try {
+    static_cast<void>(scatterCsrTimingResult(fixture.database(), fixture.committed_input, fixture.result,
+                                           fixture.context, fixture.session_token, fixture.graph_generation));
+  } catch (const std::bad_alloc&) {
+    caught = true;
+  } catch (...) {
+    csr_scatter_allocation_failpoint::fail_worker = false;
+    throw;
+  }
+  csr_scatter_allocation_failpoint::fail_worker = false;
+  requireTimingScatter(caught && csr_scatter_allocation_failpoint::worker_failed, "worker allocation failure did not reach the caller");
+  requireNativeTimingOracleEqual(readNativeTimingOracle(fixture.database()), before, "worker failure changed native timing");
+  requireForbiddenState(fixture, forbidden, "worker allocation failure");
+}
+
 }  // namespace
 }  // namespace ista::csr::test
 
 int main()
 {
   try {
+    omp_set_num_threads(1);
     const std::size_t allocation_count = ista::csr::test::measureScatterAllocations();
     ista::csr::test::requireTimingScatter(allocation_count > 0, "scatter performed no observable allocations");
     ista::csr::test::requireTimingScatter(allocation_count < std::numeric_limits<std::size_t>::max(),
@@ -307,6 +341,7 @@ int main()
     for (std::size_t ordinal = 0; ordinal < allocation_count; ++ordinal)
       ista::csr::test::verifyInjectedFailure(ordinal);
     ista::csr::test::verifyBeyondEndSuccess(allocation_count);
+    ista::csr::test::verifyWorkerAllocationFailure();
   } catch (const std::exception& error) {
     std::cerr << "CsrTimingScatterAtomicityContract failure: " << error.what() << '\n';
     return 1;

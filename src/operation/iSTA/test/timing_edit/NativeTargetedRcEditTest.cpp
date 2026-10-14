@@ -48,15 +48,15 @@ csr::CsrReferenceInput exportRc(const Database& database, std::uint64_t token)
                             + ", phase=" + std::to_string(static_cast<int>(failure->failed_phase)));
   return std::get<csr::CsrReferenceInput>(std::move(input));
 }
-void retainedSink(std::map<std::string, ParasiticNet>& trees)
+void retainedSink(std::map<std::string, ParasiticNet>& trees, const std::string& sink = "out_keep")
 {
   auto& net = trees.at("n0");
-  auto& node = net.get_node_map()["out_keep"];
-  node.set_node_name("out_keep");
+  auto& node = net.get_node_map()[sink];
+  node.set_node_name(sink);
   node.set_capacitance(0.012);
   auto& resistor = net.get_resistor_list().emplace_back();
   resistor.set_source_node("in");
-  resistor.set_sink_node("out_keep");
+  resistor.set_sink_node(sink);
   resistor.set_resistance(80.0);
   net.set_lumped_capacitance(net.get_lumped_capacitance() + 0.012);
 }
@@ -147,7 +147,16 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
           std::vector<csr::ParasiticNetModel> raw;
           for (const auto& [name, tree] : trees)
             raw.push_back(csr::detail::projectCanonicalParasiticNet(name, tree));
-          return dual::TimingEditDualCsrDescriptorBuilder::buildDirect(std::move(pending), authority, models, raw);
+          std::vector<std::string> expected_appends;
+          for (const auto& request : pending.capturePlan().load_nets)
+            if (!direct_graph.parasitic_net_slots.contains(request.expected_name))
+              expected_appends.push_back(request.expected_name);
+          auto result = dual::TimingEditDualCsrDescriptorBuilder::buildDirect(std::move(pending), authority, models, raw);
+          std::vector<std::string> actual_appends;
+          if (const auto& delta = result.descriptor().reference_payload.parasitics)
+            for (const auto& net : delta->appends) actual_appends.push_back(net.map_key);
+          require(actual_appends == expected_appends, "direct RC append order differs from native capture contract");
+          return result;
         };
 #ifdef ISTA_RC_CUDA_TRANSACTION_TEST
         auto device = csr::CudaDualCsrTestReader::computeRc(input, 64, state.resolver.highWater());
@@ -162,22 +171,44 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
                     return seed.seed_node == q && seed.availability == csr::StartSeedAvailability::kDeferredSequential
                         && seed.parasitic == state.parasitics.at(q);
                   }), "targeted Q fixture has no deferred RC start");
+        plan.edits.reserve(2);
+        std::string previous_input;
         for (std::uint64_t generation = 0; generation < 2; ++generation) {
           plan.expected_generation = state.generation;
           auto& edit = plan.edits.front();
           edit.creation_token = editTestCreationToken(generation + 1);
+          edit.creation_token.case_id = "b";
           edit.rc_inputs = ParasiticRcInputs{ParasiticEditPolicy::kPreRouteTree};
           edit.placement_inputs = PlacedInputs{5.0 + generation, 7.0};
           const auto names = defaultTokenMaterialization(edit.creation_token, edit.library_cell);
+          std::optional<TokenMaterialization> extra_names;
+          if (!sequential && generation == 1) {
+            auto extra = edit;
+            extra.creation_token.case_id = "a-long";
+            extra.creation_token.accepted_ordinal = 1;
+            extra.original_net = ExistingNetRef{"n0"};
+            extra.moved_sinks = {ExistingNodeRef{csr::NodeKey{csr::NodeKind::kPort, "out_keep", {}, {}}}};
+            extra_names = defaultTokenMaterialization(extra.creation_token, extra.library_cell);
+            plan.edits.push_back(std::move(extra));
+          }
+          const auto prepared_trees = [&] {
+            std::map<std::string, ParasiticNet> trees;
+            wire(trees, source, driver, names.input_pin_name, 75.0);
+            if (source == "n0") retainedSink(trees);
+            wire(trees, names.output_net_name, names.output_pin_name, "out", 50.0);
+            if (extra_names) {
+              wire(trees, "n0", "in", previous_input, 75.0);
+              retainedSink(trees, extra_names->input_pin_name);
+              wire(trees, extra_names->output_net_name, extra_names->output_pin_name, "out_keep", 50.0);
+            }
+            return trees;
+          };
           const auto old_bindings = state.parasitics;
           const auto* old_native = &rc_library.get_net_map().at(source);
           // Finite raw values overflow only while reducing the already applied
           // native RC tree. The transaction must unwind raw, graph and metadata.
           {
-            std::map<std::string, ParasiticNet> trees;
-            wire(trees, source, driver, names.input_pin_name, 75.0);
-            if (source == "n0") retainedSink(trees);
-            wire(trees, names.output_net_name, names.output_pin_name, "out", 50.0);
+            auto trees = prepared_trees();
             for (auto& [name, node] : trees.at(source).get_node_map()) {
               static_cast<void>(name);
               node.set_capacitance(std::numeric_limits<double>::max());
@@ -204,10 +235,7 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
             const auto old_timing = device.timingValues();
 #endif
             {
-              std::map<std::string, ParasiticNet> trees;
-              wire(trees, source, driver, names.input_pin_name, 75.0);
-              if (source == "n0") retainedSink(trees);
-              wire(trees, names.output_net_name, names.output_pin_name, "out", 50.0);
+              auto trees = prepared_trees();
               auto direct = prepare_direct(plan, trees);
               require(!direct.captureAudit(), "direct RC edit invented native capture");
 #ifdef ISTA_RC_CUDA_TRANSACTION_TEST
@@ -339,6 +367,7 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
                       "targeted RC abandonment lost native or CSR old owners");
           }
           require(state.generation.value() == generation + 1, "targeted RC commit generation mismatch");
+          previous_input = names.input_pin_name;
           source = names.output_net_name;
           driver = names.output_pin_name;
           edit.original_net = CreatedNetRef{edit.creation_token, CreatedNetRole::kOutputNet};

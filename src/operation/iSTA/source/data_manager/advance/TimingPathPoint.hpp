@@ -26,7 +26,6 @@ class TimingPathPoint
 {
  public:
   TimingPathPoint() = default;
-  ~TimingPathPoint() = default;
   // getter
   std::string& get_pin_name() { return _pin_name; }
   std::string& get_instance_name() { return _instance_name; }

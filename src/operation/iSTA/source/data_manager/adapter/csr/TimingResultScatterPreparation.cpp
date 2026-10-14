@@ -15,9 +15,13 @@
 // See the Mulan PSL v2 for more details.
 // ***************************************************************************************
 #include <algorithm>
+#include <atomic>
+#include <exception>
 #include <limits>
 #include <optional>
+#include <omp.h>
 #include <set>
+#include <stdexcept>
 #include <utility>
 
 #include "CsrReferenceInputAdapterInternal.hpp"
@@ -484,6 +488,30 @@ bool validResolvedTimingShapes(const CsrTimingValues& result, std::size_t node_c
 
 }  // namespace
 
+CsrReportNodeReader::CsrReportNodeReader(const StableScatterTargets& targets, const TimingScatterLayout& layout,
+                                       const CsrTimingValues& values)
+    : _targets(targets), _layout(layout), _values(values)
+{
+  if (!validResolvedTimingShapes(values, targets.nodes.size(), targets.arcs.size()))
+    throw std::invalid_argument("CSR report timing has inconsistent dimensions");
+  _ids.reserve(targets.nodes.size());
+  for (std::size_t id = 0; id < targets.nodes.size(); ++id)
+    _ids.emplace(*targets.nodes[id].full_name, id);
+}
+
+ista::TimingPoint& CsrReportNodeReader::point(std::string_view name)
+{
+  const auto id = _ids.at(name);
+  if (const auto found = _points.find(id); found != _points.end()) return found->second;
+  PreparedTimingPointState prepared;
+  if (const auto failure = prepareNodeState(_values, _layout, _targets, id, prepared))
+    throw std::runtime_error("CSR report node cannot be decoded: " + std::string(token(*failure)));
+  auto& point = _points.try_emplace(id).first->second;
+  prepared.target = &point;
+  publishPreparedTimingPoint(prepared);
+  return point;
+}
+
 TimingResultPreparationResult prepareTimingResultScatter(ista::Database& database, const CsrReferenceInput& committed_input,
                                                          const CsrReferenceInput& current_input, const CsrTimingResult& result)
 {
@@ -522,12 +550,39 @@ TimingResultPreparationResult prepareResolvedTimingResult(const StableScatterTar
   prepared.timing_order_target = targets.timing_order;
   prepared.timing_order.reserve(result.level_nodes.size());
 
+  std::atomic<std::size_t> first_failure{prepared.nodes.size()};
+  std::optional<CsrScatterCode> failure_code;
+  std::exception_ptr failure_exception;
+  const int threads = static_cast<int>(std::max<std::size_t>(1, std::min<std::size_t>(prepared.nodes.size(), omp_get_max_threads())));
+  // Each node owns its temporary maps; publication remains serial and no-throw.
+#pragma omp parallel for schedule(static) num_threads(threads)
   for (std::size_t node = 0; node < prepared.nodes.size(); ++node) {
-    if (resolvedNode(targets, NodeId{node}) == nullptr)
-      return TimingResultPreparationFailure{CsrScatterCode::kIdMappingMismatch};
-    if (const auto failure = prepareNodeState(result, layout, targets, node, prepared.nodes[node]))
-      return TimingResultPreparationFailure{*failure};
+    if (node > first_failure.load(std::memory_order_relaxed))
+      continue;
+    std::optional<CsrScatterCode> failure;
+    std::exception_ptr exception;
+    try {
+      failure = resolvedNode(targets, NodeId{node}) == nullptr
+                    ? std::optional{CsrScatterCode::kIdMappingMismatch}
+                    : prepareNodeState(result, layout, targets, node, prepared.nodes[node]);
+    } catch (...) {
+      exception = std::current_exception();
+    }
+    if (failure || exception) {
+#pragma omp critical(ista_scatter_preparation_failure)
+      {
+        if (node < first_failure.load(std::memory_order_relaxed)) {
+          failure_code = failure;
+          failure_exception = std::move(exception);
+          first_failure.store(node, std::memory_order_relaxed);
+        }
+      }
+    }
   }
+  if (failure_exception)
+    std::rethrow_exception(failure_exception);
+  if (failure_code)
+    return TimingResultPreparationFailure{*failure_code};
   for (std::size_t arc = 0; arc < targets.arcs.size(); ++arc) {
     if (targets.arcs[arc].arc == nullptr) {
       if (!lanePresence(arc, 0, result.arcs.delays, result.arcs.min_delays, result.arcs.max_delays))

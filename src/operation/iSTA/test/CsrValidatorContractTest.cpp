@@ -53,7 +53,7 @@ void testValidBaselines()
 void testMalformedStructureNeverThrows()
 {
   const CsrReferenceInput input = referenceInput();
-  rejectMutation(input, "schema", [](auto& value) { value.schema_version = "2.0.0"; });
+  rejectMutation(input, "schema", [](auto& value) { value.schema_version = "unsupported-version"; });
   rejectMutation(input, "identity", [](auto& value) { value.source_identity.session_token = 0; });
   rejectMutation(input, "analysis enum", [](auto& value) { value.analysis_order[0] = static_cast<AnalysisMode>(0xff); });
   rejectMutation(input, "dense NodeId", [](auto& value) { value.nodes[0].id = NodeId{9}; });
@@ -86,8 +86,9 @@ void testTablesConstraintsLoadsAndSeeds()
 {
   const CsrReferenceInput input = referenceInput();
   rejectMutation(input, "temperature token", [](auto& value) { value.analysis_context.temperature = "-0"; });
-  rejectMutation(input, "nonparasitic load", [](auto& value) { (*value.arcs[0].output_load)[0][0] = 0.25; });
-  rejectMutation(input, "nonparasitic load absence", [](auto& value) { value.arcs[0].output_load.reset(); });
+  rejectMutation(input, "unexpected Net load", [](auto& value) { value.arcs[0].output_load = outputLoad(0.5); });
+  rejectMutation(cellInput(), "nonparasitic Cell load", [](auto& value) { (*value.arcs[0].output_load)[0][0] = 0.25; });
+  rejectMutation(cellInput(), "nonparasitic Cell load absence", [](auto& value) { value.arcs[0].output_load.reset(); });
   rejectMutation(input, "negative input transition", [](auto& value) { value.port_constraints[0].input_transition = -0.1; });
   rejectMutation(input, "endpoint period", [](auto& value) { value.endpoint_required[0].clock_period = -1.0; });
   rejectMutation(input, "clock tag projection", [](auto& value) { value.clock_tags.clear(); });

@@ -36,6 +36,7 @@ enum class NativeGraphFixtureCase : std::uint8_t
   kFlags,
   kSparseAdjacency,
   kUnboundFallback,
+  kMixedFallback,
   kBoundSignature,
   kActiveCycle,
   kUtf8

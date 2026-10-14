@@ -33,6 +33,7 @@
 #include <time.h>
 
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -86,7 +87,7 @@ class VerilogRead
  private:
   IdbDesign* _idb_design = nullptr;
   IdbDefService* _def_service = nullptr;
-  VerilogReader* _verilog_reader = nullptr;
+  std::unique_ptr<VerilogReader> _verilog_reader;
   ParsedVerilogModule* _top_module = nullptr;
 };
 

@@ -4,6 +4,7 @@ add_library(ista_timing_characterizer
 
 target_link_libraries(ista_timing_characterizer
     PUBLIC
+    ista_timing_analyzer
     ista_data_manager
     ista_toolkit
 )

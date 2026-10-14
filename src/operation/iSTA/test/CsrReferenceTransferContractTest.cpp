@@ -668,7 +668,7 @@ void addParasitic(ista::Database& database, bool with_net)
 
 bool allLoads(const CsrReferenceInput& input, bool present)
 {
-  return std::ranges::all_of(input.arcs, [&](const ArcRecord& arc) { return arc.output_load.has_value() == present; });
+  return std::ranges::all_of(input.arcs, [&](const ArcRecord& arc) { return arc.output_load.has_value() == (present && arc.kind == ArcKind::kCell); });
 }
 
 void testFallbackParasiticsAndLoads()
@@ -707,9 +707,10 @@ void testFallbackParasiticsAndLoads()
   const auto zero = exportInput(diamond, 35);
   require(allLoads(zero, true), "true-zero load presence");
   for (const auto& arc : zero.arcs)
-    for (const auto& row : *arc.output_load)
-      for (double value : row)
-        require(value == 0.0, "true-zero load value");
+    if (arc.output_load)
+      for (const auto& row : *arc.output_load)
+        for (double value : row)
+          require(value == 0.0, "true-zero load value");
   addParasitic(diamond.database(), true);
   require(allLoads(exportInput(diamond, 36, context), true), "unrelated RC removed true-zero loads");
   const std::string output_net = "out_net";
@@ -721,7 +722,7 @@ void testFallbackParasiticsAndLoads()
   bool rc_seen = false, plain_seen = false;
   for (const auto& arc : mixed.arcs) {
     const bool has_rc = mixed.nodes[arc.sink.value()].net_name == output_net;
-    require(arc.output_load.has_value() != has_rc, "load presence did not follow its net");
+    require(arc.output_load.has_value() == (arc.kind == ArcKind::kCell && !has_rc), "load presence did not follow its net");
     rc_seen |= has_rc;
     plain_seen |= !has_rc;
   }

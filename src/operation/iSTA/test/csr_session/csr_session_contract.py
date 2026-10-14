@@ -164,7 +164,7 @@ def _finite_ms(value: Any, where: str, *, nullable: bool) -> float | None:
 def _identity(value: Any, where: str, *, expected_token: int) -> dict[str, Any]:
     identity = require_mapping(value, where)
     require_exact_keys(identity, IDENTITY_KEYS, where)
-    if identity["fingerprint_schema_version"] != "1.0.0":
+    if identity["fingerprint_schema_version"] != "2.0.0":
         raise SessionContractError(f"{where}.fingerprint_schema_version changed")
     token = _u64(identity["session_token"], f"{where}.session_token", positive=True)
     if token != expected_token:
@@ -358,7 +358,10 @@ def validate_session_probe_record(
         raise SessionContractError("same-input sequential sessions changed content fingerprints")
     if validated[0]["active"]["counts"] != validated[1]["active"]["counts"]:
         raise SessionContractError("same-input sequential sessions changed counts")
-    if validated[0]["oracle"]["projection_wire_hex"] != validated[1]["oracle"]["projection_wire_hex"]:
+    if (
+        validated[0]["oracle"]["projection_wire_hex"]
+        != validated[1]["oracle"]["projection_wire_hex"]
+    ):
         raise SessionContractError("same-input sequential sessions changed projection bytes")
     if validated[0]["oracle"]["fifo_wire_hex"] != validated[1]["oracle"]["fifo_wire_hex"]:
         raise SessionContractError("same-input sequential sessions changed FIFO bytes")
@@ -504,7 +507,9 @@ def _expected_default_semantics(record: Mapping[str, Any], where: str) -> dict[s
 def _actual_default_semantics(record: Mapping[str, Any], where: str) -> dict[str, Any]:
     missing = [
         field
-        for field in ("case", "top", "expected_clock", "direct_projection", "native_graph_oracle", "complete")
+        for field in (
+            "case", "top", "expected_clock", "direct_projection", "native_graph_oracle", "complete"
+        )
         if field not in record
     ]
     if missing:

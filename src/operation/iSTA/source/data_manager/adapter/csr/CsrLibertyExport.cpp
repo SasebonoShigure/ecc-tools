@@ -119,8 +119,10 @@ void refreshInstanceRoles(ReferenceBuildState& state)
 
 void exportGraphTransfers(ReferenceBuildState& state)
 {
+  const auto& native_arcs = state.database.get_arc_list();
   for (auto& arc : state.input.arcs) {
-    const ista::Arc& native_arc = requireNativeArc(state, arc);
+    // The graph producer bound this rank before entering the controlled reference export.
+    const ista::Arc& native_arc = native_arcs[static_cast<std::size_t>(arc.native_traversal_rank)];
     projectCanonicalArcTransfer(state.database, state.models, arc, native_arc);
 
     if (arc.kind == ArcKind::kNet)

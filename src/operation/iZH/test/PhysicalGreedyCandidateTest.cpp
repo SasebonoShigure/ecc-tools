@@ -118,10 +118,11 @@ void physicalGreedyCandidateContract(bool with_cuda)
     if (expected) require(selected == *expected, "CSR positive-gain edit/score/target differs from independent native full");
     else expected = selected;
     if (csr_mode) require(csr::exportCsrGraphSnapshot(database) == old_native, "candidate selection materialized native timing");
-    (void) session.readPhysicalResult();
+    const auto reported = session.readPhysicalResult();
     const auto status = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(session,
-        [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority&) {
+        [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority& authority) {
       auto& owner = StaTimingEditSessionProbeAccess::physicalState(context);
+      owner.materialize(database, context, authority);
       const auto& resolver = owner.full ? owner.full->resolver() : owner.cpu ? owner.cpu->committed().resolver
 #if ISTA_ENABLE_CUDA
           : owner.cuda_graph->resolver
@@ -139,6 +140,12 @@ void physicalGreedyCandidateContract(bool with_cuda)
       return StaStatus::success(session.state());
     });
     if (!status.ok()) throw std::runtime_error(status.message);
+    const auto repeated = session.readPhysicalResult();
+    require(repeated.generation == reported.generation && repeated.timing == reported.timing
+                && repeated.qor_json == reported.qor_json && repeated.paths_json == reported.paths_json,
+            "explicit native materialization changed the CSR public result");
+    require(selected == session.selectPhysicalBuffers(3, {"BUF_X1"}, 100, 100),
+            "explicit native materialization changed CSR selection");
     require(guarded.closeAndRelease().ok(), "positive-gain session close failed");
   }
 }

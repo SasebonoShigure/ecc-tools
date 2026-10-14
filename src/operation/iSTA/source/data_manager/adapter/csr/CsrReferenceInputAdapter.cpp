@@ -28,6 +28,7 @@
 #include "CsrReferenceNativeModelValidatorInternal.hpp"
 #include "CsrReferenceValidator.hpp"
 #include "TimingGraphCsrAdapter.hpp"
+#include "TimingGraphCsrAdapterInternal.hpp"
 
 namespace ista::csr::detail {
 namespace {
@@ -52,7 +53,25 @@ void noteNativeFullReferenceExport() noexcept
 
 CsrReferenceInputExportFailure ReferenceExportProgress::failure(CsrCaptureCode code) const
 {
-  return CsrReferenceInputExportFailure{code, failed_phase, current_fingerprints};
+  return CsrReferenceInputExportFailure{code, failed_phase, {}};
+}
+
+CsrReferenceInputExportFailure ReferenceExportProgress::failure(CsrCaptureCode code, const CsrReferenceInput& input) const
+{
+  auto result = failure(code);
+  auto& current = result.current_fingerprints;
+  // Completed components are unchanged by later export stages; hash them only on failure.
+  if (failed_phase > CsrReferenceInputExportPhase::kTopology)
+    current.topology_fingerprint = makeReferenceTopologyFingerprint(input);
+  if (failed_phase > CsrReferenceInputExportPhase::kClockConstraint)
+    current.clock_constraint_fingerprint = makeReferenceClockConstraintFingerprint(input);
+  if (failed_phase > CsrReferenceInputExportPhase::kLibrary)
+    current.library_fingerprint = makeReferenceLibraryFingerprint(input);
+  if (failed_phase > CsrReferenceInputExportPhase::kCorner)
+    current.corner_fingerprint = makeReferenceCornerFingerprint(input);
+  if (failed_phase > CsrReferenceInputExportPhase::kParasitic)
+    current.parasitic_fingerprint = makeReferenceParasiticFingerprint(input);
+  return result;
 }
 
 [[noreturn]] void abortReferenceExport(CsrCaptureCode code)
@@ -94,8 +113,10 @@ bool referenceByteStringLess(const std::string& lhs, const std::string& rhs)
                                       [](char left, char right) { return static_cast<unsigned char>(left) < static_cast<unsigned char>(right); });
 }
 
-ReferenceBuildState::ReferenceBuildState(const ista::Database& native_database, CsrGraphSnapshot graph, StaAnalysisContext context, NativeLibraryModels& library_models) : database(native_database), models(library_models)
+ReferenceBuildState::ReferenceBuildState(GraphBuildState graph_state, StaAnalysisContext context, NativeLibraryModels& library_models)
+    : database(graph_state.database), models(library_models), node_ids_by_full_name(std::move(graph_state.node_ids_by_full_name))
 {
+  auto& graph = graph_state.snapshot;
   input.analysis_context = std::move(context);
   input.nodes = std::move(graph.nodes);
   input.node_ids_by_key = std::move(graph.node_ids_by_key);
@@ -124,11 +145,6 @@ ReferenceBuildState::ReferenceBuildState(const ista::Database& native_database, 
     input.arcs.push_back(std::move(arc));
   }
 
-  for (std::size_t index = 0; index < input.nodes.size(); ++index) {
-    const NodeRecord& node = input.nodes[index];
-    if (node.id.value() != index || !node_ids_by_full_name.emplace(node.key.full_name, node.id).second)
-      malformedReferenceInput();
-  }
   for (std::size_t index = 0; index < input.instances.size(); ++index) {
     const InstanceRecord& instance = input.instances[index];
     if (!instance_indices_by_name.emplace(instance.instance_name, index).second)
@@ -208,18 +224,6 @@ bool nativeArcMatchesReferenceRecord(const ista::Arc& native_arc, const ArcRecor
          && native_arc.get_is_disable_arc() == arc.is_disabled && native_arc.get_is_loop_disable() == arc.is_loop_disabled;
 }
 
-const ista::Arc& requireNativeArc(const ReferenceBuildState& state, const ArcRecord& arc)
-{
-  const auto& native_arcs = state.database.get_arc_list();
-  if (arc.native_traversal_rank >= native_arcs.size())
-    malformedReferenceInput();
-  const ista::Arc& native_arc = native_arcs.at(static_cast<std::size_t>(arc.native_traversal_rank));
-  const NodeRecord& source = requireNode(state, arc.source);
-  const NodeRecord& sink = requireNode(state, arc.sink);
-  if (!nativeArcMatchesReferenceRecord(native_arc, arc, source, sink))
-    malformedReferenceInput();
-  return native_arc;
-}
 
 }  // namespace ista::csr::detail
 
@@ -247,44 +251,41 @@ CsrReferenceInputExportResult exportCsrReferenceInputCandidate(const ista::Datab
 
   progress.failed_phase = CsrReferenceInputExportPhase::kTopology;
   try {
-    CsrGraphExportResult graph_result = exportCsrGraphSnapshot(database);
-    if (const auto* failure = std::get_if<CsrGraphExportFailure>(&graph_result))
-      return progress.failure(failure->code);
+    detail::GraphBuildState graph(database);
+    detail::exportGraph(graph);
+    detail::ReferenceBuildState state(std::move(graph), canonical_context, models);
 
-    detail::ReferenceBuildState state(database, std::move(std::get<CsrGraphSnapshot>(graph_result)), canonical_context, models);
-    progress.current_fingerprints.topology_fingerprint = makeReferenceTopologyFingerprint(state.input);
+    try {
+      progress.failed_phase = CsrReferenceInputExportPhase::kClockConstraint;
+      detail::exportReferenceConstraints(state);
 
-    progress.failed_phase = CsrReferenceInputExportPhase::kClockConstraint;
-    detail::exportReferenceConstraints(state);
-    progress.current_fingerprints.clock_constraint_fingerprint = makeReferenceClockConstraintFingerprint(state.input);
+      progress.failed_phase = CsrReferenceInputExportPhase::kLibrary;
+      detail::exportReferenceLiberty(state);
 
-    progress.failed_phase = CsrReferenceInputExportPhase::kLibrary;
-    detail::exportReferenceLiberty(state);
-    progress.current_fingerprints.library_fingerprint = makeReferenceLibraryFingerprint(state.input);
+      progress.failed_phase = CsrReferenceInputExportPhase::kParasitic;
+      detail::exportReferenceParasitics(state);
+      if (!detail::validateParasiticContextCrossField(state.input).empty())
+        detail::abortReferenceExport(CsrCaptureCode::kInvalidAnalysisContext);
 
-    progress.failed_phase = CsrReferenceInputExportPhase::kCorner;
-    progress.current_fingerprints.corner_fingerprint = makeReferenceCornerFingerprint(state.input);
+      progress.failed_phase = CsrReferenceInputExportPhase::kTimingInput;
+      detail::exportReferenceTimingChecks(state);
+      detail::exportReferenceClockSeeds(state);
+      detail::exportReferenceLoadsAndSupport(state);
 
-    progress.failed_phase = CsrReferenceInputExportPhase::kParasitic;
-    detail::exportReferenceParasitics(state);
-    if (!detail::validateParasiticContextCrossField(state.input).empty())
-      return progress.failure(CsrCaptureCode::kInvalidAnalysisContext);
-    progress.current_fingerprints.parasitic_fingerprint = makeReferenceParasiticFingerprint(state.input);
-
-    progress.failed_phase = CsrReferenceInputExportPhase::kTimingInput;
-    detail::exportReferenceTimingChecks(state);
-    detail::exportReferenceClockSeeds(state);
-    detail::exportReferenceLoadsAndSupport(state);
-
-    state.input.source_identity = makeReferenceInputIdentity(state.input, caller_session_token, 0);
-    // Producers enforce input boundaries while constructing this owned state.
-    // Replaying the complete contract (including identity hashing) is diagnostic.
-    if constexpr (incregpusta_debug_checks_enabled) {
-      const auto violations = validateReferenceInputForSession(state.input, caller_session_token);
-      if (!violations.empty())
-        throw std::logic_error("native CSR reference projection violated its complete contract: " + violations.front().field + ": " + violations.front().message);
+      state.input.source_identity = makeReferenceInputIdentity(state.input, caller_session_token, 0);
+      // Producers enforce input boundaries while constructing this owned state.
+      // Replaying the complete contract (including identity hashing) is diagnostic.
+      if constexpr (incregpusta_debug_checks_enabled) {
+        const auto violations = validateReferenceInputForSession(state.input, caller_session_token);
+        if (!violations.empty())
+          throw std::logic_error("native CSR reference projection violated its complete contract: " + violations.front().field + ": " + violations.front().message);
+      }
+      return std::move(state.input);
+    } catch (const detail::ReferenceExportAbort& error) {
+      return progress.failure(error.code(), state.input);
     }
-    return std::move(state.input);
+  } catch (const detail::GraphExportAbort& error) {
+    return progress.failure(error.code());
   } catch (const detail::ReferenceExportAbort& error) {
     return progress.failure(error.code());
   }

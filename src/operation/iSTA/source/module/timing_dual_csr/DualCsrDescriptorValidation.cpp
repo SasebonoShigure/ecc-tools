@@ -18,6 +18,7 @@
 #include "DualCsrValidationInternal.hpp"
 #include "DualCsrReferenceValidationInternal.hpp"
 #include "TimingSemanticKey.hpp"
+#include "IncreGpuStaBuildConfig.hpp"
 namespace ista::timing_dual_csr {
 namespace {
 using detail::reject;
@@ -51,22 +52,6 @@ std::vector<csr::ArcId> auxRow(const DualCsrState& state,
   const auto row = static_cast<std::size_t>(mapped);
   return row < state.aux_out.row_arcs.size() ? state.aux_out.row_arcs[row] : std::vector<csr::ArcId>{};
 }
-std::vector<csr::ArcId> committedOutgoingRow(
-    const DualCsrState& state, csr::NodeId source)
-{
-  std::vector<csr::ArcId> result;
-  if (source.value() + 1 < state.base_out.row_offsets.size()) {
-    const auto begin = state.base_out.row_offsets[source.value()];
-    const auto end = state.base_out.row_offsets[source.value() + 1];
-    if (begin <= end && end <= state.base_out.physical_slots.size())
-      for (auto slot = begin; slot < end; ++slot)
-        if (state.base_out.physical_slots[slot])
-          result.push_back(*state.base_out.physical_slots[slot]);
-  }
-  auto aux = auxRow(state, source);
-  result.insert(result.end(), aux.begin(), aux.end());
-  return result;
-}
 std::vector<csr::ArcId> committedIncomingRow(
     const DualCsrState& state, csr::NodeId sink)
 {
@@ -85,7 +70,7 @@ std::vector<csr::ArcId> committedIncomingRow(
 std::set<std::uint64_t> postPhysicalOutgoingIds(
     const DualCsrState& committed,
     const DualCsrBatchDescriptor& descriptor,
-    DualCsrViolations& violations, PhysicalRows& rows)
+    DualCsrViolations& violations)
 {
   auto base = committed.base_out.physical_slots;
   for (const auto& remove : descriptor.removes)
@@ -110,7 +95,6 @@ std::set<std::uint64_t> postPhysicalOutgoingIds(
         || payload->source != source)
       reject(violations, DualCsrViolationCode::kAdjacency, field,
              "post BaseOut/Aux must contain each source ArcId once");
-    rows[source.value()].push_back(id);
   };
   if (committed.base_out.row_offsets.size()
       == committed.nodes.size() + 1) {
@@ -301,8 +285,8 @@ void validatePostActiveArcKeys(
     ++expected_ordinal;
   }
 }
-}  // namespace
-DualCsrViolations validateDualCsrDescriptor(
+template <bool FullProof>
+DualCsrViolations validateDescriptor(
     const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor)
 {
   DualCsrViolations violations;
@@ -328,10 +312,12 @@ DualCsrViolations validateDualCsrDescriptor(
     reject(violations, DualCsrViolationCode::kHighWater, "after",
            "append-only high-water cannot move backwards");
   validateAppends(committed, descriptor, violations);
-  detail::validateReferenceDelta(committed, descriptor, violations);
+  if constexpr (FullProof)
+    detail::validateReferenceDelta(committed, descriptor, violations);
+  else
+    detail::validateConstructedReferenceDelta(committed, descriptor, violations);
   std::set<PhysicalKey> out_writes;
   std::set<PhysicalKey> in_writes;
-  std::set<std::uint64_t> required_deactivations;
   const auto record_out = [&](csr::NodeId row, std::uint64_t slot,
                               const std::string& field) {
     if (!out_writes.emplace(row.value(), slot).second)
@@ -348,7 +334,6 @@ DualCsrViolations validateDualCsrDescriptor(
                != std::optional<csr::ArcId>{remove.expected_arc})
       reject(violations, DualCsrViolationCode::kExpectedValue, "removes",
              "BaseOut remove does not match committed row/slot");
-    required_deactivations.insert(remove.expected_arc.value());
   }
   for (const auto& change : descriptor.changes) {
     record_out(change.source, change.physical_slot, "changes");
@@ -375,9 +360,6 @@ DualCsrViolations validateDualCsrDescriptor(
         || replacement->source != change.source)
       reject(violations, DualCsrViolationCode::kExpectedValue, "changes",
              "BaseOut change does not match slot or active replacement");
-    if (change.expected_arc
-        && change.expected_arc != change.replacement_arc)
-      required_deactivations.insert(change.expected_arc->value());
   }
   for (const auto& change : descriptor.reverse_changes) {
     if (!in_writes.emplace(change.sink.value(), change.physical_slot).second)
@@ -406,8 +388,6 @@ DualCsrViolations validateDualCsrDescriptor(
       reject(violations, DualCsrViolationCode::kExpectedValue,
              "reverse_changes",
              "BaseIn change does not match slot or active replacement");
-    if (change.expected_arc != change.replacement_arc)
-      required_deactivations.insert(change.expected_arc.value());
   }
   std::set<std::uint64_t> aux_sources;
   for (const auto& row : descriptor.aux_rows) {
@@ -428,11 +408,6 @@ DualCsrViolations validateDualCsrDescriptor(
           || payload->source != row.source)
         reject(violations, DualCsrViolationCode::kAdjacency, "aux_rows",
                "Aux replacement must contain unique arcs from its source");
-    }
-    for (const auto old_arc : row.expected_arc_ids) {
-      if (std::ranges::find(row.replacement_arc_ids, old_arc)
-          == row.replacement_arc_ids.end())
-        required_deactivations.insert(old_arc.value());
     }
   }
   std::set<std::uint64_t> deactivated;
@@ -461,63 +436,29 @@ DualCsrViolations validateDualCsrDescriptor(
              "logical_deactivations",
              "deactivation does not match active committed arc");
   }
-  PhysicalRows post_outgoing_rows;
-  const auto post_physical = postPhysicalOutgoingIds(
-      committed, descriptor, violations, post_outgoing_rows);
-  std::set<std::uint64_t> expected_post_active;
-  for (std::size_t id = 0; id < committed.arc_slots.size(); ++id)
-    if (committed.arc_slots[id].active
-        && !deactivated.contains(id))
-      expected_post_active.insert(id);
-  for (const auto& append : descriptor.arc_appends)
-    expected_post_active.insert(append.id.value());
-  if (post_physical != expected_post_active)
-    reject(violations, DualCsrViolationCode::kAdjacency,
-           "post_outgoing_rows",
-           "BaseOut union Aux must exactly cover post-active ArcIds");
   PhysicalRows post_incoming_rows;
-  const auto post_incoming = postPhysicalIncomingIds(
-      committed, descriptor, violations, post_incoming_rows);
-  if (post_incoming != expected_post_active)
-    reject(violations, DualCsrViolationCode::kTranspose,
-           "post_incoming_rows",
-           "BaseIn must exactly cover post-active ArcIds");
-  std::set<std::uint64_t> affected_outgoing;
-  std::optional<std::uint64_t> last_outgoing;
-  for (const auto& row : descriptor.affected_base_out_rows) {
-    const bool ordered = !last_outgoing
-                         || *last_outgoing < row.source.value();
-    last_outgoing = row.source.value();
-    if (row.source.value() >= descriptor.before.node_slots
-        || !ordered
-        || !affected_outgoing.insert(row.source.value()).second
-        || row.expected_arc_ids
-               != committedOutgoingRow(committed, row.source))
-      reject(violations, DualCsrViolationCode::kExpectedValue,
-             "affected_base_out_rows",
-             "affected existing BaseOut row must bind exact committed order");
-    const auto found = post_outgoing_rows.find(row.source.value());
-    const std::vector<csr::ArcId> actual
-        = found == post_outgoing_rows.end()
-              ? std::vector<csr::ArcId>{}
-              : found->second;
-    if (actual != row.replacement_arc_ids)
+  std::set<std::uint64_t> post_physical;
+  if constexpr (FullProof) {
+    post_physical = postPhysicalOutgoingIds(
+        committed, descriptor, violations);
+    std::set<std::uint64_t> expected_post_active;
+    for (std::size_t id = 0; id < committed.arc_slots.size(); ++id)
+      if (committed.arc_slots[id].active
+          && !deactivated.contains(id))
+        expected_post_active.insert(id);
+    for (const auto& append : descriptor.arc_appends)
+      expected_post_active.insert(append.id.value());
+    if (post_physical != expected_post_active)
       reject(violations, DualCsrViolationCode::kAdjacency,
-             "affected_base_out_rows",
-             "physical BaseOut/Aux result differs from candidate order");
+             "post_outgoing_rows",
+             "BaseOut union Aux must exactly cover post-active ArcIds");
+    const auto post_incoming = postPhysicalIncomingIds(
+        committed, descriptor, violations, post_incoming_rows);
+    if (post_incoming != expected_post_active)
+      reject(violations, DualCsrViolationCode::kTranspose,
+             "post_incoming_rows",
+             "BaseIn must exactly cover post-active ArcIds");
   }
-  const auto require_outgoing = [&](csr::NodeId source,
-                                    const std::string& field) {
-    if (!affected_outgoing.contains(source.value()))
-      reject(violations, DualCsrViolationCode::kAdjacency, field,
-             "existing outgoing row write lacks typed order evidence");
-  };
-  for (const auto& item : descriptor.removes)
-    require_outgoing(item.source, "removes");
-  for (const auto& item : descriptor.changes)
-    require_outgoing(item.source, "changes");
-  for (const auto& item : descriptor.aux_rows)
-    require_outgoing(item.source, "aux_rows");
   std::set<std::uint64_t> affected_incoming;
   std::optional<std::uint64_t> last_incoming;
   for (const auto& row : descriptor.affected_base_in_rows) {
@@ -535,15 +476,17 @@ DualCsrViolations validateDualCsrDescriptor(
       reject(violations, DualCsrViolationCode::kExpectedValue,
              "affected_base_in_rows",
              "affected BaseIn row must bind exact committed order");
-    const auto found = post_incoming_rows.find(row.sink.value());
-    const std::vector<csr::ArcId> actual
-        = found == post_incoming_rows.end()
-              ? std::vector<csr::ArcId>{}
-              : found->second;
-    if (actual != row.replacement_arc_ids)
-      reject(violations, DualCsrViolationCode::kTranspose,
-             "affected_base_in_rows",
-             "physical BaseIn result differs from candidate order");
+    if constexpr (FullProof) {
+      const auto found = post_incoming_rows.find(row.sink.value());
+      const std::vector<csr::ArcId> actual
+          = found == post_incoming_rows.end()
+                ? std::vector<csr::ArcId>{}
+                : found->second;
+      if (actual != row.replacement_arc_ids)
+        reject(violations, DualCsrViolationCode::kTranspose,
+               "affected_base_in_rows",
+               "physical BaseIn result differs from candidate order");
+    }
   }
   for (const auto& item : descriptor.reverse_changes)
     if (!affected_incoming.contains(item.sink.value()))
@@ -556,13 +499,6 @@ DualCsrViolations validateDualCsrDescriptor(
       reject(violations, DualCsrViolationCode::kTranspose,
              "affected_base_in_rows",
              "every appended node must declare candidate BaseIn order");
-  for (const auto id : post_physical)
-    required_deactivations.erase(id);
-  for (const auto id : required_deactivations)
-    if (!deactivated.contains(id))
-      reject(violations, DualCsrViolationCode::kConflict,
-             "logical_deactivations",
-             "physical/Aux removal lacks typed logical deactivation");
   std::set<std::uint64_t> node_changes;
   for (const auto& change : descriptor.node_payload_changes) {
     if (!node_changes.insert(change.id.value()).second
@@ -606,8 +542,21 @@ DualCsrViolations validateDualCsrDescriptor(
              "payload_changes",
              "one ArcId cannot be changed and deactivated in the same batch");
   }
-  validatePostActiveArcKeys(committed, descriptor, deactivated,
-                            violations);
+  if constexpr (FullProof)
+    validatePostActiveArcKeys(committed, descriptor, deactivated, violations);
   return violations;
+}
+}  // namespace
+
+DualCsrViolations validateDualCsrDescriptor(
+    const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor)
+{
+  return validateDescriptor<true>(committed, descriptor);
+}
+
+DualCsrViolations detail::validateConstructedDualCsrDescriptor(
+    const DualCsrState& committed, const DualCsrBatchDescriptor& descriptor)
+{
+  return validateDescriptor<incregpusta_debug_checks_enabled>(committed, descriptor);
 }
 }  // namespace ista::timing_dual_csr

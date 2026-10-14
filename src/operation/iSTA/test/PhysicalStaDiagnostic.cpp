@@ -2,6 +2,7 @@
 // Licensed under Mulan PSL v2.
 // Explicit ON-only readback of the committed production result. No propagation
 // or reference computation is performed by this test binding.
+#include "TimingAnalyzer.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
 #include "StaEditOperation.hpp"
 #include "PhysicalStaSessionState.hpp"
@@ -76,6 +77,7 @@ Json pathChecksJson(Database& database)
     for (auto& [end, paths] : group.get_timing_path_end_map()) {
       Json values = Json::array();
       for (auto& path : paths.get_timing_path_list()) {
+        TimingAnalyzer::materializePathTrace(path);
         Json points = Json::array();
         for (auto& point : path.get_point_list())
           points.push_back({{"pin", point.get_pin_name()}, {"source", point.get_source_pin()}, {"sink", point.get_sink_pin()},

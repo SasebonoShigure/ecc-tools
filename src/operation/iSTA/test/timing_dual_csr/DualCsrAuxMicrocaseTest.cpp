@@ -77,7 +77,6 @@ DualCsrBatchDescriptor auxClearBatch(const DualCsrState& state)
       2, csr::NodeId{3}, csr::NodeId{2}, appended_node.key,
       state.nodes[2].key, 0);
   appended_arc.payload.key.base.owner_name = "n2";
-  appended_arc.payload.output_load = csr::test::outputLoad(0.0);
   appended_arc.key = appended_arc.payload.key;
   descriptor.arc_appends = {std::move(appended_arc)};
   descriptor.node_payload_changes = {{

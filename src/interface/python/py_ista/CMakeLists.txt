@@ -30,7 +30,7 @@ target_include_directories(py_ista
 # ON-only acceptance readback: reuse the independent mechanical timing reader.
 # No test inspection code is linked into the default binding.
 if(ECC_INCREGPUSTA_DEBUG_CHECKS)
-    target_link_libraries(py_ista PRIVATE ista_timing_dual_csr_transaction ista_data_manager)
+    target_link_libraries(py_ista PRIVATE ista_timing_dual_csr_transaction ista_data_manager ista_timing_analyzer)
     set(physical_diagnostic_sources
         PhysicalStaDiagnostic.cpp
         CsrNativeTimingOracleReader.cpp

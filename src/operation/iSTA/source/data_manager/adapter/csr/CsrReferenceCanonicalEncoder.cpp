@@ -319,6 +319,29 @@ void appendParasitics(CanonicalEncoder& encoder, const ParasiticModel& parasitic
 
 }  // namespace
 
+
+void CanonicalEncoder::appendNodeKeyBytes(const NodeKey& key)
+{
+  const auto offset = _bytes.size();
+  appendU64(0);
+  appendDomain("node-key");
+  appendNodeKey(*this, key);
+  const std::uint64_t size = _bytes.size() - offset - 8;
+  for (std::size_t index = 0; index < 8; ++index)
+    _bytes[offset + index] = static_cast<std::uint8_t>(size >> (56 - index * 8));
+}
+
+void CanonicalEncoder::appendArcKeyBytes(const ArcKey& key)
+{
+  const auto offset = _bytes.size();
+  appendU64(0);
+  appendDomain("arc-key");
+  appendArcKey(*this, key);
+  const std::uint64_t size = _bytes.size() - offset - 8;
+  for (std::size_t index = 0; index < 8; ++index)
+    _bytes[offset + index] = static_cast<std::uint8_t>(size >> (56 - index * 8));
+}
+
 namespace detail {
 
 void appendLibraryArcSignatureFields(CanonicalEncoder& encoder, const LibraryArcSignature& signature)
@@ -368,7 +391,7 @@ std::vector<std::uint8_t> canonicalNodeKeyBytes(const NodeKey& key)
   CanonicalEncoder encoder;
   encoder.appendDomain("node-key");
   appendNodeKey(encoder, key);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> canonicalArcKeyBytes(const ArcKey& key)
@@ -376,7 +399,7 @@ std::vector<std::uint8_t> canonicalArcKeyBytes(const ArcKey& key)
   CanonicalEncoder encoder;
   encoder.appendDomain("arc-key");
   appendArcKey(encoder, key);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> canonicalLibraryArcSignatureBytes(const LibraryArcSignature& signature)
@@ -384,7 +407,7 @@ std::vector<std::uint8_t> canonicalLibraryArcSignatureBytes(const LibraryArcSign
   CanonicalEncoder encoder;
   encoder.appendDomain("library-arc-signature");
   detail::appendLibraryArcSignatureFields(encoder, signature);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> canonicalAnalysisContextBytes(const StaAnalysisContext& context)
@@ -394,7 +417,7 @@ std::vector<std::uint8_t> canonicalAnalysisContextBytes(const StaAnalysisContext
   encoder.appendString(context.liberty_corner);
   encoder.appendString(context.temperature);
   encoder.appendString(context.rc_corner);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> canonicalSnapshotIdentityBytes(const CsrSnapshotIdentity& identity)
@@ -402,7 +425,7 @@ std::vector<std::uint8_t> canonicalSnapshotIdentityBytes(const CsrSnapshotIdenti
   CanonicalEncoder encoder;
   encoder.appendDomain("snapshot-identity", identity.fingerprint_schema_version);
   appendIdentity(encoder, identity);
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 std::vector<std::uint8_t> canonicalReferenceInputBytes(const CsrReferenceInput& input)
@@ -564,6 +587,11 @@ std::vector<std::uint8_t> canonicalReferenceInputBytes(const CsrReferenceInput& 
     encoder.appendBool(seed.crpr_transition.has_value());
     if (seed.crpr_transition)
       encoder.appendString(token(*seed.crpr_transition));
+    encoder.appendBool(seed.output_load.has_value());
+    if (seed.output_load)
+      for (const auto& analysis : *seed.output_load)
+        for (double value : analysis)
+          encoder.appendDouble(value);
   }
   encoder.appendU64(input.endpoint_required.size());
   for (const auto& endpoint : input.endpoint_required) {
@@ -582,7 +610,7 @@ std::vector<std::uint8_t> canonicalReferenceInputBytes(const CsrReferenceInput& 
   encoder.appendU64(input.unsupported_reasons.size());
   for (auto reason : input.unsupported_reasons)
     encoder.appendString(token(reason));
-  return encoder.bytes();
+  return std::move(encoder).takeBytes();
 }
 
 }  // namespace ista::csr

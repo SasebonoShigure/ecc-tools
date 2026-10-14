@@ -258,6 +258,7 @@ IdbCellMasterList::IdbCellMasterList()
 
 IdbCellMasterList::~IdbCellMasterList()
 {
+  reset_cell_master();
 }
 
 void IdbCellMasterList::reset_cell_master()

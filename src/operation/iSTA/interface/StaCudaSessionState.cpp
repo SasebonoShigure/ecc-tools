@@ -6,6 +6,7 @@
 #include "DelayCalculator.hpp"
 #include "StaProductionLifecycle.hpp"
 #include "TimingAnalyzer.hpp"
+#include "TimingReporter.hpp"
 #include "TimingResultScatterInternal.hpp"
 #include "TimingSemanticKey.hpp"
 
@@ -51,6 +52,7 @@ void StaCudaSessionState::bindEdits(Database& database, const csr::CsrReferenceI
 
 void StaCudaSessionState::committed() noexcept
 {
+  _csr_report_generation.reset();
   _timing_generation.reset();
   _report_generation.reset();
 }
@@ -120,5 +122,32 @@ void StaCudaSessionState::prepareReport()
   }
   _timing_generation = device.generation();
   _report_generation = device.generation();
+}
+const std::pair<std::string, std::string>& StaCudaSessionState::readReport(Database& database,
+    const timing_edit::NativeExecutionAuthority& authority)
+{
+  device.requireCommitted();
+  if (_poisoned || !host || host->graph.generation != device.generation()
+      || history.size() != device.generation().value())
+    throw std::logic_error("CSR report requires a committed CUDA edit owner");
+  if (_csr_report_generation == device.generation()) return _csr_report;
+  const auto& graph = host->graph;
+  _native_view.prepareMetadata(database, authority, graph, host->resolver, history);
+  const auto& values = device.timingValues();
+  std::pair<std::string, std::string> report;
+  const auto status = executeStaLifecyclePipeline(
+      {{"CSR report", [] {}, [&] {
+        const auto targets = csr::detail::resolveDualCsrTimingTargets(database, graph);
+        const auto& layout = graph.reference_payload;
+        csr::detail::CsrReportNodeReader reader(targets,
+            {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, values);
+        report = TimingReporter::readCsrReport(reader);
+      }, [] {}}},
+      StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+  if (status.cleanup_failed) _poisoned = true;
+  if (!status.succeeded) throw std::runtime_error("CSR report query failed: " + status.message);
+  _csr_report.swap(report);
+  _csr_report_generation = device.generation();
+  return _csr_report;
 }
 }  // namespace ista

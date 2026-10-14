@@ -75,8 +75,8 @@ TimingTableModel fullTable(double offset)
 CsrReferenceInput inputFixture()
 {
   CsrReferenceInput input;
-  input.nodes = {NodeRecord{.id = NodeId{0}, .key = port("a"), .direction = PinDirection::kInput, .is_port = true},
-                 NodeRecord{.id = NodeId{1}, .key = pin("u1:Y", "Y"), .direction = PinDirection::kOutput, .is_output_pin = true}};
+  input.nodes = {NodeRecord{.id = NodeId{0}, .key = port("a"), .direction = PinDirection::kInput, .instance_cell = {}, .net_name = {}, .is_port = true},
+                 NodeRecord{.id = NodeId{1}, .key = pin("u1:Y", "Y"), .direction = PinDirection::kOutput, .instance_cell = {}, .net_name = {}, .is_output_pin = true}};
 
   ChildTimingArcModel child;
   child.signature = fullSignature();

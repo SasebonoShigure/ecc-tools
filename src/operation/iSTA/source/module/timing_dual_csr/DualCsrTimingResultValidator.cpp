@@ -443,9 +443,9 @@ DualCsrViolations validateDualCsrTimingResult(
   DualCsrViolations violations = validateDualCsrState(state);
   if (!violations.empty())
     return violations;
-  if (result.values.schema_version != state.reference_payload.schema_version)
+  if (result.values.schema_version != csr::kCsrSchemaVersion)
     reject(violations, DualCsrViolationCode::kTimingResult,
-           "result.schema_version", "schema must match the Dual state payload");
+           "result.schema_version", "unsupported timing result schema version");
   if (!(result.values.source_identity
         == state.reference_payload.source_identity))
     reject(violations, DualCsrViolationCode::kTimingResult,

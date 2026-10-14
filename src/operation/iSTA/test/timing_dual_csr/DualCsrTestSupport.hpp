@@ -69,7 +69,6 @@ inline csr::ArcSemanticPayload arcPayload(
   result.transfer.delay = 0.0;
   result.transfer.delay_min = 0.0;
   result.transfer.delay_max = 0.0;
-  result.output_load = csr::test::outputLoad(0.5);
   return result;
 }
 
@@ -178,18 +177,6 @@ inline void replaceReference(
   }
 }
 
-inline std::vector<csr::ArcId> evidenceAuxRow(
-    const DualCsrState& state, csr::NodeId source)
-{
-  if (source.value() >= state.aux_out.source_to_aux_row.size())
-    return {};
-  const auto mapped = state.aux_out.source_to_aux_row[source.value()];
-  if (mapped < 0)
-    return {};
-  const auto row = static_cast<std::size_t>(mapped);
-  return state.aux_out.row_arcs.at(row);
-}
-
 inline std::vector<csr::ArcId> evidenceBaseRow(
     const BaseCsrState& base, csr::NodeId node)
 {
@@ -208,44 +195,6 @@ inline std::vector<csr::ArcId> evidenceBaseRow(
 inline void completePhysicalRowEvidence(
     DualCsrBatchDescriptor& descriptor, const DualCsrState& state)
 {
-  auto out_slots = state.base_out.physical_slots;
-  for (const auto& remove : descriptor.removes)
-    out_slots[remove.physical_slot].reset();
-  for (const auto& change : descriptor.changes)
-    out_slots[change.physical_slot] = change.replacement_arc;
-  std::map<std::uint64_t, std::vector<csr::ArcId>> aux;
-  for (const auto source : state.aux_out.row_sources)
-    aux[source.value()] = evidenceAuxRow(state, source);
-  for (const auto& row : descriptor.aux_rows)
-    aux[row.source.value()] = row.replacement_arc_ids;
-
-  std::set<std::uint64_t> affected_sources;
-  for (const auto& item : descriptor.removes)
-    affected_sources.insert(item.source.value());
-  for (const auto& item : descriptor.changes)
-    affected_sources.insert(item.source.value());
-  for (const auto& item : descriptor.aux_rows)
-    affected_sources.insert(item.source.value());
-  descriptor.affected_base_out_rows.clear();
-  for (const auto source_value : affected_sources) {
-    const csr::NodeId source{source_value};
-    auto expected = evidenceBaseRow(state.base_out, source);
-    auto expected_aux = evidenceAuxRow(state, source);
-    expected.insert(expected.end(), expected_aux.begin(),
-                    expected_aux.end());
-    std::vector<csr::ArcId> replacement;
-    const auto begin = state.base_out.row_offsets[source_value];
-    const auto end = state.base_out.row_offsets[source_value + 1];
-    for (auto slot = begin; slot < end; ++slot)
-      if (out_slots[slot])
-        replacement.push_back(*out_slots[slot]);
-    const auto& replacement_aux = aux[source_value];
-    replacement.insert(replacement.end(), replacement_aux.begin(),
-                       replacement_aux.end());
-    descriptor.affected_base_out_rows.push_back(
-        {source, std::move(expected), std::move(replacement)});
-  }
-
   descriptor.appended_base_out_rows.clear();
   for (const auto& node : descriptor.node_appends) {
     std::vector<csr::ArcId> row;

@@ -19,7 +19,7 @@ import reference_input_recompute_parasitics as parasitic_oracle
 import reference_input_recompute_transfer as transfer_oracle
 import reference_input_wire_fixture as fixture
 
-_DEEP_CANDIDATE_BYTE_COUNT = 3528
+_DEEP_CANDIDATE_BYTE_COUNT = 3457
 _DEEP_RAW_BYTE_COUNT = 1237
 
 

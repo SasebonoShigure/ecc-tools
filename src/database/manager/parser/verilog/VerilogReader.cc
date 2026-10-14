@@ -40,10 +40,13 @@ unsigned VerilogReader::readVerilog(const char* verilog_file_path)
 {
   unsigned is_ok = 1;
   ECCLOG.info(ecc::Loc::current(), "load verilog file ", verilog_file_path);
-  _verilog_file_ptr = verilog_parse_file(verilog_file_path);
+  _verilog_modules.clear();
+  _top_module = nullptr;
+  _top_module_name.clear();
+  _verilog_file_ptr.reset(verilog_parse_file(verilog_file_path));
 
   if (_verilog_file_ptr) {
-    ParsedVerilogFile* verilog_file = verilog_convert_file(_verilog_file_ptr);
+    ParsedVerilogFile* verilog_file = verilog_convert_file(_verilog_file_ptr.get());
     auto verilog_modules = verilog_file->verilog_modules;
     void* module_ref;
     FOREACH_VERILOG_VEC_ELEM(&verilog_modules, void, module_ref)
@@ -68,7 +71,7 @@ bool VerilogReader::autoTopModule()
   ECCLOG.info(ecc::Loc::current(), "auto set top module ");
   if (_verilog_file_ptr == nullptr)
     return false;
-  ParsedVerilogFile* verilog_file = verilog_convert_file(_verilog_file_ptr);
+  ParsedVerilogFile* verilog_file = verilog_convert_file(_verilog_file_ptr.get());
   auto verilog_modules = verilog_file->verilog_modules;
   if (verilog_modules.len != 1u) {
     return false;
@@ -99,8 +102,8 @@ bool VerilogReader::autoTopModule()
 unsigned VerilogReader::flattenModule(const char* top_module_name)
 {
   _top_module_name = top_module_name;
-  verilog_flatten_module(_verilog_file_ptr, top_module_name);
-  ParsedVerilogFile* verilog_file = verilog_convert_file(_verilog_file_ptr);
+  verilog_flatten_module(_verilog_file_ptr.get(), top_module_name);
+  ParsedVerilogFile* verilog_file = verilog_convert_file(_verilog_file_ptr.get());
 
   auto verilog_modules = verilog_file->verilog_modules;
   void* module_ref;

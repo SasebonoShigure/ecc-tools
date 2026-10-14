@@ -66,7 +66,6 @@ CsrReferenceInput makeReferenceInputTestFixture(std::uint64_t session_token)
   arc.transfer.delay = 0.0;
   arc.transfer.delay_min = 0.0;
   arc.transfer.delay_max = 0.0;
-  arc.output_load = ArcOutputLoadMatrix{};
   input.arcs.push_back(arc);
   input.arc_ids_by_key.push_back({arc.key, ArcId{0}});
 

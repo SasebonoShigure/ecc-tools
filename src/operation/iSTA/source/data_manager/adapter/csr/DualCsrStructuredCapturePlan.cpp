@@ -7,6 +7,7 @@
 #include "DualCsrStructuredCapturePlanInternal.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -16,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "IncreGpuStaBuildConfig.hpp"
 #include "StableArcEndpointRefsInternal.hpp"
 #include "TimingEditCanonicalEncoding.hpp"
 #include "TimingSemanticKey.hpp"
@@ -243,10 +245,12 @@ AffectedCapturePlan makeStructuredCapturePlan(
   }
   std::map<csr::ArcKeyBase, std::uint64_t, ArcBaseLess>
       post_multiplicities;
-  for (const auto& base : affected_bases)
+  for (const auto& base : affected_bases) {
+    const auto appended = appended_counts.find(base);
     post_multiplicities.emplace(
-        base, postMultiplicity(base, appended_counts[base], arc_group_index,
-                               deactivated));
+        base, postMultiplicity(base, appended == appended_counts.end() ? 0 : appended->second,
+                               arc_group_index, deactivated));
+  }
 
   std::vector<AffectedArcCapture> arcs;
   for (const auto& ref : requested) {
@@ -266,39 +270,51 @@ AffectedCapturePlan makeStructuredCapturePlan(
     arcs.push_back({ref, current, base, count->second});
   }
 
-  std::map<timing_edit::StableNodeRef, AffectedNodeModelCapture>
-      role_requests;
-  for (const auto& materialization : batch.tokenMaterializations()) {
-    for (const auto role : {timing_edit::CreatedNodeRole::kInput,
-                            timing_edit::CreatedNodeRole::kOutput}) {
-      const timing_edit::StableNodeRef ref{
-          timing_edit::CreatedNodeRef{materialization.creation_token,
-                                      role}};
-      addNodeModelRequest(role_requests,
-                          nodeModelRequest(ref, batch, staged, view));
+  std::vector<AffectedNodeModelCapture> roles, caps;
+  if constexpr (incregpusta_debug_checks_enabled) {
+    std::map<timing_edit::StableNodeRef, AffectedNodeModelCapture>
+        role_requests;
+    for (const auto& materialization : batch.tokenMaterializations()) {
+      for (const auto role : {timing_edit::CreatedNodeRole::kInput,
+                              timing_edit::CreatedNodeRole::kOutput}) {
+        const timing_edit::StableNodeRef ref{
+            timing_edit::CreatedNodeRef{materialization.creation_token,
+                                        role}};
+        addNodeModelRequest(role_requests,
+                            nodeModelRequest(ref, batch, staged, view));
+      }
     }
-  }
-  auto cap_requests = role_requests;
-  for (const auto& [ref, key] : nodes)
-    if (key.kind == csr::NodeKind::kInstancePin)
+    auto cap_requests = role_requests;
+    for (const auto& [ref, key] : nodes)
+      if (key.kind == csr::NodeKind::kInstancePin)
+        addNodeModelRequest(cap_requests,
+                            nodeModelRequest(ref, batch, staged, view));
+    for (const auto& arc : arcs) {
+      if (arc.expected_post_multiplicity == 0
+          || arc.expected_post_base.kind != csr::ArcKind::kNet
+          || arc.expected_post_base.sink.kind
+                 != csr::NodeKind::kInstancePin
+          || std::ranges::none_of(load_nets, [&](const auto& net) {
+               return net.second == arc.expected_post_base.owner_name;
+             }))
+        continue;
+      const auto ref = stableArcEndpointRefs(arc.ref).sink;
+      auto sink_request
+          = nodeModelRequest(ref, batch, staged, view);
+      if (sink_request.expected_key != arc.expected_post_base.sink)
+        invalid("post net-load sink disagrees with its stable arc ref");
       addNodeModelRequest(cap_requests,
-                          nodeModelRequest(ref, batch, staged, view));
-  for (const auto& arc : arcs) {
-    if (arc.expected_post_multiplicity == 0
-        || arc.expected_post_base.kind != csr::ArcKind::kNet
-        || arc.expected_post_base.sink.kind
-               != csr::NodeKind::kInstancePin
-        || std::ranges::none_of(load_nets, [&](const auto& net) {
-             return net.second == arc.expected_post_base.owner_name;
-           }))
-      continue;
-    const auto ref = stableArcEndpointRefs(arc.ref).sink;
-    auto sink_request
-        = nodeModelRequest(ref, batch, staged, view);
-    if (sink_request.expected_key != arc.expected_post_base.sink)
-      invalid("post net-load sink disagrees with its stable arc ref");
-    addNodeModelRequest(cap_requests,
-                        std::move(sink_request));
+                          std::move(sink_request));
+    }
+
+    for (auto& [ref, request] : role_requests) {
+      static_cast<void>(ref);
+      roles.push_back(std::move(request));
+    }
+    for (auto& [ref, request] : cap_requests) {
+      static_cast<void>(ref);
+      caps.push_back(std::move(request));
+    }
   }
 
   std::vector<AffectedNodeCapture> node_requests;
@@ -307,24 +323,20 @@ AffectedCapturePlan makeStructuredCapturePlan(
   std::vector<AffectedNetCapture> net_requests;
   for (auto& [ref, name] : load_nets)
     net_requests.push_back({std::move(ref), std::move(name)});
-  std::vector<AffectedNodeModelCapture> roles;
-  for (auto& [ref, request] : role_requests) {
-    static_cast<void>(ref);
-    roles.push_back(std::move(request));
-  }
-  std::vector<AffectedNodeModelCapture> caps;
-  for (auto& [ref, request] : cap_requests) {
-    static_cast<void>(ref);
-    caps.push_back(std::move(request));
-  }
-  std::ranges::sort(arcs, [](const auto& lhs, const auto& rhs) {
-    return timing_edit::canonicalStableArcRefBytes(lhs.ref)
-           < timing_edit::canonicalStableArcRefBytes(rhs.ref);
-  });
+  // Cache canonical encodings to avoid allocations on every comparison.
+  std::vector<std::pair<std::vector<std::uint8_t>, std::size_t>> order;
+  order.reserve(arcs.size());
+  for (std::size_t index = 0; index < arcs.size(); ++index)
+    order.emplace_back(timing_edit::canonicalStableArcRefBytes(arcs[index].ref), index);
+  std::ranges::sort(order, {}, &decltype(order)::value_type::first);
+  std::vector<AffectedArcCapture> ordered_arcs;
+  ordered_arcs.reserve(arcs.size());
+  for (const auto& entry : order)
+    ordered_arcs.push_back(std::move(arcs[entry.second]));
   return makeAffectedCapturePlan(batch, std::move(node_requests),
                                  std::move(net_requests),
                                   std::move(roles), std::move(caps),
-                                 std::move(arcs));
+                                 std::move(ordered_arcs));
 }
 
 }  // namespace ista::timing_dual_csr::detail

@@ -1,5 +1,4 @@
 #include "CsrCudaPacking.hpp"
-#include "DualCsrTimingPayloadViewImpl.hpp"
 #include "FlatTimingPayloadView.hpp"
 
 #include <algorithm>
@@ -238,12 +237,6 @@ void packRcGraph(const CsrReferenceInput& input, HostData& data, ModelStorage& m
 {
   packRcGraph(FlatTimingPayloadView(input), input.arcs.size(),
       [&](std::size_t id) { return &input.arcs[id]; }, data, models);
-}
-
-void packRcGraph(const timing_dual_csr::DualCsrState& input, HostData& data, ModelStorage& models)
-{
-  packRcGraph(timing_dual_csr::DualCsrTimingPayloadViewImpl(input), input.arc_slots.size(),
-      [&](std::size_t id) { return input.arc_slots[id].active ? &input.arc_slots[id].payload : nullptr; }, data, models);
 }
 
 }  // namespace ista::csr::cuda_detail

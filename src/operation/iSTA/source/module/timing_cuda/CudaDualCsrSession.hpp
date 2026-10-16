@@ -15,7 +15,6 @@ class Database;
 class StaCsrSessionContext;
 class StaCudaSessionState;
 class PhysicalStaSessionState;
-namespace timing_dual_csr { struct DualCsrState; }
 }
 namespace ista::csr {
 class CudaDualCsrSession;
@@ -52,7 +51,6 @@ class CudaDualCsrSession final
   CudaDualCsrSession& operator=(const CudaDualCsrSession&) = delete;
 
   [[nodiscard]] CudaDualCsrSession stage(const CudaDualCsrPatch& patch, CudaLevelizationMode mode = CudaLevelizationMode::kFull);
-  [[nodiscard]] CudaDualCsrSession stageFull(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);
   [[nodiscard]] bool canPublish(const CudaDualCsrSession& candidate) const noexcept;
   [[nodiscard]] bool publish(CudaDualCsrSession&& candidate) noexcept;
   [[nodiscard]] bool close() noexcept;
@@ -72,12 +70,8 @@ class CudaDualCsrSession final
   friend class ista::StaCudaSessionState;
   friend class ista::PhysicalStaSessionState;
   [[nodiscard]] const std::vector<BufferCandidateTiming>& candidateTiming() const;
-  // The owning transaction already validated and applied this host state.
-  [[nodiscard]] CudaDualCsrSession stageFullCsr(const timing_dual_csr::DualCsrState& input);
-  // Only the direct, validated native-export paths can use these cores.
+  // The native export already validated the initialization input.
   [[nodiscard]] static CudaDualCsrSession fromNativeExport(
-      const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);
-  [[nodiscard]] CudaDualCsrSession stageFullNativeExport(
       const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);
   struct Impl;
   explicit CudaDualCsrSession(std::shared_ptr<Impl> impl) noexcept;

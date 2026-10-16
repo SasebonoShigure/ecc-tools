@@ -311,8 +311,7 @@ static void testTransactions(bool sequential, [[maybe_unused]] bool mixed = fals
                           "direct deferred Q RC differs from native");
               }
               #ifdef ISTA_RC_CUDA_TRANSACTION_TEST
-              auto candidate = mixed ? device.stage(direct_patch, level_mode)
-                                     : csr::CudaDualCsrTestReader::stageFullCsr(device, direct_graph);
+              auto candidate = device.stage(direct_patch, level_mode);
               require(device.canPublish(candidate) && !candidate.canPublish(device) && !candidate.computationCode() && candidate.telemetry().materialize_ms == 0.0,
                       "native RC patch failed or forced full materialization");
               if constexpr (incregpusta_debug_checks_enabled) {

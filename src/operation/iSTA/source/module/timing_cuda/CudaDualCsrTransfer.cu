@@ -56,7 +56,7 @@ void CudaDualCsrSession::Impl::allocate()
     return buffer.data;
   };
   grow(storage->aux_binding_upload, storage->aux_bindings.size());
-  const auto* old = storage->full_graph_pending ? nullptr : origin.get();
+  const auto* old = origin.get();
   grow(storage->graph.out_arcs, host->out_offsets.back(), old ? host->out_offsets[old->view.node_count] : 0);
   grow(storage->graph.in_arcs, host->in_offsets.back(), old ? host->in_offsets[old->view.node_count] : 0);
   grow(storage->graph.arcs, view.arc_count, old ? old->view.arc_count : 0);

@@ -1,6 +1,5 @@
 add_library(ista_cuda STATIC
     CsrCudaPacking.cpp
-    CsrCudaDualPacking.cpp
     CsrCudaParasiticPacking.cpp
     CsrCudaUnpacking.cpp
     CsrCudaRuntime.cu

@@ -222,6 +222,8 @@ struct RcPatchStorage
   std::map<Index, HostRcNet> nets;
   std::vector<RcBindingUpdate> bindings;
   std::vector<RcNetUpdate> views, undo_views;
+  std::vector<RcNetBuffers> work_nets;
+  std::vector<RcNet> work_views;
   DeviceBuffer<RcBindingUpdate> binding_upload;
   DeviceBuffer<RcNetUpdate> view_upload;
   bool buffers_swapped{false}, uploaded{false};
@@ -235,7 +237,7 @@ struct RcPatchStorage
     buffers_swapped = uploaded = false;
   }
 };
-struct FullGraphBuffers
+struct GraphBuffers
 {
   DeviceBuffer<Index> out_offsets, in_offsets, roots, ends;
   DeviceBuffer<NodeSeed> node_seeds;
@@ -259,11 +261,10 @@ struct DeviceStorage
   unsigned kernel_threads{256};  // Test friend may vary launch shape; no runtime mode.
   ModelStorage models;
   Index uploaded_children{}, uploaded_tables{}, uploaded_rc_load_cells{};
-  FullGraphBuffers graph, full_work;
+  GraphBuffers graph;
   HostGraphUndo host_undo;
   PackedPatch patch_uploads;
   RcPatchStorage rc_patch;
-  bool full_graph_pending{false};
   DeviceBuffer<Index> indegrees, frontier_offsets, frontier_candidates, wake_keys;
   DeviceBuffer<int> frontier_count;
   DeviceBuffer<std::byte> algorithm_scratch;
@@ -320,10 +321,8 @@ struct CudaDualCsrSession::Impl
   std::optional<CsrTimingValues> values;
   std::optional<std::vector<BufferCandidateTiming>> candidate_timing;
 
-  Impl(timing_edit::TimingEditSessionToken token, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before);
-  Impl(const timing_dual_csr::DualCsrState& input, std::shared_ptr<Impl> before);
   void initializeFull(cuda_detail::HostData& packed, const InputPortRcThresholds& thresholds);
-  Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before = {});
+  Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water);
   Impl(std::shared_ptr<Impl> before, const CudaDualCsrPatch& patch, CudaLevelizationMode mode);
   static void validatePatch(const Impl& before, const CudaDualCsrPatch& patch);
   static void validateRcPatch(const Impl& before, const CudaDualCsrPatch& patch);

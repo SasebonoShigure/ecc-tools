@@ -19,7 +19,6 @@
 extern thread_local bool ista_test_fail_cuda_allocation;
 
 namespace ista::csr::test {
-void runCudaDualFullContracts();
 using namespace timing_dual_csr;
 using namespace timing_dual_csr::test;
 namespace {
@@ -40,7 +39,6 @@ void auxReuseAndUndo(CudaLevelizationMode mode)
   first.aux_rows = {{NodeId{0}, {}, {ArcId{1}, ArcId{2}}}, {NodeId{1}, {}, {ArcId{3}, ArcId{4}}}};
   auto created = owner.stage(first, mode);
   require(!created.computationCode() && owner.publish(std::move(created)), "Aux reuse fixture could not publish");
-  const auto initial_aux_values = owner.timingValues();
   std::vector<ArcId> order{ArcId{1}, ArcId{2}};
   for (std::uint64_t generation = 1; generation < 6; ++generation) {
     auto reverse = order;
@@ -58,17 +56,6 @@ void auxReuseAndUndo(CudaLevelizationMode mode)
     order = std::move(reverse);
   }
   const auto saved = owner.timingValues();
-  {
-    auto full_abandoned = owner.stageFull(input, baseline);
-    require(!full_abandoned.computationCode(), "full rebuild after Aux updates failed");
-  }
-  require(owner.timingValues() == saved, "abandoned full rebuild discarded Aux state");
-  auto cyclic_full = csr::test::makeCpuReferenceCycleFixture();
-  csr::test::refreshCpuReferenceIdentity(cyclic_full);
-  cyclic_full.source_identity.session_token = input.source_identity.session_token;
-  auto full_failed = owner.stageFull(cyclic_full, {cyclic_full.nodes.size(), cyclic_full.nodes.size(), cyclic_full.arcs.size()});
-  require(full_failed.computationCode() == CsrComputationCode::kCycle && !owner.poisoned(),
-          "full failure after Aux updates changed owner");
   auto reversed = order;
   std::reverse(reversed.begin(), reversed.end());
   auto partial = patchFor(input, 6, water, water);
@@ -96,13 +83,6 @@ void auxReuseAndUndo(CudaLevelizationMode mode)
   auto verify = owner.stage(patchFor(input, 6, water, water), mode);
   require(!verify.computationCode() && verify.timingValues() == saved && owner.publish(std::move(verify)),
           "abandoned Aux growth lost old row storage or prevented continuation");
-  auto full = owner.stageFull(input, baseline);
-  require(!full.computationCode() && owner.publish(std::move(full)), "full replacement of Aux graph failed");
-  first.expected_generation = owner.generation();
-  first.target_generation = timing_edit::TransactionGeneration{owner.generation().value() + 1};
-  auto recreated = owner.stage(first, mode);
-  require(!recreated.computationCode() && recreated.timingValues() == initial_aux_values && owner.publish(std::move(recreated)),
-          "Aux append after full replacement retained stale row counts or bindings");
 }
 
 void hostAllocationRollback(CudaLevelizationMode mode)
@@ -329,6 +309,25 @@ void payloadFailures(CudaLevelizationMode mode)
   require(rejected && !owner.poisoned(), "malformed cell table accepted or poisoned owner");
   require(owner.telemetry().cuda.stream_waits == prior_waits && owner.telemetry().cuda.stream_wait_ms == prior_wait_ms,
           "input rejection performed an unnecessary CUDA wait");
+  auto invalid_slew = expected;
+  ista::csr::test::mutateChildren(invalid_slew.transfer, [](auto& children) {
+    for (auto& child : children)
+      for (unsigned output = 0; output < kTransitionCount; ++output) {
+        child.signature.slew_tables[output] = {true, TableVariable::kNone, TableVariable::kNone};
+        child.slew_tables[output] = {true, TableVariable::kNone, TableVariable::kNone, {}, {-1.0}};
+      }
+  });
+  patch.payload_changes = {{arc.id, expected, invalid_slew}};
+  auto model_failure = owner.stage(patch, mode);
+  require(model_failure.computationCode() == CsrComputationCode::kNumericFailure
+              && model_failure.telemetry().grown_buffers > 0 && !owner.publish(std::move(model_failure))
+              && model_failure.close() && !owner.poisoned(),
+          "model growth numeric failure did not restore the committed device state");
+  {
+    auto retry = owner.stage(patchFor(input, 0, water, water), mode);
+    require(!retry.computationCode() && retry.timingValues() == committed,
+            "model growth rollback damaged the following computation");
+  }
   auto huge = expected;
   ista::csr::test::mutateChildren(huge.transfer, [&](auto& children) {
     for (auto& child : children)
@@ -343,71 +342,6 @@ void payloadFailures(CudaLevelizationMode mode)
   require(failure.close() && !owner.poisoned(), "closing numeric failure destroyed the healthy runtime owner");
   auto healthy = owner.stage(patchFor(input, 0, water, water), mode);
   require(!healthy.computationCode() && owner.publish(std::move(healthy)), "healthy replay after numeric rejection failed");
-}
-
-void persistentFullRebuild()
-{
-  auto input = csr::test::makeCpuReferenceCellFixture();
-  const timing_edit::AppendOnlyHighWater water{input.nodes.size(), input.nodes.size(), input.arcs.size()};
-  CudaDualCsrSession owner(input, water);
-  const auto expected = owner.timingValues();
-  const auto baseline_upload = owner.telemetry().cuda.h2d_bytes;
-  const auto levels_only = sizeof(cuda_detail::Status) + sizeof(cuda_detail::Index)
-      + (input.nodes.size() * (incregpusta_debug_checks_enabled ? 2 : 1) + expected.level_offsets.size()) * sizeof(cuda_detail::Index);
-  for (unsigned batch = 0; batch < 5; ++batch) {
-    auto candidate = owner.stageFull(input, water);
-    require(!candidate.computationCode() && candidate.telemetry().cuda.d2h_bytes == levels_only + sizeof(cuda_detail::Status) + candidate.telemetry().cuda.levelization_decision_bytes,
-            "full rebuild materialized unrequested timing");
-    require(candidate.telemetry().cuda.h2d_bytes < baseline_upload,
-            "full rebuild retransmitted unchanged immutable models");
-    if (batch >= 2)
-      require(candidate.telemetry().cuda.allocations == 0 && candidate.telemetry().cuda.d2d_bytes == 0,
-              "steady full rebuild reallocated or copied the device graph");
-    require(owner.publish(std::move(candidate)), "persistent full publication failed");
-  }
-  require(owner.timingValues() == expected, "persistent full rebuild changed timing");
-  const auto transferred = owner.telemetry().cuda.d2h_bytes;
-  require(owner.timingValues() == expected && owner.telemetry().cuda.d2h_bytes == transferred,
-          "repeated full query downloaded timing twice");
-  {
-    auto abandoned = owner.stageFull(input, water);
-    require(!abandoned.computationCode(), "full abandonment preparation failed");
-  }
-  require(!owner.poisoned() && owner.timingValues() == expected, "abandoned full rebuild changed committed timing");
-  auto numeric = input;
-  auto& arc = *std::ranges::find(numeric.arcs, ArcKind::kCell, &ArcRecord::kind);
-  ista::csr::test::mutateChildren(arc.transfer, [&](auto& children) {
-    for (auto& child : children)
-    for (std::size_t output = 0; output < kTransitionCount; ++output) {
-      child.signature.slew_tables[output] = {true, TableVariable::kNone, TableVariable::kNone};
-      child.slew_tables[output] = {true, TableVariable::kNone, TableVariable::kNone, {}, {-1.0}};
-    }
-  });
-  arc.key.base.library_arcs.clear();
-  for (const auto& child : arc.transfer.children())
-    arc.key.base.library_arcs.push_back(child.signature);
-  numeric.arc_ids_by_key[arc.id.value()].key = arc.key;
-  numeric.referenced_library_cells.front().cell_arcs.front().transfer = arc.transfer;
-  csr::test::refreshCpuReferenceIdentity(numeric);
-  numeric.source_identity.session_token = input.source_identity.session_token;
-  auto numeric_failure = owner.stageFull(numeric, water);
-  require(numeric_failure.computationCode() == CsrComputationCode::kNumericFailure
-              && numeric_failure.telemetry().grown_buffers > 0 && !owner.poisoned()
-              && owner.timingValues() == expected,
-          "full model growth failure changed committed results");
-  auto original_model = owner.stageFull(input, water);
-  require(!original_model.computationCode() && original_model.timingValues() == expected && owner.publish(std::move(original_model)),
-          "old models failed after rejected full model growth");
-  auto cyclic = csr::test::makeCpuReferenceCycleFixture();
-  csr::test::refreshCpuReferenceIdentity(cyclic);
-  cyclic.source_identity.session_token = input.source_identity.session_token;
-  auto rejected = owner.stageFull(cyclic, {cyclic.nodes.size(), cyclic.nodes.size(), cyclic.arcs.size()});
-  require(rejected.computationCode() == CsrComputationCode::kCycle && !owner.publish(std::move(rejected))
-              && !owner.poisoned() && owner.timingValues() == expected,
-          "failed full rebuild lost the previous generation");
-  auto next = owner.stage(patchFor(input, owner.generation().value(), water, water), CudaLevelizationMode::kMixed);
-  require(!next.computationCode() && next.timingValues() == expected && owner.publish(std::move(next)),
-          "incremental commit after full rollback used stale graph storage");
 }
 
 void candidateReadback(CudaLevelizationMode mode)
@@ -513,8 +447,6 @@ void runCudaLazySequence(CudaLevelizationMode mode)
 void runCudaDualCsrStorageContracts(CudaLevelizationMode mode)
 {
   runCudaParallelPatchContracts(mode);
-  persistentFullRebuild();
-  runCudaDualFullContracts();
   runCudaLazySequence(mode);
   candidateReadback(mode);
   auxReuseAndUndo(mode);

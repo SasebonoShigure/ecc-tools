@@ -12,8 +12,6 @@ class CudaDualCsrTestReader final
   // Component-only RC inputs while the public unsupported gate remains closed.
   static CudaDualCsrSession computeRc(const CsrReferenceInput& input, unsigned threads,
       std::optional<timing_edit::AppendOnlyHighWater> high_water = std::nullopt);
-  static CudaDualCsrSession stageRc(CudaDualCsrSession& owner, const CsrReferenceInput& input);
-  static CudaDualCsrSession stageFullCsr(CudaDualCsrSession& owner, const timing_dual_csr::DualCsrState& input);
   static void setKernelThreads(CudaDualCsrSession& session, unsigned threads);
   static nlohmann::json capture(const CudaDualCsrSession& session);
   static const CsrTimingValues& materializeWithLevelOwnershipCheck(CudaDualCsrSession& session);

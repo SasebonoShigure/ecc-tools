@@ -43,9 +43,7 @@ void launchShapeTiming(CudaLevelizationMode mode)
       CudaDualCsrSession owner(input, water);
       CudaDualCsrTestReader::setKernelThreads(owner, threads);
       for (unsigned repeat = 0; repeat < 3; ++repeat) {
-        auto next = mode == CudaLevelizationMode::kFull
-            ? owner.stageFull(input, water)
-            : owner.stage(patchFor(input, owner.generation().value(), water, water), mode);
+        auto next = owner.stage(patchFor(input, owner.generation().value(), water, water), mode);
         require(!next.computationCode() && next.timingValues() == static_cast<const CsrTimingValues&>(*timing)
                     && owner.publish(std::move(next)), "parallel timing/winner differs by launch shape or repetition");
       }

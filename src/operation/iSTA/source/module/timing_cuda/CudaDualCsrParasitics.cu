@@ -21,14 +21,10 @@ void CudaDualCsrSession::Impl::transferRc(HostData& packed)
     auto& source = packed.rc_nets[index];
     auto& target = graph.rc_nets[index];
     auto& descriptor = graph.rc_upload[index];
-    if (target.owner != source.owner) {
-      // A failed partial upload must not make this work slot appear reusable.
-      target.owner.reset();
-      packRcTree(*source.owner, source.tree);
-      std::copy(source.tree.lanes.begin(), source.tree.lanes.end(), descriptor.lanes);
-      grow(target.models, source.tree.models.size());
-      grow(target.terminals, source.tree.terminals.size());
-    }
+    packRcTree(*source.owner, source.tree);
+    std::copy(source.tree.lanes.begin(), source.tree.lanes.end(), descriptor.lanes);
+    grow(target.models, source.tree.models.size());
+    grow(target.terminals, source.tree.terminals.size());
     descriptor.models = target.models.data;
     descriptor.terminals = target.terminals.data;
     descriptor.child_count = source.child_count;
@@ -38,18 +34,12 @@ void CudaDualCsrSession::Impl::transferRc(HostData& packed)
     descriptor.initialize_arcs = grow(target.initialize_arcs, source.initialize_arcs.size());
     descriptor.initialize_count = source.initialize_arcs.size();
   }
-  // Spare capacities may remain, but old graph versions must not retain RC
-  // owners after their last live use. The other full graph owns rollback input.
-  for (std::size_t index = packed.rc_nets.size(); index < graph.rc_nets.size(); ++index)
-    graph.rc_nets[index].owner.reset();
   bindGraph();
   for (std::size_t index = 0; index < packed.rc_nets.size(); ++index) {
     const auto& source = packed.rc_nets[index];
     const auto& target = graph.rc_nets[index];
-    if (target.owner != source.owner) {
-      memory.upload(source.tree.models, target.models.data);
-      memory.upload(source.tree.terminals, target.terminals.data);
-    }
+    memory.upload(source.tree.models, target.models.data);
+    memory.upload(source.tree.terminals, target.terminals.data);
     memory.upload(source.rows, target.rows.data);
     memory.upload(source.initialize_arcs, target.initialize_arcs.data);
   }

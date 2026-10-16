@@ -34,9 +34,6 @@ void CudaDualCsrSession::Impl::transferRcPatch(const Impl& prior)
   if (!view.rc_net_count) return;
   auto& patch = storage->rc_patch;
   auto& graph = storage->graph;
-  // full and targeted are exclusive. Reuse the existing full work graph's
-  // per-net capacities instead of keeping another pair of RC buffer sets.
-  auto& work = storage->full_work;
   auto grow = [&]<class T>(DeviceBuffer<T>& buffer, Index count, Index preserve = 0) {
     if (memory.ensure(buffer, count, preserve)) ++telemetry.grown_buffers;
     return buffer.data;
@@ -45,15 +42,15 @@ void CudaDualCsrSession::Impl::transferRcPatch(const Impl& prior)
   grow(graph.rc_bindings, host->rc.bindings.size(), storage->host_undo.rc_binding_count);
   grow(graph.rc_net_by_node, view.node_count, prior.view.node_count);
   if (graph.rc_nets.size() < view.rc_net_count) graph.rc_nets.resize(view.rc_net_count);
-  if (work.rc_nets.size() < view.rc_net_count) work.rc_nets.resize(view.rc_net_count);
+  if (patch.work_nets.size() < view.rc_net_count) patch.work_nets.resize(view.rc_net_count);
   graph.rc_upload.resize(view.rc_net_count);
-  if (work.rc_upload.size() < view.rc_net_count) work.rc_upload.resize(view.rc_net_count);
+  if (patch.work_views.size() < view.rc_net_count) patch.work_views.resize(view.rc_net_count);
   patch.views.reserve(patch.nets.size());
   patch.undo_views.reserve(patch.nets.size());
   grow(patch.view_upload, patch.nets.size());
   grow(patch.binding_upload, patch.bindings.size());
   for (const auto& [index, source] : patch.nets) {
-    auto& target = work.rc_nets[index];
+    auto& target = patch.work_nets[index];
     target.owner.reset();
     RcNet descriptor;
     std::copy(source.tree.lanes.begin(), source.tree.lanes.end(), descriptor.lanes);
@@ -65,18 +62,17 @@ void CudaDualCsrSession::Impl::transferRcPatch(const Impl& prior)
     descriptor.drivers = grow(target.drivers, 4);
     descriptor.initialize_arcs = grow(target.initialize_arcs, source.initialize_arcs.size());
     descriptor.initialize_count = source.initialize_arcs.size();
-    work.rc_upload[index] = descriptor;
+    patch.work_views[index] = descriptor;
     target.owner = source.owner;
     patch.views.push_back({index, descriptor});
     if (index < prior.view.rc_net_count) patch.undo_views.push_back({index, graph.rc_upload[index]});
   }
-  // Everything that can allocate has completed. Buffer and descriptor swaps
-  // are paired; lanes must follow their owner for later full reuse.
+  // Allocate before swapping; descriptors must follow their buffer owner.
   patch.buffers_swapped = true;
   for (const auto& [index, source] : patch.nets) {
     static_cast<void>(source);
-    std::swap(graph.rc_nets[index], work.rc_nets[index]);
-    std::swap(graph.rc_upload[index], work.rc_upload[index]);
+    std::swap(graph.rc_nets[index], patch.work_nets[index]);
+    std::swap(graph.rc_upload[index], patch.work_views[index]);
   }
   bindGraph();
   for (const auto& [index, source] : patch.nets) {
@@ -105,8 +101,8 @@ void CudaDualCsrSession::Impl::restoreRcPatch(CsrCudaTelemetry& cleanup)
   if (patch.buffers_swapped) {
     for (const auto& [index, source] : patch.nets) {
       static_cast<void>(source);
-      std::swap(storage->graph.rc_nets[index], storage->full_work.rc_nets[index]);
-      std::swap(storage->graph.rc_upload[index], storage->full_work.rc_upload[index]);
+      std::swap(storage->graph.rc_nets[index], storage->rc_patch.work_nets[index]);
+      std::swap(storage->graph.rc_upload[index], storage->rc_patch.work_views[index]);
     }
     storage->graph.rc_upload.resize(patch.old_net_count);
     patch.buffers_swapped = false;
@@ -119,7 +115,7 @@ void CudaDualCsrSession::Impl::clearRcPatch() noexcept
 {
   for (const auto& [index, source] : storage->rc_patch.nets) {
     static_cast<void>(source);
-    if (index < storage->full_work.rc_nets.size()) storage->full_work.rc_nets[index].owner.reset();
+    if (index < storage->rc_patch.work_nets.size()) storage->rc_patch.work_nets[index].owner.reset();
   }
   storage->rc_patch.clear();
 }

@@ -10,8 +10,6 @@
 #include "FlatTimingPayloadView.hpp"
 #include "CudaDualCsrTestReader.hpp"
 #include "CsrRcTimingComparison.hpp"
-#include "DualCsrEdgeViewImpl.hpp"
-#include "DualCsrTimingPayloadViewImpl.hpp"
 
 namespace ista::csr {
 namespace {
@@ -210,6 +208,11 @@ void rcGrowth(CudaLevelizationMode mode)
   next.out_arc_ids = next.in_arc_ids = {ArcId{0}, ArcId{1}, ArcId{2}, ArcId{3}, ArcId{4}, ArcId{5}};
   next.ordered_root_ids = {NodeId{0}, NodeId{7}};
   next.ordered_end_ids = {NodeId{3}, NodeId{6}};
+  auto cell = next.referenced_library_cells.front();
+  cell.cell_name = "0_appended_load_cell";
+  for (std::size_t id = input.nodes.size(); id < next.nodes.size(); ++id)
+    if (!next.nodes[id].is_port) next.nodes[id].instance_cell = cell.cell_name;
+  next.referenced_library_cells.push_back(std::move(cell));
   auto owner = CudaDualCsrTestReader::computeRc(input, 64);
   const auto saved = owner.timingValues();
   auto patch = rcPatch(input, next, 0);
@@ -264,56 +267,11 @@ void rcGrowth(CudaLevelizationMode mode)
   auto committed = owner.stage(patch, mode);
   require(!committed.computationCode() && owner.publish(std::move(committed)), "RC growth after rollback did not commit");
   const auto current = owner.timingValues();
-  auto full = CudaDualCsrTestReader::stageRc(owner, next);
-  require(!full.computationCode() && full.timingValues() == current && owner.publish(std::move(full)),
-          "full after RC capacity growth differs");
+  auto replay = owner.stage(rcPatch(next, next, owner.generation().value()), mode);
+  require(!replay.computationCode() && replay.timingValues() == current && owner.publish(std::move(replay)),
+          "RC replay after capacity growth differs");
   require(owner.close(), "RC capacity growth close failed");
 }
-void directFullRc(CudaDualCsrSession& owner, const CsrReferenceInput& input)
-{
-  using namespace timing_dual_csr;
-  DualCsrState graph;
-  graph.session_token = timing_edit::TimingEditSessionToken{input.source_identity.session_token};
-  graph.generation = timing_edit::TransactionGeneration{owner.generation().value() + 1};
-  graph.nodes = input.nodes;
-  graph.reference_payload = makeDualCsrReferencePayload(input);
-  FlatCsrEdgeView flat(input);
-  for (const auto& arc : input.arcs)
-    graph.arc_slots.push_back({flat.arc(arc.id).value(), true});
-  // A retired RC owner must not conflict with the live driver's new model.
-  auto retired = graph.arc_slots.front();
-  retired.active = false;
-  retired.payload.parasitic.tree = std::make_shared<CsrParasiticTree>(*retired.payload.parasitic.tree);
-  graph.arc_slots.push_back(std::move(retired));
-  graph.high_water = {graph.nodes.size(), 0, graph.arc_slots.size()};
-  graph.base_out.row_offsets = input.out_row_offsets;
-  graph.base_in.row_offsets = input.in_row_offsets;
-  for (const auto id : input.out_arc_ids) graph.base_out.physical_slots.push_back(id);
-  for (const auto id : input.in_arc_ids) graph.base_in.physical_slots.push_back(id);
-  graph.aux_out.source_to_aux_row.assign(graph.nodes.size(), -1);
-  graph.telemetry.logical_edges_after = input.arcs.size();
-  // A newly referenced load cell is appended, not inserted into a sorted
-  // model array; use it on the existing component fixture's instance.
-  auto cell = graph.reference_payload.referenced_library_cells.front();
-  const auto old_name = cell.cell_name;
-  cell.cell_name = "0_appended_load_cell";
-  for (auto& node : graph.nodes)
-    if (node.instance_cell == old_name) node.instance_cell = cell.cell_name;
-  for (auto& instance : graph.reference_payload.instances)
-    if (instance.cell_name == old_name) instance.cell_name = cell.cell_name;
-  graph.reference_payload.referenced_library_cells.push_back(std::move(cell));
-  auto candidate = CudaDualCsrTestReader::stageFullCsr(owner, graph);
-  require(!candidate.computationCode() && candidate.telemetry().materialize_ms == 0.0,
-          "direct full RC rebuild failed or eagerly read timing");
-  if constexpr (incregpusta_debug_checks_enabled) {
-    const auto computed = detail::computeCsrCpuReferenceForStage(DualCsrEdgeViewImpl(graph), DualCsrTimingPayloadViewImpl(graph)).computation;
-    const auto* reference = std::get_if<CsrTimingResult>(&computed.outcome);
-    require(reference != nullptr, "direct full RC independent CPU computation failed");
-    test::compareRcTiming(candidate.timingValues(), *reference);
-  }
-  require(owner.publish(std::move(candidate)), "direct full RC publication failed");
-}
-
 void targetedRc()
 {
   for (auto mode : {CudaLevelizationMode::kFull, CudaLevelizationMode::kMixed})
@@ -358,15 +316,13 @@ void targetedRc()
       }
       const auto saved = owner.timingValues();
       {
-        auto full = CudaDualCsrTestReader::stageRc(owner, input);
-        require(!full.computationCode() && full.timingValues() == saved,
-                "full after targeted RC used stale model lanes or rows");
+        auto replay = owner.stage(rcPatch(input, input, owner.generation().value()), mode);
+        require(!replay.computationCode() && replay.timingValues() == saved,
+                "RC replay used stale model lanes or rows");
       }
-      auto full = CudaDualCsrTestReader::stageRc(owner, input);
-      require(!full.computationCode() && owner.publish(std::move(full)), "full RC commit after targeted failed");
       auto changed = rcFixture(2, false, seed_mode);
       auto final = owner.stage(rcPatch(input, changed, owner.generation().value()), mode);
-      require(!final.computationCode() && owner.publish(std::move(final)), "targeted RC after full failed");
+      require(!final.computationCode() && owner.publish(std::move(final)), "targeted RC after abandoned replay failed");
       require(owner.close(), "targeted RC close failed");
     }
 }
@@ -404,7 +360,6 @@ void runCudaRcPropagationContracts()
         if (threads == 256)
           require(actual == previous, "RC full result changed with launch shape");
         previous = actual;
-        directFullRc(session, input);
         require(session.close(), "RC CUDA close failed");
       }
     }
@@ -412,19 +367,19 @@ void runCudaRcPropagationContracts()
   auto owner = CudaDualCsrTestReader::computeRc(input, 64);
   const auto expected = owner.timingValues();
   for (unsigned batch = 0; batch < 4; ++batch) {
-    auto next = CudaDualCsrTestReader::stageRc(owner, input);
+    auto next = owner.stage(rcPatch(input, input, owner.generation().value()), CudaLevelizationMode::kMixed);
     require(!next.computationCode() && next.telemetry().materialize_ms == 0.0,
-            "RC full commit required eager timing materialization");
+            "RC patch commit required eager timing materialization");
     if (batch >= 2)
       require(next.telemetry().cuda.allocations == 0 && next.telemetry().cuda.d2d_bytes == 0,
-              "unchanged RC full rebuild reallocated or copied graph");
-    require(owner.publish(std::move(next)), "RC full commit failed");
+              "unchanged RC patch reallocated or copied graph");
+    require(owner.publish(std::move(next)), "RC patch commit failed");
   }
   const auto generation = owner.generation();
   const auto changed = rcFixture(1, false);
   {
-    auto abandoned = CudaDualCsrTestReader::stageRc(owner, changed);
-    require(!abandoned.computationCode(), "changed RC full prepare failed");
+    auto abandoned = owner.stage(rcPatch(input, changed, owner.generation().value()), CudaLevelizationMode::kMixed);
+    require(!abandoned.computationCode(), "changed RC patch prepare failed");
   }
   require(owner.generation() == generation && !owner.poisoned() && owner.timingValues() == expected,
           "abandoned RC model change lost committed result");
@@ -435,13 +390,13 @@ void runCudaRcPropagationContracts()
   bad_tree->lanes.fill(bad_model);
   invalid.arcs[1].parasitic = {bad_tree, 0};
   invalid.arcs[2].parasitic = {bad_tree, 1};
-  auto failed = CudaDualCsrTestReader::stageRc(owner, invalid);
+  auto failed = owner.stage(rcPatch(input, invalid, owner.generation().value()), CudaLevelizationMode::kMixed);
   require(failed.computationCode() == CsrComputationCode::kNumericFailure
               && !owner.publish(std::move(failed)) && !owner.poisoned() && owner.timingValues() == expected,
           "RC numeric failure lost old result or published partial state");
   require(failed.close(), "RC failed candidate cleanup damaged owner");
-  auto recovered = CudaDualCsrTestReader::stageRc(owner, changed);
-  require(!recovered.computationCode() && owner.publish(std::move(recovered)), "RC full commit after rollback failed");
+  auto recovered = owner.stage(rcPatch(input, changed, owner.generation().value()), CudaLevelizationMode::kMixed);
+  require(!recovered.computationCode() && owner.publish(std::move(recovered)), "RC patch commit after rollback failed");
   if constexpr (incregpusta_debug_checks_enabled) {
     FlatCsrEdgeView edges(changed);
     FlatTimingPayloadView payload(changed);
@@ -450,6 +405,6 @@ void runCudaRcPropagationContracts()
     require(result != nullptr, "RC recovered CPU reference failed");
     test::compareRcTiming(owner.timingValues(), *result);
   }
-  require(owner.close(), "RC full lifecycle close failed");
+  require(owner.close(), "RC patch lifecycle close failed");
 }
 }  // namespace ista::csr

@@ -15,30 +15,15 @@ double elapsed(Clock::time_point start)
 }
 
 }  // namespace
-CudaDualCsrSession::Impl::Impl(timing_edit::TimingEditSessionToken session_token, timing_edit::AppendOnlyHighWater water,
-                             std::shared_ptr<Impl> before)
-    : storage(before ? before->storage : std::make_shared<DeviceStorage>(telemetry.cuda)), memory(storage->memory),
-      result_index(before ? 1 - before->result_index : 0), domain_index(before ? 1 - before->domain_index : 0), token(session_token),
-      generation(before ? before->generation.value() + 1 : 0), high_water(water), runtime_owner(!before), origin(std::move(before))
+CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water)
+    : storage(std::make_shared<DeviceStorage>(telemetry.cuda)), memory(storage->memory),
+      token(input.source_identity.session_token), generation(0), high_water(water), runtime_owner(true)
 {
   describeDevice(telemetry.cuda);
-  memory.bindTelemetry(telemetry.cuda);
-}
-CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water, std::shared_ptr<Impl> before)
-    : Impl(timing_edit::TimingEditSessionToken{input.source_identity.session_token}, water, std::move(before))
-{
   const auto start = Clock::now();
   auto packed = pack(input, storage->models);
   telemetry.cuda.encode_ms = elapsed(start);
   initializeFull(packed, input.parasitics.input_port_thresholds);
-}
-CudaDualCsrSession::Impl::Impl(const timing_dual_csr::DualCsrState& input, std::shared_ptr<Impl> before)
-    : Impl(input.session_token, input.high_water, std::move(before))
-{
-  const auto start = Clock::now();
-  auto packed = pack(input, storage->models);
-  telemetry.cuda.encode_ms = elapsed(start);
-  initializeFull(packed, input.reference_payload.parasitics.input_port_thresholds);
 }
 void CudaDualCsrSession::Impl::initializeFull(HostData& packed, const InputPortRcThresholds& thresholds)
 {
@@ -71,12 +56,6 @@ void CudaDualCsrSession::Impl::initializeFull(HostData& packed, const InputPortR
   view.end_count = host->ends.size();
   view.endpoint_count = packed.endpoints.size();
   table_count = storage->models.tables.size();
-  if (origin) {
-    std::swap(storage->graph, storage->full_work);
-    storage->full_graph_pending = true;
-    for (auto& row : storage->graph.aux_storage)
-      row.count = 0;
-  }
   allocate();
   try {
     memory.record(0);
@@ -106,8 +85,6 @@ void CudaDualCsrSession::Impl::initializeFull(HostData& packed, const InputPortR
     for (std::size_t index = 0; index < packed.rc_nets.size(); ++index)
       storage->graph.rc_nets[index].owner = packed.rc_nets[index].owner;
     host->rc = std::move(packed.rc);
-    if (code && origin)
-      cancel();
   } catch (...) {
     try {
       memory.synchronize();
@@ -158,10 +135,6 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
     return cleanup;
   }
   memory.bindTelemetry(cleanup);
-  if (storage->full_graph_pending) {
-    std::swap(storage->graph, storage->full_work);
-    storage->full_graph_pending = false;
-  }
   bindGraph();
   try {
     restoreRcPatch(cleanup);
@@ -446,70 +419,6 @@ CudaDualCsrSession CudaDualCsrSession::stage(const CudaDualCsrPatch& patch, Cuda
     throw;
   }
 }
-CudaDualCsrSession CudaDualCsrSession::stageFull(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water)
-{
-  const auto start = Clock::now();
-  demand(validateReferenceInput(input).empty(), "CUDA full rebuild malformed input");
-  auto candidate = stageFullNativeExport(input, water);
-  candidate._impl->telemetry.cuda.end_to_end_ms = elapsed(start);
-  return candidate;
-}
-CudaDualCsrSession CudaDualCsrSession::stageFullNativeExport(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water)
-{
-  const auto start = Clock::now();
-  requireCommitted();
-  demand(_impl->generation.value() != absent && input.source_identity.session_token == _impl->token.value(),
-         "CUDA full rebuild session/generation mismatch");
-  demand(water.node_slots == input.nodes.size() && water.arc_slots == input.arcs.size()
-             && input.unsupported_reasons.empty(),
-         "CUDA full rebuild malformed or unsupported input");
-  _impl->storage->pending = true;
-  try {
-    CudaDualCsrSession candidate(std::make_shared<Impl>(input, water, _impl));
-    candidate._impl->telemetry.cuda.end_to_end_ms = elapsed(start);
-    return candidate;
-  } catch (const CudaAllocationError&) {
-    _impl->restorePending();
-    throw;
-  } catch (const CudaError&) {
-    _impl->poisoned = true;
-    _impl->storage->poisoned = true;
-    _impl->restorePending();
-    throw;
-  } catch (...) {
-    _impl->restorePending();
-    throw;
-  }
-}
-CudaDualCsrSession CudaDualCsrSession::stageFullCsr(const timing_dual_csr::DualCsrState& input)
-{
-  const auto start = Clock::now();
-  requireCommitted();
-  demand(_impl->generation.value() != absent && input.session_token == _impl->token
-             && input.generation.value() == _impl->generation.value() + 1,
-         "CUDA full CSR rebuild session/generation mismatch");
-  demand(input.high_water.node_slots >= _impl->high_water.node_slots
-             && input.high_water.net_slots >= _impl->high_water.net_slots
-             && input.high_water.arc_slots >= _impl->high_water.arc_slots,
-         "CUDA full CSR rebuild cannot shrink stable slots");
-  _impl->storage->pending = true;
-  try {
-    CudaDualCsrSession candidate(std::make_shared<Impl>(input, _impl));
-    candidate._impl->telemetry.cuda.end_to_end_ms = elapsed(start);
-    return candidate;
-  } catch (const CudaAllocationError&) {
-    _impl->restorePending();
-    throw;
-  } catch (const CudaError&) {
-    _impl->poisoned = true;
-    _impl->storage->poisoned = true;
-    _impl->restorePending();
-    throw;
-  } catch (...) {
-    _impl->restorePending();
-    throw;
-  }
-}
 bool CudaDualCsrSession::canPublish(const CudaDualCsrSession& candidate) const noexcept
 {
   if (!_impl || !candidate._impl || _impl->poisoned || _impl->storage->poisoned || !_impl->storage->pending || _impl->origin || candidate._impl->poisoned || candidate._impl->origin.get() != _impl.get()
@@ -527,7 +436,6 @@ bool CudaDualCsrSession::publish(CudaDualCsrSession&& candidate) noexcept
   _impl->storage->host_undo.clear();
   candidate._impl->clearRcPatch();
   _impl->storage->pending = false;
-  _impl->storage->full_graph_pending = false;
   _impl->storage->undo_captured = false;
   _impl->storage->slot_undo_count = _impl->storage->arc_undo_count = 0;
   _impl.swap(candidate._impl);

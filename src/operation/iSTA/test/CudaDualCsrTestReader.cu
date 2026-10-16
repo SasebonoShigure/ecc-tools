@@ -31,14 +31,6 @@ CudaDualCsrSession CudaDualCsrTestReader::computeRc(const CsrReferenceInput& inp
   state->execute();
   return CudaDualCsrSession(std::move(state));
 }
-CudaDualCsrSession CudaDualCsrTestReader::stageRc(CudaDualCsrSession& owner, const CsrReferenceInput& input)
-{
-  return owner.stageFullNativeExport(input, {input.nodes.size(), 0, input.arcs.size()});
-}
-CudaDualCsrSession CudaDualCsrTestReader::stageFullCsr(CudaDualCsrSession& owner, const timing_dual_csr::DualCsrState& input)
-{
-  return owner.stageFullCsr(input);
-}
 void CudaDualCsrTestReader::setKernelThreads(CudaDualCsrSession& session, unsigned threads)
 {
   cuda_detail::demand(session._impl && !session._impl->storage->pending && threads > 0 && threads <= 1024,

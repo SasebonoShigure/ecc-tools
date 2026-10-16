@@ -7,6 +7,7 @@
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "NativeFullEditPreparer.hpp"
 #include "ProductionFreshSessionLoader.hpp"
+#include "PublicTimingJson.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 
 namespace ista::test {
@@ -36,7 +37,9 @@ inline void checkNativeFullTransactions(const timing_edit::oracle::ProductionFre
   require(plans.size() >= 2, "transaction checks require two batches");
   auto state = NativeFullEditPreparer::bindBaseline(view.database, view.reference_input, program.baseline());
   const auto baseline = csr::canonicalReferenceInputBytes(view.reference_input);
-  const auto public_baseline = TimingReporterProbeAccess::read();
+  require(view.database.get_timing_path_group_list().empty(), "timing-only baseline prepared reports eagerly");
+  const auto public_baseline = analyzeAndCapturePublicTiming();
+  require(!public_baseline.at("paths").at("paths").empty(), "baseline report fixture has no path");
   const auto restored = [&] {
     auto exported = csr::exportCsrReferenceInputCandidate(view.database, view.reference_input.analysis_context, view.session_token);
     require(std::holds_alternative<csr::CsrReferenceInput>(exported), "rollback export failed");

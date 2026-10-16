@@ -9,6 +9,7 @@
 #include "ProductionFreshSessionLoader.hpp"
 #include "StaProductionLifecycle.hpp"
 #include "DelayCalculator.hpp"
+#include "TimingAnalyzer.hpp"
 #include <fstream>
 #include <iostream>
 
@@ -17,7 +18,16 @@ void compareReport(const timing_edit::oracle::ProductionFreshSessionView& view, 
 {
   const auto& input = view.reference_input;
   auto& database = view.database;
-  const auto values = materializeTimingResultFromNativeOracle(input, readNativeTimingOracle(database));
+  requireTimingScatter(database.get_timing_path_group_list().empty(),
+                       "timing-only baseline prepared report groups without a consumer");
+  const auto propagated = readNativeTimingOracle(database);
+  const auto prepared = executeStaLifecyclePipeline(
+      {{"Prepare native report", [] { TimingAnalyzer::initInst(); }, [] { STATA.analyzePropagatedTiming(); },
+        [] { TimingAnalyzer::destroyInst(); }}},
+      StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
+  requireTimingScatter(prepared.succeeded, prepared.message);
+  requireNativeTimingOracleEqual(readNativeTimingOracle(database), propagated, "report preparation changed propagated timing");
+  const auto values = materializeTimingResultFromNativeOracle(input, propagated);
   const auto expected = TimingReporterProbeAccess::read();
   if (output) {
     std::ofstream file;

@@ -6,7 +6,6 @@
 #include "ParasiticNet.hpp"
 #include "TimingEditResolver.hpp"
 
-namespace ista::csr { struct CsrReferenceInput; }
 namespace ista::timing_edit {
 class NativeFullEditPreparer;
 class NativeFullEditBatch;
@@ -58,8 +57,7 @@ class NativeFullEditBatch final
 class NativeFullEditPreparer final
 {
  public:
-  static NativeFullEditState bindBaseline(Database& database, const csr::CsrReferenceInput& input,
-                                          const BaselineSemanticIdentity& baseline);
+  static NativeFullEditState bindBaseline(Database& database, const NativeExecutionAuthority& authority);
   static NativeFullEditBatch prepare(Database& database, const NativeExecutionAuthority& authority,
                                       EditBatch edits, NativeFullEditState& state,
                                       std::map<std::string, ParasiticNet> prepared_rc = {});

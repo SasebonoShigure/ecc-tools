@@ -138,6 +138,54 @@ void cpuBaselineModes()
     require(session.closeAndRelease().ok(), "CPU physical baseline close failed");
   }
 }
+void recoveryModelIdentity()
+{
+  for (int scenario : {0, 1, 2}) {
+    NativeTransactionRuntime runtime;
+    installNativeTransactionBaseline();
+    PhysicalDesign physical;
+    RecoveryDirectory initial, checkpoint;
+    auto analysis = editTestAnalysisContext(); analysis.rc_corner = "pre_route";
+    const StaExecutionRequest request{StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError};
+    {
+      GuardedTestSession session(request, analysis);
+      require(session.session().runPhysicalBaseline(initial.config()).ok(), "model fixture baseline failed");
+      BufferInsertionMutation edit{ExistingNetRef{"n0"},
+          {ExistingNodeRef{{csr::NodeKind::kPort, "out", {}, {}}}},
+          nativeLibraryCellRef(STADM.getDatabase(), "BUF_X1"), PlacedInputs{5.0, 7.0},
+          ParasiticRcInputs{ParasiticEditPolicy::kPreRouteTree}, editTestCreationToken()};
+      const std::array locations{PhysicalBufferLocation{edit.creation_token, 5000, 7000, idb::IdbOrient::kN_R0}};
+      require(session.session().applyPhysicalBatch({TransactionGeneration{0}, {edit}}, locations).generation == 1,
+              "model fixture did not install a used cell");
+      require(session.closeAndRelease().ok(), "model fixture close failed");
+    }
+    {
+      GuardedTestSession session(request, analysis);
+      require(session.session().runPhysicalBaseline(checkpoint.config()).ok(), "used-cell checkpoint failed");
+      require(session.closeAndRelease().ok(), "used-cell checkpoint close failed");
+    }
+    auto& library = STADM.getDatabase().get_timing_library();
+    if (scenario == 1) {
+      auto& child = library.get_cell_map().at("BUF_X1").get_cell_arc_list().front().get_timing_arc_list().front();
+      TimingTable delay; delay.set_value_list({0.9});
+      child.get_delay_table_map()[TransType::kRise] = std::move(delay);
+    } else if (scenario == 2) {
+      library.set_slew_derate_from_library(0.6);
+    }
+    GuardedTestSession session(request, analysis);
+    bool rejected = false;
+    try { static_cast<void>(session.session().recoverPhysicalBaseline(checkpoint.config())); }
+    catch (const StaSessionException& error) {
+      require(std::string(error.what()).find("physical recovery checkpoint/configuration differs") != std::string::npos,
+              "model recovery failed before checking checkpoint identity");
+      rejected = true;
+    }
+    require(rejected == (scenario != 0), "recovery did not bind the actual loaded models and port thresholds");
+    require(physical.design.get_instance_list()->get_instance_list().size() == 1,
+            "model identity check changed the checkpoint design");
+    require(session.closeAndRelease().ok(), "model identity recovery close failed");
+  }
+}
 void baselineRejections()
 {
   NativeTransactionRuntime runtime;
@@ -357,7 +405,7 @@ void run()
   const auto first_path = recovery.path / "journal" / "committed-1.json";
   const auto second_path = recovery.path / "journal" / "committed-2.json";
   const auto first_record = read(first_path), second_record = read(second_path);
-  for (int scenario : {0, 1, 2, 3}) {
+  for (int scenario : {0, 1, 2, 4, 5, 3}) {
     NativeTransactionRuntime runtime;
     installNativeTransactionBaseline();
     PhysicalDesign physical;
@@ -366,6 +414,22 @@ void run()
     if (scenario != 3) {
       if (scenario == 0) {
         require(!session.session().runPhysicalBaseline(recovery.config()).ok(), "fresh baseline accepted committed history");
+      } else if (scenario == 4 || scenario == 5) {
+        auto& database = STADM.getDatabase();
+        if (scenario == 4) {
+          auto& output = database.get_timing_constraint().get_port_constraint_map()["out"];
+          output.set_port_name("out");
+          output.set_has_output_delay_max(true);
+          output.set_output_delay_max(0.25);
+        } else {
+          auto& pins = database.get_net_map().at("n0").get_pin_name_list();
+          std::reverse(pins.begin(), pins.end());
+        }
+        bool failed = false;
+        try { static_cast<void>(session.session().recoverPhysicalBaseline(recovery.config())); }
+        catch (const StaSessionException&) { failed = true; }
+        require(failed && physical.design.get_instance_list()->get_instance_list().empty(),
+                "changed native checkpoint input accepted recovery or replayed before rejection");
       } else if (scenario == 2) {
         for (auto* pin : physical.design.get_io_pin_list()->get_pin_list()) {
           auto* coordinate = pin->get_average_coordinate();
@@ -584,7 +648,7 @@ int main(int argc, char** argv)
       require(incregpusta_cuda_enabled, "CUDA physical test needs a CUDA build");
       physicalBatches(true);
       physicalGreedyCandidateContract(true);
-    } else { baselineRejections(); cpuBaselineModes(); run(); run(); physicalBatches(false); physicalGreedyCandidateContract(false); physicalFirstReportFailure(); }
+    } else { recoveryModelIdentity(); baselineRejections(); cpuBaselineModes(); run(); run(); physicalBatches(false); physicalGreedyCandidateContract(false); physicalFirstReportFailure(); }
     std::cout << "physical/native RC multi-batch apply, rollback and commit passed\n";
   }
   catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

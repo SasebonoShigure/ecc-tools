@@ -47,8 +47,7 @@ void testNativeFullRcTransactions()
             database, std::get<csr::CsrReferenceInput>(exported), TransactionGeneration{0});
         const BaselineSemanticIdentity baseline{database.get_design_name(), identity.current_fingerprints,
                                                identity.canonical_pre_state};
-        auto state = NativeFullEditPreparer::bindBaseline(
-            database, std::get<csr::CsrReferenceInput>(exported), baseline);
+        auto state = NativeFullEditPreparer::bindBaseline(database, authority);
         auto plan = bufferInsertionPlan(database, baseline, TransactionGeneration{0}, editTestCreationToken());
         std::string source = "n0", driver = "in";
         for (std::uint64_t generation = 0; generation < 2; ++generation) {

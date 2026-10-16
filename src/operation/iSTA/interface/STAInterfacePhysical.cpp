@@ -86,19 +86,19 @@ StaStatus STAInterface::runSessionPhysicalBaseline(std::uint64_t token, StaCsrSe
       static_cast<void>(propagated);
       clock->set_is_propagated(true);
     }
+    timing_edit::NativeExecutionAuthority authority(timing_edit::TimingEditSessionToken{token}, violation_signal);
     bool unsupported = false;
     const auto bind = [&] {
       auto exported = csr::exportCsrReferenceInputCandidate(database, context->analysisContext(), token, context->libraryModels(database));
       auto* input = std::get_if<csr::CsrReferenceInput>(&exported);
       if (!input) throw std::runtime_error("physical baseline CSR export failed");
-      if (!(request.backend == StaBackend::kCpu && request.update_strategy == StaUpdateStrategy::kFull)
-          && !input->unsupported_reasons.empty()) {
+      if (!input->unsupported_reasons.empty()) {
         unsupported = true;
         std::string message = "physical STA does not support analysis features:";
         for (auto reason : input->unsupported_reasons) message += " " + std::string(csr::token(reason));
         throw std::runtime_error(message);
       }
-      prepared->bindRecovery(config, *input, recovery);
+      prepared->bindRecovery(config, database, context->analysisContext(), recovery);
       prepared->bindBaseline(database, *input, *context);
     };
     StaOperationResult result;
@@ -109,7 +109,10 @@ StaStatus STAInterface::runSessionPhysicalBaseline(std::uint64_t token, StaCsrSe
            {"TimingPropagator", [] { TimingPropagator::initInst(); }, [] { STATP.propagate(); }, [] { TimingPropagator::destroyInst(); }},
            {"TimingAnalyzer", [] { TimingAnalyzer::initInst(); }, [] { STATA.propagateRequired(); }, [] { TimingAnalyzer::destroyInst(); }}},
           StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
-      if (result.succeeded) bind();
+      if (result.succeeded) {
+        prepared->bindRecovery(config, database, context->analysisContext(), recovery);
+        prepared->bindNativeBaseline(database, authority);
+      }
     } else {
       result = executeStaLifecyclePipeline(
           {{"GraphBuilder", [] { GraphBuilder::initInst(); }, [] { STAGB.buildStructure(); }, [] { GraphBuilder::destroyInst(); }},
@@ -127,7 +130,6 @@ StaStatus STAInterface::runSessionPhysicalBaseline(std::uint64_t token, StaCsrSe
           unsupported ? std::optional{StaCapabilityReason::kUnsupportedAnalysisFeatures} : std::nullopt);
     }
     if (recovery) {
-      timing_edit::NativeExecutionAuthority authority(timing_edit::TimingEditSessionToken{token}, violation_signal);
       execution = prepared->recover(database, *context, authority, execution);
     }
     context->_physical = std::move(prepared);

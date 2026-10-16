@@ -2,16 +2,94 @@
 // Licensed under Mulan PSL v2.
 #include "PhysicalStaSessionState.hpp"
 #include "CsrFingerprint.hpp"
+#include "CanonicalTimingRecordProjectorInternal.hpp"
+#include "CsrReferenceCanonicalEncoderInternal.hpp"
 #include "json.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 #include "PhysicalStaBatchJson.hpp"
 #include "NativeCandidateExecutor.hpp"
+#include "Database.hpp"
 #include <filesystem>
 #include <algorithm>
 #include <fstream>
+#include <set>
 
 namespace ista {
 namespace {
+std::string nativeCheckpointIdentity(Database& database)
+{
+  csr::CanonicalEncoder bytes;
+  bytes.appendDomain("physical-checkpoint-native-input", "1");
+  bytes.appendString(database.get_design_name());
+  const auto names = [&](const auto& values) {
+    bytes.appendU64(values.size());
+    for (const auto& name : values) bytes.appendString(name);
+  };
+  const auto& instances = database.get_instance_map();
+  std::set<std::string> used_cells;
+  bytes.appendU64(instances.size());
+  for (const auto& [name, instance] : instances) {
+    bytes.appendString(name);
+    bytes.appendString(instance.get_cell_name());
+    names(instance.get_pin_name_list());
+    used_cells.insert(instance.get_cell_name());
+  }
+  bytes.appendU64(used_cells.size());
+  for (const auto& cell : used_cells)
+    csr::detail::appendReferencedLibraryCellModelFields(bytes, csr::detail::projectCanonicalReferencedLibraryCell(database, cell));
+  const auto& library = database.get_timing_library();
+  for (double value : {library.get_slew_derate_from_library(),
+      library.get_slew_lower_threshold_pct_rise(), library.get_slew_lower_threshold_pct_fall(),
+      library.get_slew_upper_threshold_pct_rise(), library.get_slew_upper_threshold_pct_fall()})
+    bytes.appendDouble(value);
+  const auto& pins = database.get_pin_map();
+  bytes.appendU64(pins.size());
+  for (const auto& [name, pin] : pins) {
+    bytes.appendString(name);
+    bytes.appendString(pin.get_instance_name());
+    bytes.appendString(pin.get_pin_name());
+    bytes.appendString(pin.get_net_name());
+    bytes.appendBool(pin.get_is_port());
+    bytes.appendU8(static_cast<std::uint8_t>(pin.get_direction()));
+  }
+  const auto& nets = database.get_net_map();
+  // Empty DEF nets carry no timing connectivity and may disappear on reload.
+  bytes.appendU64(std::ranges::count_if(nets, [](const auto& net) { return !net.second.get_pin_name_list().empty(); }));
+  for (const auto& [name, net] : nets) {
+    if (net.get_pin_name_list().empty()) continue;
+    bytes.appendString(name);
+    names(net.get_pin_name_list());
+  }
+  const auto& constraints = database.get_timing_constraint();
+  bytes.appendU64(constraints.get_clock_map().size());
+  for (const auto& [name, clock] : constraints.get_clock_map()) {
+    bytes.appendString(name);
+    names(clock.get_source_list());
+    bytes.appendDouble(clock.get_period());
+    bytes.appendDouble(clock.get_rise_edge());
+    bytes.appendDouble(clock.get_fall_edge());
+    bytes.appendBool(clock.get_is_propagated());
+  }
+  bytes.appendU64(constraints.get_port_constraint_map().size());
+  for (const auto& [name, port] : constraints.get_port_constraint_map()) {
+    bytes.appendString(name);
+    bytes.appendString(port.get_clock_name());
+    for (const auto& [present, value] : {
+        std::pair{port.get_has_input_delay_min(), port.get_input_delay_min()},
+        std::pair{port.get_has_input_delay_max(), port.get_input_delay_max()},
+        std::pair{port.get_has_output_delay_min(), port.get_output_delay_min()},
+        std::pair{port.get_has_output_delay_max(), port.get_output_delay_max()},
+        std::pair{port.get_has_input_transition(), port.get_input_transition()},
+        std::pair{port.get_has_load(), port.get_load()}})
+      bytes.appendOptionalDouble(present ? std::optional{value} : std::nullopt);
+  }
+  bytes.appendU64(constraints.get_case_analysis_map().size());
+  for (const auto& [name, value] : constraints.get_case_analysis_map()) {
+    bytes.appendString(name);
+    bytes.appendBool(value);
+  }
+  return csr::sha256Hex(bytes.bytes());
+}
 std::string physicalGeometryIdentity(idb::IdbDesign& design)
 {
   csr::CanonicalEncoder bytes;
@@ -46,7 +124,7 @@ std::string physicalGeometryIdentity(idb::IdbDesign& design)
   return csr::sha256Hex(bytes.bytes());
 }
 }
-void PhysicalStaSessionState::bindRecovery(const PhysicalStaConfig& config, const csr::CsrReferenceInput& input, bool recovery)
+void PhysicalStaSessionState::bindRecovery(const PhysicalStaConfig& config, Database& database, const csr::StaAnalysisContext& analysis, bool recovery)
 {
   if (_journal || config.recovery_directory.empty() || config.checkpoint_files.empty())
     throw std::invalid_argument("physical baseline requires a recovery directory and checkpoint inputs");
@@ -65,22 +143,19 @@ void PhysicalStaSessionState::bindRecovery(const PhysicalStaConfig& config, cons
     return Json{{"name", value.name}, {"width_um", value.width_um}, {"resistance_per_um", value.resistance_per_um},
       {"area_capacitance_per_um", value.area_capacitance_per_um}, {"edge_capacitance_per_um", value.edge_capacitance_per_um}};
   };
-  const auto& identity = input.source_identity;
   const auto baseline = Json{
-      {"schema_version", "physical-sta-baseline/1.0.0"}, {"inputs", std::move(files)},
+      {"schema_version", "physical-sta-baseline/2.0.0"}, {"inputs", std::move(files)},
       {"physical_geometry", physicalGeometryIdentity(design)},
       {"build", {{"compiler_id", incregpusta_compiler_id}, {"compiler_version", incregpusta_compiler_version},
                  {"build_config", incregpusta_build_config}, {"cuda_enabled", incregpusta_cuda_enabled},
                  {"debug_checks_enabled", incregpusta_debug_checks_enabled}}},
       {"request", {{"backend", toString(request.backend)}, {"update_strategy", toString(request.update_strategy)},
                    {"fallback_policy", toString(request.fallback_policy)}}},
-      {"analysis", {{"liberty_corner", input.analysis_context.liberty_corner}, {"temperature", input.analysis_context.temperature},
-                    {"rc_corner", input.analysis_context.rc_corner}}},
+      {"analysis", {{"liberty_corner", analysis.liberty_corner}, {"temperature", analysis.temperature},
+                    {"rc_corner", analysis.rc_corner}}},
       {"rc", {{"dbu_per_um", technology.dbu_per_um}, {"horizontal", layer(technology.horizontal)}, {"vertical", layer(technology.vertical)}}},
-      {"identity", {{"schema_version", identity.fingerprint_schema_version}, {"topology", identity.topology_fingerprint},
-                    {"clock_constraint", identity.clock_constraint_fingerprint}, {"library", identity.library_fingerprint},
-                    {"corner", identity.corner_fingerprint}, {"parasitic", identity.parasitic_fingerprint},
-                    {"timing_input", identity.timing_input_fingerprint}}}}.dump();
+      // Bind loaded used-cell models too: public callers may supply only part of the input manifest.
+      {"native_input", nativeCheckpointIdentity(database)}}.dump();
   auto id = csr::sha256Hex(std::span(reinterpret_cast<const std::uint8_t*>(baseline.data()), baseline.size()));
   auto journal = std::make_unique<PhysicalStaJournal>(config.recovery_directory, baseline);
   // Reopening committed history belongs to explicit recovery, never a new baseline.

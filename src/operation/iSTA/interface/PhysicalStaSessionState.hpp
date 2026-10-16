@@ -22,11 +22,12 @@ class PhysicalStaSessionState final
  public:
   PhysicalStaSessionState(idb::IdbDesign& design, izh::PreRouteRcTechnology technology, StaExecutionRequest request)
       : design(design), technology(std::move(technology)), request(request) {}
-  void bindRecovery(const PhysicalStaConfig& config, const csr::CsrReferenceInput& input, bool recovery);
+  void bindRecovery(const PhysicalStaConfig& config, Database& database, const csr::StaAnalysisContext& analysis, bool recovery);
   StaExecutionRecord recover(Database& database, StaCsrSessionContext& context, const timing_edit::NativeExecutionAuthority& authority, StaExecutionRecord execution);
   PhysicalStaBatchResult applyBatch(Database& database, StaCsrSessionContext& context,
       const timing_edit::NativeExecutionAuthority& authority, const timing_edit::EditBatch& edits,
       std::span<const PhysicalBufferLocation> locations);
+  void bindNativeBaseline(Database& database, const timing_edit::NativeExecutionAuthority& authority);
   void bindBaseline(Database& database, const csr::CsrReferenceInput& input, StaCsrSessionContext& context);
   [[nodiscard]] timing_edit::TransactionGeneration generation(const StaCsrSessionContext& context) const;
   void materialize(Database& database, StaCsrSessionContext& context, const timing_edit::NativeExecutionAuthority& authority);

@@ -4,7 +4,6 @@
 #include "PhysicalGreedySelection.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "CpuDualCsrBaseline.hpp"
-#include "NativeTimingEditPreparer.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "DataManager.hpp"
 #include "DelayCalculator.hpp"
@@ -23,6 +22,13 @@ izh::PhysicalPlacementRows& PhysicalStaSessionState::placementRows()
 {
   if (!_placement) _placement = std::make_unique<izh::PhysicalPlacementRows>(design);
   return *_placement;
+}
+void PhysicalStaSessionState::bindNativeBaseline(Database& database, const timing_edit::NativeExecutionAuthority& authority)
+{
+  if (full || cpu || request.backend != StaBackend::kCpu || request.update_strategy != StaUpdateStrategy::kFull)
+    throw std::logic_error("physical native baseline requires a fresh CPU/full session");
+  full.reset(new timing_edit::NativeFullEditState(timing_edit::NativeFullEditPreparer::bindBaseline(database, authority)));
+  _timing_generation = timing_edit::TransactionGeneration{0};
 }
 void PhysicalStaSessionState::bindBaseline(Database& database, const csr::CsrReferenceInput& input, StaCsrSessionContext& context)
 {
@@ -49,11 +55,7 @@ void PhysicalStaSessionState::bindBaseline(Database& database, const csr::CsrRef
     throw std::logic_error("CUDA physical STA was not built");
 #endif
   } else {
-    auto identity = NativeTimingEditPreparer::identityFromInput(database, input, TransactionGeneration{0});
-    const BaselineSemanticIdentity baseline{database.get_design_name(), identity.current_fingerprints,
-                                            identity.canonical_pre_state};
-    full.reset(new NativeFullEditState(NativeFullEditPreparer::bindBaseline(database, input, baseline)));
-    _timing_generation = TransactionGeneration{0};
+    throw std::logic_error("physical CSR binding requires a CSR backend");
   }
 }
 timing_edit::TransactionGeneration PhysicalStaSessionState::generation(const StaCsrSessionContext& context) const

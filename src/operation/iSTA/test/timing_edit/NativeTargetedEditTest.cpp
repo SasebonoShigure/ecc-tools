@@ -16,6 +16,7 @@
 #include "Instance.hpp"
 #include "TimingEditCanonicalEncoding.hpp"
 #include "NativeCandidateExecutor.hpp"
+#include "NativeFullEditPreparer.hpp"
 #include "NativeTargetedEditPreparer.hpp"
 #include "NativeTargetedEditInternal.hpp"
 #include "StaTimingEditSessionProbeAccess.hpp"
@@ -351,6 +352,17 @@ void runTargetedContracts()
         auto clock_plan = bufferInsertionPlan(database, clock_baseline, TransactionGeneration{0}, editTestCreationToken(3));
         clock_plan.edits.front().original_net = ExistingNetRef{state.resolver.materialization(editTestCreationToken(2)).output_net_name};
         rejects([&] { static_cast<void>(NativeTargetedEditPreparer::prepare(database, authority, {clock_plan.expected_generation, clock_plan.edits}, clock_state)); });
+        {
+          auto baseline = NativeEditTransaction::prepareFull(authority);
+          NativeCandidateExecutor::executeFullTiming(baseline);
+          baseline.commit();
+        }
+        auto full_clock_state = NativeFullEditPreparer::bindBaseline(database, authority);
+        const auto& clock_net = std::get<ExistingNetRef>(clock_plan.edits.front().original_net).baseline_name;
+        require(clock_net != database.get_pin_map().at("in").get_net_name(),
+                "clock rejection fixture must reach beyond the clock source net");
+        rejects([&] { static_cast<void>(NativeFullEditPreparer::prepare(
+            database, authority, {clock_plan.expected_generation, clock_plan.edits}, full_clock_state)); });
         return StaStatus::success(session.session().state());
       });
   if (!status.ok())

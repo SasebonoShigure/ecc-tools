@@ -6,6 +6,7 @@
 #include "BenchmarkTimingConsumer.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "NativeFullEditPreparer.hpp"
+#include "NativeTimingEditPreparer.hpp"
 #include "ProductionFreshSessionLoader.hpp"
 #include "PublicTimingJson.hpp"
 #include "TimingGraphCsrAdapter.hpp"
@@ -35,7 +36,8 @@ inline void checkNativeFullTransactions(const timing_edit::oracle::ProductionFre
   };
   const auto& plans = std::visit([](const auto& workload) -> const std::vector<EditBatch>& { return workload.batches; }, program.workload);
   require(plans.size() >= 2, "transaction checks require two batches");
-  auto state = NativeFullEditPreparer::bindBaseline(view.database, view.reference_input, program.baseline());
+  NativeTimingEditPreparer::requireBaselineIdentity(view.database, view.reference_input, program.baseline());
+  auto state = NativeFullEditPreparer::bindBaseline(view.database, view.authority);
   const auto baseline = csr::canonicalReferenceInputBytes(view.reference_input);
   require(view.database.get_timing_path_group_list().empty(), "timing-only baseline prepared reports eagerly");
   const auto public_baseline = analyzeAndCapturePublicTiming();
@@ -68,7 +70,7 @@ inline void checkNativeFullTransactions(const timing_edit::oracle::ProductionFre
   }
   restored();
   Database foreign;
-  rejected([&] { static_cast<void>(NativeFullEditPreparer::bindBaseline(foreign, view.reference_input, program.baseline())); });
+  rejected([&] { static_cast<void>(NativeFullEditPreparer::bindBaseline(foreign, view.authority)); });
   rejected([&] { static_cast<void>(NativeFullEditPreparer::prepare(foreign, view.authority, plans[0], state)); });
   auto first = NativeFullEditPreparer::prepare(view.database, view.authority, plans[0], state);
   NativeCandidateExecutor::executeFull(first.transaction());

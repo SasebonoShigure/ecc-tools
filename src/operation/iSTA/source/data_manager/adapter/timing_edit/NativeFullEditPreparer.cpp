@@ -5,12 +5,10 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
-#include "CsrReferenceTypes.hpp"
 #include "Database.hpp"
 #include "DataManager.hpp"
 #include "NativeBufferInsertionInternal.hpp"
 #include "NativeCandidateExecutor.hpp"
-#include "NativeTimingEditPreparer.hpp"
 #include "TimingEditValidation.hpp"
 
 namespace ista::timing_edit {
@@ -27,24 +25,27 @@ AppendOnlySlot append(std::uint64_t& value)
 }
 }
 NativeFullEditState NativeFullEditPreparer::bindBaseline(
-    Database& database, const csr::CsrReferenceInput& input, const BaselineSemanticIdentity& baseline)
+    Database& database, const NativeExecutionAuthority& authority)
 {
-  require(&database == &STADM.getDatabase(), "native full baseline is not canonical");
-  NativeTimingEditPreparer::requireBaselineIdentity(database, input, baseline);
+  require(&database == &STADM.getDatabase() && authority.readyForQuery(),
+          "native full baseline requires the committed canonical session");
   TimingEditResolverState resolver;
   std::set<std::string> clock_nets;
-  for (const auto& node : input.nodes) {
-    resolver._nodes.emplace(ExistingNodeRef{node.key},
-        NativeSlotBinding{append(resolver._high_water.node_slots), node.key.full_name, false});
-    if (input.clock_owner_by_node.at(node.id.value()))
-      clock_nets.insert(node.net_name);
+  for (const auto& [name, pin] : database.get_pin_map()) {
+    const csr::NodeKey key = pin.get_is_port()
+        ? csr::NodeKey{csr::NodeKind::kPort, name, {}, {}}
+        : csr::NodeKey{csr::NodeKind::kInstancePin, name, pin.get_instance_name(), pin.get_pin_name()};
+    resolver._nodes.emplace(ExistingNodeRef{key},
+        NativeSlotBinding{append(resolver._high_water.node_slots), name, false});
+    if (database.get_timing_point_map().at(name).get_is_clock_point())
+      clock_nets.insert(pin.get_net_name());
   }
   for (const auto& [name, net] : database.get_net_map()) {
     static_cast<void>(net);
     resolver._nets.emplace(ExistingNetRef{name},
         NativeSlotBinding{append(resolver._high_water.net_slots), name, false});
   }
-  return NativeFullEditState(database, TimingEditSessionToken{input.source_identity.session_token},
+  return NativeFullEditState(database, authority.sessionToken(),
                              detail::nextNativeInstanceId(database), std::move(resolver), std::move(clock_nets));
 }
 NativeFullEditBatch NativeFullEditPreparer::prepare(

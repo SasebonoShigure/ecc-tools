@@ -18,6 +18,7 @@
 #include "IncreGpuStaPerformanceJson.hpp"
 #include "NativeEditTransaction.hpp"
 #include "NativeFullEditPreparer.hpp"
+#include "NativeTimingEditPreparer.hpp"
 #include "ProductionFreshSessionLoader.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "TimingEditResolver.hpp"
@@ -42,7 +43,8 @@ inline nlohmann::json benchmarkNativeFull(
 {
   using namespace timing_edit;
   const auto setup_started = BenchmarkClock::now();
-  auto state = NativeFullEditPreparer::bindBaseline(view.database, view.reference_input, program.baseline());
+  NativeTimingEditPreparer::requireBaselineIdentity(view.database, view.reference_input, program.baseline());
+  auto state = NativeFullEditPreparer::bindBaseline(view.database, view.authority);
   const auto& plans = std::visit([](const auto& workload) -> const std::vector<EditBatch>& { return workload.batches; }, program.workload);
   benchmarkRequire(prefix > 0 && prefix <= plans.size(), "prefix outside frozen trace");
   auto timings = nlohmann::json::array();

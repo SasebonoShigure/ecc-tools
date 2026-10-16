@@ -16,6 +16,29 @@ def require_cuda_telemetry(timing: dict) -> None:
         require(type(timing.get(field)) is int and timing[field] >= 0,
                 f"missing nonnegative CUDA {field}")
     require("kernel_launches" not in timing, "ambiguous CUDA total launch count")
+    readback = timing["readback"]
+    require(readback["schema_version"] == "ista-cuda-readback/1.0.0",
+            "unknown CUDA readback accounting")
+    require(type(readback["stream_waits"]) is int and readback["stream_waits"] >= 0,
+            "invalid CUDA stream wait count")
+    total_bytes = readback["other_d2h_bytes"]
+    require(type(total_bytes) is int and total_bytes >= 0, "invalid unclassified readback bytes")
+    waits = 0.0
+    for category in ("levelization_decisions", "level_metadata", "status", "candidate", "result"):
+        item = readback[category]
+        require(type(item["bytes"]) is int and item["bytes"] >= 0,
+                f"invalid {category} readback bytes")
+        require(type(item["wait_ms"]) in (int, float)
+                and math.isfinite(item["wait_ms"]) and item["wait_ms"] >= 0,
+                f"invalid {category} readback wait")
+        total_bytes += item["bytes"]
+        waits += item["wait_ms"]
+    require(type(timing["d2h_bytes"]) is int and total_bytes == timing["d2h_bytes"],
+            "CUDA readback categories differ from actual D2H bytes")
+    total_wait = readback["stream_wait_ms"]
+    require(type(total_wait) in (int, float) and math.isfinite(total_wait) and total_wait >= 0
+            and waits <= total_wait + 1e-6,
+            "CUDA readback waits exceed recorded Runtime waits")
 
 
 
@@ -34,7 +57,7 @@ def require_final_consumption(timing: dict, *, final: bool) -> None:
 def require_performance_result(result: dict, prefix: int, build: dict) -> None:
     require(not any(key in result for key in ("functional", "batches", "device_checks")),
             "performance child generated a diagnostic receipt")
-    require(result["schema_version"] == "ista-cuda-full-trace/6.0.0"
+    require(result["schema_version"] == "ista-cuda-full-trace/7.0.0"
             and result["build"] == build and result["debug_checks_enabled"] is False
             and result["correctness_comparison"] == "not_run"
             and result["requested_backend"] == result["executed_backend"] == "cuda"
@@ -45,6 +68,8 @@ def require_performance_result(result: dict, prefix: int, build: dict) -> None:
             "performance child omitted the declared full workload or lifecycle")
     for ordinal, timing in enumerate(result["batch_timings"]):
         require_cuda_telemetry(timing)
+        require(timing["readback"]["other_d2h_bytes"] == 0,
+                "performance child performed unclassified readbacks")
         require_final_consumption(timing, final=ordinal + 1 == prefix)
         require(timing["generation_before"] == ordinal
                 and timing["generation_after"] == ordinal + 1,
@@ -120,7 +145,7 @@ def run(args: argparse.Namespace) -> int:
         write_json(
             root / "performance.json",
             {
-                "schema_version": "ista-cuda-full-performance/5.0.0",
+                "schema_version": "ista-cuda-full-performance/6.0.0",
                 "debug_checks_enabled": False,
                 "correctness_comparison": "not_run",
                 "build": build,
@@ -156,8 +181,8 @@ def run(args: argparse.Namespace) -> int:
             input_flag=input_flag,
         )
         require(
-            gpu["schema_version"] == "ista-cuda-full-trace/6.0.0"
-            and cpu["schema_version"] == "ista-cuda-full-trace/6.0.0",
+            gpu["schema_version"] == "ista-cuda-full-trace/7.0.0"
+            and cpu["schema_version"] == "ista-cuda-full-trace/7.0.0",
             "unexpected full trace schema",
         )
         difference = first_difference(gpu["batches"][-1], cpu["functional"])
@@ -211,7 +236,7 @@ def run(args: argparse.Namespace) -> int:
         )
     write_json(
         root / "verdict.json",
-        {"schema_version": "ista-cuda-full-verdict/6.0.0", "build": build, "prefixes": verdicts},
+        {"schema_version": "ista-cuda-full-verdict/7.0.0", "build": build, "prefixes": verdicts},
     )
     return 0
 

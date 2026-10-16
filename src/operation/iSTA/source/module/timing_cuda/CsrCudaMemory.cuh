@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -153,7 +154,12 @@ class Runtime final
   void record(std::size_t index) { check(cudaEventRecord(_events.at(index), _stream), "cudaEventRecord"); }
   void synchronize()
   {
-    check(cudaStreamSynchronize(_stream), "cudaStreamSynchronize");
+    const auto started = std::chrono::steady_clock::now();
+    const auto status = cudaStreamSynchronize(_stream);
+    _telemetry->stream_wait_ms += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    ++_telemetry->stream_waits;
+    check(status, "cudaStreamSynchronize");
     for (void*& allocation : _retired) {
       if (!allocation)
         continue;

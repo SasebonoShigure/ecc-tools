@@ -78,8 +78,12 @@ std::optional<CsrFifoLevelization> CudaDualCsrSession::Impl::reconstructMixed()
   demand(origin && origin->levels.complete, "mixed reconstruction requires a successful origin");
   Status patch_status;
   try {
+    const auto prior_readback = telemetry.cuda.d2h_bytes;
+    const auto prior_wait = telemetry.cuda.stream_wait_ms;
     memory.download(view.status, &patch_status, 1);
     memory.synchronize();
+    telemetry.cuda.status_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+    telemetry.cuda.status_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
   } catch (...) {
     try {
       memory.synchronize();

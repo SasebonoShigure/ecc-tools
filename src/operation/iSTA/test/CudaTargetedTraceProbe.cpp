@@ -15,6 +15,7 @@
 #include "DualCsrTargetedPhysicalProjection.hpp"
 #include "DualCsrTraceProductionFreshAdapter.hpp"
 #include "IncreGpuStaPerformanceJson.hpp"
+#include "CudaTelemetryJson.hpp"
 #include "ProductionFreshSessionLoader.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 
@@ -59,10 +60,11 @@ Json deviceTelemetry(const csr::CudaDualCsrTelemetry& device)
           {"h2d_ms", c.h2d_ms},
           {"levelization_ms", c.levelization_ms},
           {"propagation_ms", c.propagation_ms},
-          {"d2h_ms", c.d2h_ms},
+          {"delivery_d2h_ms", c.delivery_d2h_ms},
           {"cuda_end_to_end_ms", c.end_to_end_ms},
           {"h2d_bytes", c.h2d_bytes},
           {"d2h_bytes", c.d2h_bytes},
+          {"readback", ista::test::cudaReadbackJson(c)},
           {"d2d_bytes", c.d2d_bytes},
           {"allocations", c.allocations},
           {"explicit_kernel_launches", c.kernel_launches},
@@ -131,7 +133,7 @@ int main(int argc, char** argv)
     require(parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && prefix > 0, "invalid prefix");
     const bool replay_only = options.contains("--replay");
     const auto program = buffer_trace::test::readReplayInput(options.at(replay_only ? "--replay" : "--trace"), replay_only);
-    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/7.0.0" : "ista-cuda-targeted-trace/7.0.0"},
+    Json output{{"schema_version", incremental ? "ista-cuda-incremental-trace/8.0.0" : "ista-cuda-targeted-trace/8.0.0"},
                 {"prefix_batches", prefix},
                 {"debug_checks_enabled", incregpusta_debug_checks_enabled},
                 {"requested_backend", "cuda"},
@@ -202,6 +204,7 @@ int main(int argc, char** argv)
       output["initialization"] = {{"scope", "persistent_device_session_only"},
                                   {"h2d_bytes", initialization.h2d_bytes},
                                   {"d2h_bytes", initialization.d2h_bytes},
+                                  {"readback", ista::test::cudaReadbackJson(initialization)},
                                   {"d2d_bytes", initialization.d2d_bytes},
                                   {"allocations", initialization.allocations},
                                   {"explicit_kernel_launches", initialization.kernel_launches},

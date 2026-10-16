@@ -46,11 +46,15 @@ const std::vector<BufferCandidateTiming>& CudaDualCsrSession::Impl::readCandidat
         view, storage->candidate_timing.data);
     ++telemetry.cuda.kernel_launches;
     check(cudaGetLastError(), "collect buffer candidate timing");
+    const auto prior_readback = telemetry.cuda.d2h_bytes;
+    const auto prior_wait = telemetry.cuda.stream_wait_ms;
     memory.record(6);
     memory.download(storage->candidate_timing.data, result);
     memory.record(7);
     memory.synchronize();
-    telemetry.cuda.d2h_ms += memory.milliseconds(6, 7);
+    telemetry.cuda.delivery_d2h_ms += memory.milliseconds(6, 7);
+    telemetry.cuda.candidate_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+    telemetry.cuda.candidate_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
     candidate_timing.emplace(std::move(result));
     return *candidate_timing;
   } catch (const CudaAllocationError&) {

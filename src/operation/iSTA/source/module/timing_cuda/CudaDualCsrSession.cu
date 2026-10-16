@@ -191,6 +191,9 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
   storage->aux_bindings.clear();
   storage->host_undo.clear();
   clearRcPatch();
+  // Charge undo waits to the surviving owner, including constructor failures.
+  telemetry.cuda.stream_wait_ms += cleanup.stream_wait_ms;
+  telemetry.cuda.stream_waits += cleanup.stream_waits;
   memory.bindTelemetry(telemetry.cuda);
   return cleanup;
 }
@@ -226,15 +229,21 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode) try
     }
   } else {
     const auto prior_readback = telemetry.cuda.d2h_bytes;
+    const auto prior_wait = telemetry.cuda.stream_wait_ms;
     levelizeFull();
     telemetry.cuda.levelization_decision_bytes = telemetry.cuda.d2h_bytes - prior_readback;
+    telemetry.cuda.levelization_decision_wait_ms = telemetry.cuda.stream_wait_ms - prior_wait;
   }
   Status status;
   Index level_count;
   try {
+    const auto prior_readback = telemetry.cuda.d2h_bytes;
+    const auto prior_wait = telemetry.cuda.stream_wait_ms;
     memory.download(view.status, &status, 1);
     memory.download(view.level_offset_count, &level_count, 1);
     memory.synchronize();
+    telemetry.cuda.level_metadata_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+    telemetry.cuda.level_metadata_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
   } catch (...) {
     try {
       memory.synchronize();
@@ -254,11 +263,15 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode) try
       levels.level_nodes.resize(view.node_count);
     }
     try {
+      const auto prior_readback = telemetry.cuda.d2h_bytes;
+      const auto prior_wait = telemetry.cuda.stream_wait_ms;
       if constexpr (incregpusta_debug_checks_enabled)
         memory.download(view.order, order);
       memory.download(view.node_levels, levels.node_to_level);
       memory.download(view.level_offsets, levels.level_offsets);
       memory.synchronize();
+      telemetry.cuda.level_metadata_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+      telemetry.cuda.level_metadata_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
     } catch (...) {
       try {
         memory.synchronize();
@@ -282,9 +295,13 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode) try
     propagate();
     memory.record(4);
     try {
+      const auto prior_readback = telemetry.cuda.d2h_bytes;
+      const auto prior_wait = telemetry.cuda.stream_wait_ms;
       memory.download(view.status, &status, 1);
       memory.record(5);
       memory.synchronize();
+      telemetry.cuda.status_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+      telemetry.cuda.status_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
     } catch (...) {
       try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
       throw;
@@ -317,7 +334,7 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode) try
   if (mode == CudaLevelizationMode::kMixed)
     telemetry.mixed.reconstruct_ms = telemetry.cuda.levelization_ms;
   telemetry.cuda.propagation_ms = memory.milliseconds(3, 4);
-  telemetry.cuda.d2h_ms = memory.milliseconds(4, 5);
+  telemetry.cuda.delivery_d2h_ms = memory.milliseconds(4, 5);
 } catch (...) {
   // Member-backed uploads must finish before a failed constructor destroys them.
   try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
@@ -338,6 +355,8 @@ const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
   data.arc_state.resize(view.arc_count);
   data.child_state.resize(view.child_state_count);
   try {
+    const auto prior_readback = telemetry.cuda.d2h_bytes;
+    const auto prior_wait = telemetry.cuda.stream_wait_ms;
     memory.record(6);
     memory.download(view.nodes, data.nodes);
     memory.download(view.paths, data.paths);
@@ -347,7 +366,9 @@ const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
       memory.download(view.order, order);
     memory.record(7);
     memory.synchronize();
-    telemetry.cuda.d2h_ms += memory.milliseconds(6, 7);
+    telemetry.cuda.delivery_d2h_ms += memory.milliseconds(6, 7);
+    telemetry.cuda.result_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+    telemetry.cuda.result_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
     // Publish the cache only after download and all allocating unpack work succeed.
     auto result = unpackValues(std::move(data), host->layout, storage->domains[domain_index].host);
     if constexpr (!incregpusta_debug_checks_enabled) {

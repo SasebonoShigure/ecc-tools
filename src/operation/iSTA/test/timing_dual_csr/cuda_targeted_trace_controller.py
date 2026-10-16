@@ -23,7 +23,7 @@ def require_performance_result(result: dict, strategy: str, expected_prefix: int
         "performance child generated a diagnostic receipt",
     )
     require(
-        result["schema_version"] == f"ista-cuda-{protocol}-trace/7.0.0"
+        result["schema_version"] == f"ista-cuda-{protocol}-trace/8.0.0"
         and result["debug_checks_enabled"] is False
         and result["correctness_comparison"] == "not_run"
         and result["executed_backend"] == "cuda"
@@ -38,6 +38,8 @@ def require_performance_result(result: dict, strategy: str, expected_prefix: int
     )
     for ordinal, timing in enumerate(result["batch_timings"]):
         require_execution(timing, strategy)
+        require(timing["readback"]["other_d2h_bytes"] == 0,
+                "performance child performed unclassified readbacks")
         require_final_consumption(timing, final=ordinal + 1 == expected_prefix)
         require(
             timing["generation_before"] == ordinal and timing["generation_after"] == ordinal + 1,
@@ -142,7 +144,7 @@ def run(args: argparse.Namespace) -> int:
         write_json(
             root / "performance.json",
             {
-                "schema_version": f"ista-cuda-{protocol}-performance/6.0.0",
+                "schema_version": f"ista-cuda-{protocol}-performance/7.0.0",
                 "debug_checks_enabled": False,
                 "correctness_comparison": "not_run",
                 "build": build,
@@ -192,7 +194,7 @@ def run(args: argparse.Namespace) -> int:
             input_flag=input_flag,
         )
         require(
-            targeted["schema_version"] == f"ista-cuda-{protocol}-trace/7.0.0"
+            targeted["schema_version"] == f"ista-cuda-{protocol}-trace/8.0.0"
             and targeted["executed_backend"] == "cuda"
             and targeted["executed_strategy"] == args.strategy
             and targeted["fallback_count"] == 0,
@@ -268,7 +270,7 @@ def run(args: argparse.Namespace) -> int:
     write_json(
         root / "verdict.json",
         {
-            "schema_version": f"ista-cuda-{protocol}-verdict/7.0.0",
+            "schema_version": f"ista-cuda-{protocol}-verdict/8.0.0",
             "build": build,
             "full_oracle_build": full_build,
             "prefixes": verdicts,

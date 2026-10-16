@@ -9,6 +9,7 @@
 #include <sched.h>
 #include <stdexcept>
 #include "BenchmarkTimingConsumer.hpp"
+#include "CudaTelemetryJson.hpp"
 #include "BufferTraceReplayInput.hpp"
 #include "CudaFullTraceReplayer.hpp"
 #include "CudaTargetedTraceReplayer.hpp"
@@ -132,7 +133,7 @@ inline nlohmann::json runStage12Benchmark(const std::map<std::string, std::strin
                              {"explicit_kernel_launches", t.cuda.kernel_launches},
                              {"device_algorithm_calls", t.cuda.device_algorithm_calls},
                              {"levelization_decision_bytes", t.cuda.levelization_decision_bytes}, {"allocations", t.cuda.allocations},
-                             {"h2d_bytes", t.cuda.h2d_bytes}, {"d2h_bytes", t.cuda.d2h_bytes}});
+                             {"h2d_bytes", t.cuda.h2d_bytes}, {"d2h_bytes", t.cuda.d2h_bytes}, {"readback", cudaReadbackJson(t.cuda)}});
       } else {
         const auto result = csr::CudaTargetedTraceReplayer::run(view.session_context, view.database, view.reference_input,
             view.authority, program, prefix, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError, [&] { consumer.consumeCuda(view.session_context, view.database, view.authority); });
@@ -147,7 +148,7 @@ inline nlohmann::json runStage12Benchmark(const std::map<std::string, std::strin
                              {"explicit_kernel_launches", t.device.cuda.kernel_launches},
                              {"device_algorithm_calls", t.device.cuda.device_algorithm_calls},
                              {"levelization_decision_bytes", t.device.cuda.levelization_decision_bytes}, {"allocations", t.device.cuda.allocations},
-                             {"h2d_bytes", t.device.cuda.h2d_bytes}, {"d2h_bytes", t.device.cuda.d2h_bytes}});
+                             {"h2d_bytes", t.device.cuda.h2d_bytes}, {"d2h_bytes", t.device.cuda.d2h_bytes}, {"readback", cudaReadbackJson(t.device.cuda)}});
       }
       workload_ms = benchmarkElapsed(workload_started);
       cleanup_started = BenchmarkClock::now();

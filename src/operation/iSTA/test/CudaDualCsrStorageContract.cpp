@@ -139,9 +139,11 @@ void hostAllocationRollback(CudaLevelizationMode mode)
     require(!candidate.computationCode(), "allocation rollback fixture failed");
     expected = candidate.timingValues();
   }
+  bool observed_cleanup_wait = false;
   for (std::size_t ordinal = 0; ordinal < allocations; ++ordinal) {
     CudaDualCsrSession owner(input, water);
     const auto committed = owner.timingValues();
+    const auto prior_waits = owner.telemetry().cuda.stream_waits;
     bool failed = false;
     ista_test_allocation::armFailure(ordinal);
     try {
@@ -156,10 +158,12 @@ void hostAllocationRollback(CudaLevelizationMode mode)
     require(failed && !owner.poisoned() && owner.generation().value() == 0
                 && owner.timingValues() == committed,
             "host allocation failure changed committed CUDA owner at " + std::to_string(ordinal));
+    observed_cleanup_wait |= owner.telemetry().cuda.stream_waits > prior_waits;
     auto retry = owner.stage(patch, mode);
     require(!retry.computationCode() && retry.timingValues() == expected && owner.publish(std::move(retry)),
             "host allocation rollback left stale graph/seed storage at " + std::to_string(ordinal));
   }
+  require(observed_cleanup_wait, "constructor allocation failures lost all cleanup waits");
 }
 
 ArcSemanticPayload payloadFor(const ArcRecord& arc)
@@ -265,6 +269,8 @@ void payloadFailures(CudaLevelizationMode mode)
   const auto slot = static_cast<std::uint64_t>(position - input.out_arc_ids.begin());
   patch.removes = {{other->source, slot, other->id}};
   patch.aux_rows = {{other->source, {}, {other->id}}};
+  auto prior_waits = owner.telemetry().cuda.stream_waits;
+  auto prior_wait_ms = owner.telemetry().cuda.stream_wait_ms;
   {
     auto abandoned = owner.stage(patch, mode);
     require(!abandoned.computationCode(), "local undo fixture did not compute");
@@ -279,6 +285,8 @@ void payloadFailures(CudaLevelizationMode mode)
   require(!owner.poisoned() && owner.timingValues() == committed && owner.telemetry().cuda.kernel_launches == old_launches
               && owner.telemetry().cuda.device_algorithm_calls == old_algorithms,
           "abandoned device transaction changed committed result or charged previous generation");
+  require(owner.telemetry().cuda.stream_waits > prior_waits && owner.telemetry().cuda.stream_wait_ms >= prior_wait_ms,
+          "abandoned transaction lost its undo wait");
   if constexpr (incregpusta_debug_checks_enabled) {
     const auto graph = owner.debugState();
     require(graph.out_arcs[slot] == other->id.value() && graph.aux_rows[other->source.value()].empty(),
@@ -289,11 +297,15 @@ void payloadFailures(CudaLevelizationMode mode)
   // Base removal completes in an earlier kernel than the payload mismatch.
   // Actual partial mutation must be restored regardless of payload thread order.
   patch.payload_changes.push_back({other->id, wrong_expected, original_net});
+  prior_waits = owner.telemetry().cuda.stream_waits;
+  prior_wait_ms = owner.telemetry().cuda.stream_wait_ms;
   auto partial = owner.stage(patch, mode);
   require(partial.computationCode() == CsrComputationCode::kInvariantViolation && !owner.poisoned()
               && owner.timingValues() == committed && owner.telemetry().cuda.kernel_launches == old_launches
               && owner.telemetry().cuda.device_algorithm_calls == old_algorithms,
           "partial patch failure changed committed results or rollback accounting");
+  require(owner.telemetry().cuda.stream_waits > prior_waits && owner.telemetry().cuda.stream_wait_ms >= prior_wait_ms,
+          "partial patch failure lost its undo wait");
   require(partial.close() && !owner.poisoned() && owner.timingValues() == committed,
           "closing a rejected candidate destroyed the healthy runtime owner");
   {
@@ -307,12 +319,16 @@ void payloadFailures(CudaLevelizationMode mode)
   ista::csr::test::mutateChildren(malformed.transfer, [&](auto& children) { children[0].delay_tables[0].values.push_back(1.0); });
   patch.payload_changes = {{arc.id, expected, malformed}};
   bool rejected = false;
+  prior_waits = owner.telemetry().cuda.stream_waits;
+  prior_wait_ms = owner.telemetry().cuda.stream_wait_ms;
   try {
     static_cast<void>(owner.stage(patch, mode));
   } catch (const std::invalid_argument&) {
     rejected = true;
   }
   require(rejected && !owner.poisoned(), "malformed cell table accepted or poisoned owner");
+  require(owner.telemetry().cuda.stream_waits == prior_waits && owner.telemetry().cuda.stream_wait_ms == prior_wait_ms,
+          "input rejection performed an unnecessary CUDA wait");
   auto huge = expected;
   ista::csr::test::mutateChildren(huge.transfer, [&](auto& children) {
     for (auto& child : children)
@@ -411,6 +427,11 @@ void candidateReadback(CudaLevelizationMode mode)
   };
   for (std::uint64_t generation = 0; generation < 3; ++generation) {
     const auto before = owner.telemetry().cuda;
+    require(before.result_d2h_bytes == 0 && before.candidate_d2h_bytes == 0
+                && before.level_metadata_d2h_bytes > 0 && before.stream_waits > 0
+                && before.d2h_bytes == before.levelization_decision_bytes
+                    + before.level_metadata_d2h_bytes + before.status_d2h_bytes,
+            "unqueried generation readback accounting includes results or omits levels");
     if constexpr (incregpusta_debug_checks_enabled) {
       if (generation == 0) {
         ista_test_fail_cuda_allocation = true;
@@ -424,14 +445,26 @@ void candidateReadback(CudaLevelizationMode mode)
     }
     const auto& values = CudaDualCsrTestReader::readCandidateTiming(owner);
     const auto after = owner.telemetry().cuda;
-    require(after.d2h_bytes - before.d2h_bytes == values.size() * sizeof(BufferCandidateTiming),
-            "candidate query downloaded more than scalar results");
+    require(after.d2h_bytes - before.d2h_bytes == values.size() * sizeof(BufferCandidateTiming)
+                && after.candidate_d2h_bytes == after.d2h_bytes - before.d2h_bytes
+                && after.result_d2h_bytes == 0 && after.stream_waits > before.stream_waits,
+            "candidate query readback accounting differs from scalar results");
     require(&CudaDualCsrTestReader::readCandidateTiming(owner) == &values
                 && owner.telemetry().cuda.d2h_bytes == after.d2h_bytes
-                && owner.telemetry().cuda.kernel_launches == after.kernel_launches,
-            "same-generation candidate query recomputed or transferred results");
+                && owner.telemetry().cuda.kernel_launches == after.kernel_launches
+                && owner.telemetry().cuda.stream_waits == after.stream_waits,
+            "same-generation candidate query recomputed, transferred or waited");
     if (generation) require(after.allocations == before.allocations, "candidate device capacity was not reused");
     compare(values, owner.timingValues());
+    const auto materialized = owner.telemetry().cuda;
+    require(materialized.result_d2h_bytes > 0
+                && materialized.d2h_bytes - after.d2h_bytes == materialized.result_d2h_bytes
+                && materialized.candidate_d2h_bytes == after.candidate_d2h_bytes,
+            "final materialization readback was omitted or charged to candidates");
+    static_cast<void>(owner.timingValues());
+    require(owner.telemetry().cuda.stream_waits == materialized.stream_waits
+                && owner.telemetry().cuda.result_d2h_bytes == materialized.result_d2h_bytes,
+            "cached final result repeated readback or wait");
     auto candidate = owner.stage(patchFor(input, generation, water, water), mode);
     bool rejected = false;
     try { (void) CudaDualCsrTestReader::readCandidateTiming(candidate); }

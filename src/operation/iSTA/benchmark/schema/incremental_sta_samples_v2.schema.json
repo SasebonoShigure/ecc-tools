@@ -364,6 +364,9 @@
                 "levelization_decision_bytes": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "readback": {
+                  "$ref": "#/$defs/cudaReadback"
                 }
               }
             }
@@ -619,6 +622,73 @@
     },
     "stage12_acceptance": {
       "const": "not_run"
+    }
+  },
+  "$defs": {
+    "cudaReadbackGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "wait_ms"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wait_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "cudaReadback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "stream_waits",
+        "stream_wait_ms",
+        "other_d2h_bytes",
+        "levelization_decisions",
+        "level_metadata",
+        "status",
+        "candidate",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "ista-cuda-readback/1.0.0"
+        },
+        "stream_waits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stream_wait_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "other_d2h_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "levelization_decisions": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "level_metadata": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "status": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "candidate": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "result": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        }
+      }
     }
   }
 }

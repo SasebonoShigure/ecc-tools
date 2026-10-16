@@ -13,7 +13,21 @@ struct CsrCudaTelemetry
   double h2d_ms{0.0};
   double levelization_ms{0.0};
   double propagation_ms{0.0};
-  double d2h_ms{0.0};
+  // Device-event interval for post-propagation status and explicit queries only.
+  double delivery_d2h_ms{0.0};
+  // Runtime waits for this generation, queries and undo; close is lifecycle cost.
+  // Host waits overlap kernel/transfer intervals; never add them to those times.
+  double stream_wait_ms{0.0};
+  std::uint64_t stream_waits{0};
+  double levelization_decision_wait_ms{0.0};
+  double level_metadata_wait_ms{0.0};
+  double status_wait_ms{0.0};
+  double candidate_wait_ms{0.0};
+  double result_wait_ms{0.0};
+  std::uint64_t level_metadata_d2h_bytes{0};
+  std::uint64_t status_d2h_bytes{0};
+  std::uint64_t candidate_d2h_bytes{0};
+  std::uint64_t result_d2h_bytes{0};
   double end_to_end_ms{0.0};
   std::uint64_t h2d_bytes{0};
   std::uint64_t d2h_bytes{0};

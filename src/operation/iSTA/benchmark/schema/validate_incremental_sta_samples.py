@@ -529,6 +529,16 @@ def validate_consumer_measurement(value: dict, mode: str, prefix: int,
         require(batch["generation_after"] == generation and batch["fallback"] is False
                 and f'{batch["executed_backend"]}/{batch["executed_strategy"]}' == mode,
                 "batch execution differs from required mode")
+        if mode.startswith("cuda/") and "readback" in batch:
+            readback = batch["readback"]
+            categories = ("levelization_decisions", "level_metadata",
+                          "status", "candidate", "result")
+            require(readback["other_d2h_bytes"] == 0
+                    and sum(readback[key]["bytes"] for key in categories) == batch["d2h_bytes"],
+                    "performance CUDA readback categories differ from actual bytes")
+            require(sum(duration(readback[key]["wait_ms"]) for key in categories)
+                    <= duration(readback["stream_wait_ms"]) + 1e-6,
+                    "CUDA readback waits exceed all stream waits")
         if mode.startswith("cuda/"):
             for counter in ("explicit_kernel_launches", "device_algorithm_calls",
                             "levelization_decision_bytes", "allocations", "h2d_bytes",

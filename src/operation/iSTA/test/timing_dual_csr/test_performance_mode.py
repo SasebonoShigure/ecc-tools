@@ -15,6 +15,15 @@ import dual_csr_timing_smoke as smoke
 from dual_csr_timing_evidence import DURATION_KEYS, validate_batch_phase_timings
 
 
+def cuda_readback_fixture(total_bytes, decision_bytes):
+    categories = {name: {"bytes": 0, "wait_ms": 0.0} for name in
+                  ("levelization_decisions", "level_metadata", "status", "candidate", "result")}
+    categories["levelization_decisions"]["bytes"] = decision_bytes
+    categories["level_metadata"]["bytes"] = total_bytes - decision_bytes
+    return {"schema_version": "ista-cuda-readback/1.0.0", "stream_waits": 2,
+            "stream_wait_ms": 1.0, "other_d2h_bytes": 0, **categories}
+
+
 class PerformanceModeTest(unittest.TestCase):
     def test_child_receives_cpu_affinity_without_external_taskset(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -167,7 +176,7 @@ class PerformanceModeTest(unittest.TestCase):
             trace.write_text(json.dumps({"workload": {"batches": [{}, {}]}}))
             build = {"debug_checks_enabled": False, "build_config": "Release"}
             result = {
-                "schema_version": "ista-cuda-full-trace/6.0.0", "build": build,
+                "schema_version": "ista-cuda-full-trace/7.0.0", "build": build,
                 "debug_checks_enabled": False, "correctness_comparison": "not_run",
                 "requested_backend": "cuda", "executed_backend": "cuda",
                 "requested_strategy": "full", "executed_strategy": "full",
@@ -176,7 +185,8 @@ class PerformanceModeTest(unittest.TestCase):
                 "batch_timings": [
                     {"generation_before": i, "generation_after": i + 1,
                      "explicit_kernel_launches": 4, "device_algorithm_calls": 2,
-                     "levelization_decision_bytes": 32,
+                     "levelization_decision_bytes": 32, "d2h_bytes": 64,
+                     "readback": cuda_readback_fixture(64, 32),
                      "result_consumption": "completed" if i == 1 else "not_run",
                      "query_materialize_ms": 1.0 if i == 1 else None,
                      "report_ms": 2.0 if i == 1 else None} for i in range(2)
@@ -199,6 +209,12 @@ class PerformanceModeTest(unittest.TestCase):
                 bad["batch_timings"][-1]["result_consumption"] = "not_run"
                 with self.assertRaises(smoke.ControllerError):
                     full.require_performance_result(bad, 2, build)
+                for field, value in (("bytes", 1000), ("wait_ms", float("nan")), ("wait_ms", 2.0)):
+                    bad = copy.deepcopy(result)
+                    bad["batch_timings"][0]["readback"]["level_metadata"][field] = value
+                    with (self.subTest(field=field, value=value),
+                          self.assertRaises(smoke.ControllerError)):
+                        full.require_performance_result(bad, 2, build)
                 self.assertEqual([call.args[1] for call in child.call_args_list],
                                  ["performance", "performance"])
                 for bad_sample in (False, True):
@@ -290,7 +306,8 @@ class PerformanceModeTest(unittest.TestCase):
                     for batch in value["batch_timings"]:
                         batch.update(explicit_kernel_launches=12, device_algorithm_calls=3,
                                      levelization_decision_bytes=24, allocations=0,
-                                     h2d_bytes=100, d2h_bytes=200)
+                                     h2d_bytes=100, d2h_bytes=200,
+                                     readback=cuda_readback_fixture(200, 24))
                 output.parent.mkdir(parents=True)
                 output.write_text(json.dumps(value))
                 return value, value["cold_end_to_end_ms"] + 1
@@ -309,6 +326,11 @@ class PerformanceModeTest(unittest.TestCase):
             schema_path = (pathlib.Path(smoke.__file__).resolve().parents[2]
                            / "benchmark/schema/incremental_sta_samples_v2.schema.json")
             schema = json.loads(schema_path.read_text())
+            historical = copy.deepcopy(value)
+            for sample in historical["samples"]:
+                for batch in sample["batch_timings"]:
+                    batch.pop("readback", None)
+            validate_document(historical, schema)
             for tamper in ("missing", "unpaired", "negative", "fallback", "wrong-ci",
                            "wrong-host", "changed-gpu", "missing-cub", "bad-launches",
                            "short-gate"):

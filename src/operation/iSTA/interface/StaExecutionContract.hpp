@@ -71,7 +71,8 @@ enum class StaFallbackReason
 enum class StaCapabilityReason
 {
   kBackendUnavailable,
-  kUnsupportedAnalysisFeatures
+  kUnsupportedAnalysisFeatures,
+  kUnsupportedExecutionMode
 };
 enum class StaSessionStatusCode
 {

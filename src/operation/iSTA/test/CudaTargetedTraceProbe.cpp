@@ -14,9 +14,10 @@
 #include "DualCsrTargetedArtifactSupport.hpp"
 #include "DualCsrTargetedPhysicalProjection.hpp"
 #include "DualCsrTraceProductionFreshAdapter.hpp"
-#include "IncreGpuStaPerformanceJson.hpp"
+#include "IncreGpuStaBuildInfo.hpp"
 #include "CudaTelemetryJson.hpp"
 #include "ProductionFreshSessionLoader.hpp"
+#include "PublicTimingJson.hpp"
 #include "TimingGraphCsrAdapter.hpp"
 
 namespace {
@@ -113,14 +114,14 @@ int main(int argc, char** argv)
       return 0;
     }
     require(argc == 8,
-            "usage: probe targeted|performance|rollback|incremental|incremental-performance|incremental-rollback (--trace FILE | --replay FILE) --prefix N --output FILE");
+            "usage: probe fresh|public|targeted|performance|rollback|incremental|incremental-performance|incremental-rollback (--trace FILE | --replay FILE) --prefix N --output FILE");
     const std::string mode = argv[1];
-    const bool incremental = mode == "incremental" || mode == "incremental-performance" || mode == "incremental-rollback";
+    const bool incremental = mode == "public" || mode == "incremental" || mode == "incremental-performance" || mode == "incremental-rollback";
     const bool performance = mode == "performance" || mode == "incremental-performance";
     const bool rollback = mode == "rollback" || mode == "incremental-rollback";
-    require(incremental || mode == "targeted" || performance || rollback, "unknown execution mode");
+    require(incremental || mode == "fresh" || mode == "targeted" || performance || rollback, "unknown execution mode");
     const auto strategy = incremental ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull;
-    require(rollback || (performance ? !incregpusta_debug_checks_enabled : incregpusta_debug_checks_enabled),
+    require(mode == "public" || rollback || (performance ? !incregpusta_debug_checks_enabled : incregpusta_debug_checks_enabled),
             "performance requires checks OFF; diagnostics require checks ON");
     std::map<std::string, std::string> options;
     for (int i = 2; i < argc; i += 2)
@@ -143,7 +144,15 @@ int main(int argc, char** argv)
                 {"fallback_count", 0},
                 {"correctness_comparison", "not_run"},
                 {"build", timing_dual_csr::test::incregpustaBuildInfo()}};
-    {
+    if (mode == "fresh") {
+      const auto fresh = timing_dual_csr::test::runProductionFreshSemanticPrefix(program, prefix);
+      output["schema_version"] = "ista-native-fresh-trace/1.0.0";
+      output["requested_backend"] = "cpu";
+      output["executed_backend"] = "cpu";
+      output["requested_strategy"] = "full";
+      output["executed_strategy"] = "full";
+      output["functional"] = timing_dual_csr::test::functionalSemanticReceiptToJson(fresh.functional);
+    } else {
       timing_dual_csr::test::DualCsrTargetedArtifactSupport artifacts(program);
       const auto source_before = incregpusta_debug_checks_enabled ? artifacts.capture() : std::vector<buffer_trace::SourceArtifactFunctionalRecord>{};
       std::optional<csr::CudaTargetedTraceResult> result;
@@ -191,6 +200,14 @@ int main(int argc, char** argv)
             const auto physical_before
                 = incregpusta_debug_checks_enabled ? timing_dual_csr::test::captureTargetedSourcePhysical() : buffer_trace::SourcePhysicalFunctionalReceipt{};
             result.emplace(csr::CudaTargetedTraceReplayer::run(view.session_context, view.database, view.reference_input, view.authority, program, prefix, strategy));
+            if (mode == "public") {
+              ista::test::requireTimingOnlyFiles(artifacts.artifacts().run_directory);
+              const auto& report = view.session_context.readCudaReport(view.database, view.authority);
+              const Json streamed{{"qor", Json::parse(report.first)}, {"paths", Json::parse(report.second)}};
+              view.session_context.prepareCudaReport(view.database, view.authority);
+              output["public"] = ista::test::capturePublicTiming();
+              require(output["public"] == streamed, "stream/file public timing output differs");
+            }
             if constexpr (incregpusta_debug_checks_enabled)
               require(physical_before == timing_dual_csr::test::captureTargetedSourcePhysical(), "source physical state changed");
           },

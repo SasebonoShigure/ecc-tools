@@ -199,7 +199,7 @@ std::optional<timing_edit::CreationToken> referencedToken(const Ref& ref)
       },
       ref);
 }
-void validateReplayBatches(const ReplayProgram& program, const std::vector<timing_edit::EditBatch>& batches,
+void appendReplayBatchViolations(const ReplayHeader& header, const std::vector<timing_edit::EditBatch>& batches,
                            BufferTraceContractViolations& errors)
 {
   if (batches.empty()) {
@@ -235,7 +235,7 @@ void validateReplayBatches(const ReplayProgram& program, const std::vector<timin
       if (known_tokens.contains(edit.creation_token)
           || std::find(current_tokens.begin(), current_tokens.end(), edit.creation_token) != current_tokens.end())
         reject(errors, BufferTraceContractCode::kDuplicate, edit_field + ".creation_token", "creation token must be globally unique");
-      if (edit.creation_token.profile_id != token(program.header.profile_id))
+      if (edit.creation_token.profile_id != token(header.profile_id))
         reject(errors, BufferTraceContractCode::kIdentityMismatch, edit_field + ".creation_token.profile_id",
                "creation token profile must match replay header");
       if (!case_id)
@@ -245,9 +245,9 @@ void validateReplayBatches(const ReplayProgram& program, const std::vector<timin
       if (*case_id != edit.creation_token.case_id || *seed != edit.creation_token.seed)
         reject(errors, BufferTraceContractCode::kIdentityMismatch, edit_field + ".creation_token",
                "case id and seed must be stable across the replay program");
-      if (program.header.workload_kind == SemanticWorkloadKind::kRealDesign && edit.creation_token.seed != 0)
+      if (header.workload_kind == SemanticWorkloadKind::kRealDesign && edit.creation_token.seed != 0)
         reject(errors, BufferTraceContractCode::kInvalidValue, edit_field + ".creation_token.seed", "real-design v1 seed must be zero");
-      if (program.header.workload_kind == SemanticWorkloadKind::kRealDesign
+      if (header.workload_kind == SemanticWorkloadKind::kRealDesign
           && (!std::holds_alternative<timing_edit::UnplacedInputs>(edit.placement_inputs)
               || !std::holds_alternative<timing_edit::NoParasiticRcInputs>(edit.rc_inputs)))
         reject(errors, BufferTraceContractCode::kInvalidValue, edit_field,
@@ -477,6 +477,14 @@ BufferTraceContractViolations validateSelectionProfile(const SelectionProfile& p
     reject(errors, BufferTraceContractCode::kInvalidProfile, "profile", "profile must exactly match its frozen version");
   return errors;
 }
+BufferTraceContractViolations detail::validateReplayBatches(const ReplayHeader& header,
+                                                    const std::vector<timing_edit::EditBatch>& batches)
+{
+  BufferTraceContractViolations errors;
+  detail::appendReplayProfileViolations(header, batches, errors);
+  appendReplayBatchViolations(header, batches, errors);
+  return errors;
+}
 BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program)
 {
   BufferTraceContractViolations errors;
@@ -494,7 +502,6 @@ BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program
     reject(errors, BufferTraceContractCode::kInvalidValue, "replay.header", "header contains an unknown enum value");
     return errors;
   }
-  detail::appendReplayProfileViolations(program, errors);
   const bool synthetic_tag = program.header.workload_kind == SemanticWorkloadKind::kSynthetic;
   const bool synthetic_value = std::holds_alternative<SyntheticReplayPayload>(program.workload);
   if (synthetic_tag != synthetic_value) {
@@ -516,7 +523,8 @@ BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program
         || recipe.tech_lef.source_text == recipe.cell_lef.source_text)
       reject(errors, BufferTraceContractCode::kInvalidSourceArtifacts, "replay.workload.source_recipe",
              "five named source recipes must be nonempty and distinct, including separate tech/cell LEF content");
-    validateReplayBatches(program, payload.batches, errors);
+    const auto batch_errors = detail::validateReplayBatches(program.header, payload.batches);
+    errors.insert(errors.end(), batch_errors.begin(), batch_errors.end());
   } else {
     const auto& payload = std::get<RealReplayPayload>(program.workload);
     const auto& refs = payload.artifacts;
@@ -532,7 +540,8 @@ BufferTraceContractViolations validateReplayProgram(const ReplayProgram& program
         || !std::all_of(paths.begin(), paths.end(), [&](const std::string& path) { return unique_paths.insert(path).second; }))
       reject(errors, BufferTraceContractCode::kInvalidSourceArtifacts, "replay.workload.artifacts",
              "real source lists/context must be nonempty and paths pairwise distinct");
-    validateReplayBatches(program, payload.batches, errors);
+    const auto batch_errors = detail::validateReplayBatches(program.header, payload.batches);
+    errors.insert(errors.end(), batch_errors.begin(), batch_errors.end());
   }
   return errors;
 }

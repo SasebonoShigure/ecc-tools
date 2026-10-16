@@ -61,6 +61,12 @@ int main()
       for (StaFallbackPolicy policy : {StaFallbackPolicy::kError, StaFallbackPolicy::kFullWithRecord}) {
         StaExecutionRequest request{backend, strategy, policy};
         StaExecutionResult result = resolveStage1StaExecution(request);
+        if ((backend == StaBackend::kCpu) != (strategy == StaUpdateStrategy::kFull)) {
+          require(!result.ok() && !result.record && result.status.code == StaSessionStatusCode::kUnsupported
+                      && result.status.capability_reason == StaCapabilityReason::kUnsupportedExecutionMode,
+                  "retired execution mode must be rejected before device access");
+          continue;
+        }
         if (backend == StaBackend::kCuda && !incregpusta_cuda_enabled) {
           require(!result.ok() && !result.record, "CUDA must be unsupported without a record");
           require(result.status.code == StaSessionStatusCode::kUnsupported, "CUDA status code");

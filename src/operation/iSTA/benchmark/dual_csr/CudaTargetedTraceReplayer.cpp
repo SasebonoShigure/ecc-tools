@@ -71,7 +71,7 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
       owned.committed();
       batch.commit_ms = elapsed(started);
       if (index + 1 == prefix) result.edit_sta_loop_ms = elapsed(loop_started);
-      if (consume_results || index + 1 == prefix) {
+      if (index + 1 == prefix) {
         auto phase = Clock::now();
         static_cast<void>(owned.device.timingValues());
         batch.query_materialize_ms = elapsed(phase);
@@ -87,6 +87,7 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
       batch.device = device.telemetry();
       result.batches.push_back(std::move(batch));
     }
+    result.consumer_loop_ms = elapsed(loop_started);
     return result;
   } catch (...) {
     // Unwind host/device undo before propagating a damaged device to the whole session.

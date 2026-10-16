@@ -445,7 +445,7 @@ SessionRun runIncrementalProbe(const Options& options)
   using namespace ista::csr;
   if (!dmInst->readLib(std::vector<std::string>{options.liberty.string()}))
     throw std::runtime_error("failed to refresh Liberty for sequential session");
-  IncrementalStaSession session({StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError});
+  IncrementalStaSession session({StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
   throwOnStaFailure(session.initialize(probeAnalysisContext(), makeConfig(options)), session.request());
   const std::uint64_t token = requireSessionToken(session);
   const StaExecutionRecord record = requireStaExecutionRecord(session.runFullBaseline(), session.request());

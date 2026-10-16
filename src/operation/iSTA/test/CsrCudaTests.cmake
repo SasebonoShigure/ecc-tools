@@ -45,8 +45,6 @@ if(ISTA_ENABLE_CUDA AND ECC_INCREGPUSTA_DEBUG_CHECKS)
       COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/baseline/run_propagated_trace.py"
       --oracle "$<TARGET_FILE:ista_timing_edit_independent_oracle_probe>"
-      --cpu-probe "$<TARGET_FILE:ista_stage6_production_fresh_probe>"
-      --cuda-full-probe "$<TARGET_FILE:ista_cuda_full_trace_probe>"
       --cuda-incremental-probe "$<TARGET_FILE:ista_cuda_targeted_trace_probe>"
       --run-root "${CMAKE_CURRENT_BINARY_DIR}/propagated-clock-runs")
   set_tests_properties(ista_cuda_propagated_clock_trace PROPERTIES

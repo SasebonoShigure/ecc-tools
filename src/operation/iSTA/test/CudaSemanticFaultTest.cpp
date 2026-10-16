@@ -4,7 +4,6 @@
 #include "BufferTraceReplayInput.hpp"
 #include "CsrReferenceCanonicalEncoder.hpp"
 #include "CudaDualCsrTestReader.hpp"
-#include "CudaFullTraceReplayer.hpp"
 #include "CudaTargetedTraceReplayer.hpp"
 #include "DualCsrTargetedArtifactSupport.hpp"
 #include "ProductionFreshSessionLoader.hpp"
@@ -17,7 +16,7 @@ void checkCudaSemanticFault(const std::filesystem::path& path, const std::string
   const auto require = [](bool value, const char* text) {
     if (!value) throw std::runtime_error(text);
   };
-  require(mode == "full" || mode == "targeted" || mode == "mixed", "unknown semantic fault mode");
+  require(mode == "targeted" || mode == "mixed", "unknown semantic fault mode");
   const auto program = buffer_trace::test::readReplayInput(path, false);
   timing_dual_csr::test::DualCsrTargetedArtifactSupport artifacts(program);
   bool verified = false;
@@ -28,11 +27,7 @@ void checkCudaSemanticFault(const std::filesystem::path& path, const std::string
       CudaDualCsrTestReader::corruptContext();
       bool failed = false;
       try {
-        if (mode == "full")
-          static_cast<void>(CudaFullTraceReplayer::run(
-              view.session_context, view.database, view.reference_input, view.authority, program, 1));
-        else
-          static_cast<void>(CudaTargetedTraceReplayer::run(
+        static_cast<void>(CudaTargetedTraceReplayer::run(
               view.session_context, view.database, view.reference_input, view.authority, program, 1,
               mode == "mixed" ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull));
       } catch (const std::exception&) {

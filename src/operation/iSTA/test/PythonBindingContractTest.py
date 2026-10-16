@@ -48,12 +48,12 @@ def make_request(backend, update_strategy, fallback_policy):
     }
 
 
-def require_sta_error(callable_, request, state):
+def require_sta_error(callable_, request, state, reason="backend_unavailable"):
     try:
         callable_()
     except ecc_py.StaSessionError as error:
         assert error.status_code == "unsupported"
-        assert error.capability_reason == "backend_unavailable"
+        assert error.capability_reason == reason
         assert error.state == state
         assert error.request == request
         return
@@ -86,7 +86,15 @@ def check_matrix(cuda_available):
         ("error", "full_with_record"),
     ):
         request = make_request(backend, strategy, policy)
-        if backend == "cpu" or cuda_available:
+        retired = (backend == "cpu") != (strategy == "full")
+        if retired:
+            require_sta_error(
+                lambda request=request: ecc_py.resolve_sta_execution(request),
+                request,
+                "created",
+                "unsupported_execution_mode",
+            )
+        elif backend == "cpu" or cuda_available:
             check_record(ecc_py.resolve_sta_execution(request), request)
         else:
             require_sta_error(
@@ -102,7 +110,7 @@ def check_matrix(cuda_available):
 
 
 def check_initialize_error(cuda_available):
-    request = make_request("cuda", "full", "error")
+    request = make_request("cuda", "incremental", "error")
     session = ecc_py.create_incremental_sta_session(request)
     assert session.state == "created"
     assert session.session_token is None

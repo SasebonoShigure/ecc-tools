@@ -25,17 +25,6 @@ void reject(BufferTraceContractViolations& errors,
       BufferTraceContractViolation{code, std::move(field), std::move(message)});
 }
 
-const std::vector<timing_edit::EditBatch>& batches(
-    const ReplayProgram& program)
-{
-  return std::visit(
-      [](const auto& payload)
-          -> const std::vector<timing_edit::EditBatch>& {
-        return payload.batches;
-      },
-      program.workload);
-}
-
 bool expectedComparability(const ReplayHeader& header)
 {
   if (header.workload_kind == SemanticWorkloadKind::kRealDesign) {
@@ -55,17 +44,17 @@ bool expectedComparability(const ReplayHeader& header)
 }  // namespace
 
 void appendReplayProfileViolations(
-    const ReplayProgram& program, BufferTraceContractViolations& errors)
+    const ReplayHeader& header, const std::vector<timing_edit::EditBatch>& replay_batches,
+    BufferTraceContractViolations& errors)
 {
-  if (!expectedComparability(program.header)) {
+  if (!expectedComparability(header)) {
     reject(errors, BufferTraceContractCode::kInvalidProfile,
            "replay.header.comparability_status",
            "comparability must exactly match workload kind and frozen profile");
   }
 
   const SelectionProfile profile
-      = frozenSelectionProfile(program.header.profile_id);
-  const auto& replay_batches = batches(program);
+      = frozenSelectionProfile(header.profile_id);
   if (replay_batches.size() > profile.rounds) {
     reject(errors, BufferTraceContractCode::kGenerationMismatch,
            "replay.workload.batches",

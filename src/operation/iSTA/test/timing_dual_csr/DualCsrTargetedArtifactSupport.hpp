@@ -14,6 +14,7 @@
 
 namespace ista::buffer_trace {
 struct ReplayProgram;
+struct SourceArtifactRefs;
 }
 
 namespace ista::timing_dual_csr::test {
@@ -23,6 +24,7 @@ class DualCsrTargetedArtifactSupport final
  public:
   explicit DualCsrTargetedArtifactSupport(
       const buffer_trace::ReplayProgram& program);
+  explicit DualCsrTargetedArtifactSupport(const buffer_trace::SourceArtifactRefs& sources);
   ~DualCsrTargetedArtifactSupport();
 
   DualCsrTargetedArtifactSupport(

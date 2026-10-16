@@ -74,7 +74,6 @@ class CudaDualCsrSession final
   [[nodiscard]] const std::vector<BufferCandidateTiming>& candidateTiming() const;
   // The owning transaction already validated and applied this host state.
   [[nodiscard]] CudaDualCsrSession stageFullCsr(const timing_dual_csr::DualCsrState& input);
-  friend class CudaFullTraceReplayer;
   // Only the direct, validated native-export paths can use these cores.
   [[nodiscard]] static CudaDualCsrSession fromNativeExport(
       const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);

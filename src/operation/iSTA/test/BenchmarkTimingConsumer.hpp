@@ -8,7 +8,7 @@
 #include <vector>
 #include "IncreGpuStaBuildConfig.hpp"
 #include "DataManager.hpp"
-#include "TimingReporter.hpp"
+#include "PublicTimingJson.hpp"
 #include "json.hpp"
 #if ISTA_ENABLE_CUDA
 #include "StaCsrSessionContext.hpp"
@@ -16,18 +16,6 @@
 #endif
 
 namespace ista {
-class TimingReporterProbeAccess final
-{
- public:
-  static nlohmann::json read()
-  {
-    TimingReporter reporter;
-    std::ostringstream qor, paths;
-    reporter.outputQorSummaryReport(&qor);
-    reporter.outputTimingPathsJson(&paths);
-    return {{"qor", nlohmann::json::parse(qor.str())}, {"paths", nlohmann::json::parse(paths.str())}};
-  }
-};
 namespace test {
 // The common consumer reads every node's scalar timing and the complete public
 // QOR/limited paths. It never exports a graph, recomputes timing, or writes reports.

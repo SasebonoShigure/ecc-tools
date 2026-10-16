@@ -205,10 +205,17 @@ std::vector<SourceArtifactFunctionalRecord> captureArtifacts(
 class DualCsrTargetedArtifactSupport::Impl final
 {
  public:
-  explicit Impl(const buffer_trace::ReplayProgram& program)
-      : root(makeOwnedTemporaryDirectory()),
-        bundle(productionArtifacts(sourceRefs(program, root), root))
+  Impl() : root(makeOwnedTemporaryDirectory()) {}
+
+  // Delegation makes the owned directory destructible if artifact preparation throws.
+  explicit Impl(const buffer_trace::ReplayProgram& program) : Impl()
   {
+    bundle = productionArtifacts(sourceRefs(program, root), root);
+  }
+
+  explicit Impl(const SourceArtifactRefs& sources) : Impl()
+  {
+    bundle = productionArtifacts(sources, root);
   }
 
   ~Impl()
@@ -224,6 +231,11 @@ class DualCsrTargetedArtifactSupport::Impl final
 DualCsrTargetedArtifactSupport::DualCsrTargetedArtifactSupport(
     const buffer_trace::ReplayProgram& program)
     : _impl(std::make_unique<Impl>(program))
+{
+}
+
+DualCsrTargetedArtifactSupport::DualCsrTargetedArtifactSupport(const buffer_trace::SourceArtifactRefs& sources)
+    : _impl(std::make_unique<Impl>(sources))
 {
 }
 

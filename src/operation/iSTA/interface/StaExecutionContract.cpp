@@ -199,6 +199,8 @@ std::string toString(StaCapabilityReason value)
       return "backend_unavailable";
     case StaCapabilityReason::kUnsupportedAnalysisFeatures:
       return "unsupported_analysis_features";
+    case StaCapabilityReason::kUnsupportedExecutionMode:
+      return "unsupported_execution_mode";
   }
   throw std::logic_error("unknown StaCapabilityReason value");
 }
@@ -279,6 +281,12 @@ std::optional<std::string> validateStaExecutionRecord(const StaExecutionRecord& 
 
 StaExecutionResult resolveStage1StaExecution(const StaExecutionRequest& request)
 {
+  if ((request.backend == StaBackend::kCpu && request.update_strategy != StaUpdateStrategy::kFull)
+      || (request.backend == StaBackend::kCuda && request.update_strategy != StaUpdateStrategy::kIncremental)) {
+    return StaExecutionResult::failure(StaStatus::failure(
+        StaSessionStatusCode::kUnsupported, StaSessionState::kCreated,
+        "STA supports only cpu/full and cuda/incremental requests", StaCapabilityReason::kUnsupportedExecutionMode));
+  }
   if (request.backend == StaBackend::kCuda) {
 #if ISTA_ENABLE_CUDA
     try {

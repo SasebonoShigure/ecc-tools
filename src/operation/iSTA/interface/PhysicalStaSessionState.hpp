@@ -7,7 +7,7 @@
 #include "PhysicalStaJournal.hpp"
 #include "IncrementalStaSession.hpp"
 #include "NativeFullEditPreparer.hpp"
-#include "DualCsrTransactionCoordinator.hpp"
+#include "DualCsrState.hpp"
 #include "StaExecutionContract.hpp"
 #if ISTA_ENABLE_CUDA
 #include "CudaCsrEditState.hpp"
@@ -47,7 +47,6 @@ class PhysicalStaSessionState final
   const izh::PreRouteRcTechnology technology;
   const StaExecutionRequest request;
   std::unique_ptr<timing_edit::NativeFullEditState> full;
-  std::unique_ptr<timing_dual_csr::DualCsrTransactionCoordinator> cpu;
 #if ISTA_ENABLE_CUDA
   std::unique_ptr<CudaCsrEditState> cuda_graph;
 #endif

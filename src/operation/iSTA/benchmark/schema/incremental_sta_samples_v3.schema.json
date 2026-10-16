@@ -1,0 +1,599 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openecos.org/schemas/incremental_sta_samples_v3.schema.json",
+  "title": "STA final-only consumer trace samples, version 3",
+  "description": "Native CPU/full and CUDA/incremental; complete fresh-process traces with one final report. Continuous loop timing includes final results. Diagnostic comparisons are not_run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest",
+    "case",
+    "build",
+    "environment",
+    "thread_execution_evidence",
+    "protocol",
+    "result_requirements",
+    "debug_checks_enabled",
+    "correctness_comparison",
+    "diagnostics",
+    "sampling_kind",
+    "samples",
+    "summaries",
+    "comparisons",
+    "performance_gate",
+    "report_schedule",
+    "primary_metric",
+    "stage_acceptance"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "3.0.0"
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "trace",
+        "prefix_batches",
+        "threads",
+        "cpu_affinity",
+        "mandatory"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "prefix_batches": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "threads": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cpu_affinity": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "mandatory": {
+          "type": "boolean"
+        }
+      }
+    },
+    "build": {
+      "type": "object"
+    },
+    "environment": {
+      "type": "object"
+    },
+    "thread_execution_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode_order",
+        "warmups",
+        "repetitions",
+        "bootstrap_seed",
+        "bootstrap_resamples",
+        "pairing_unit"
+      ],
+      "properties": {
+        "mode_order": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "warmups": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "repetitions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "bootstrap_seed": {
+          "const": 20260921
+        },
+        "bootstrap_resamples": {
+          "const": 10000
+        },
+        "pairing_unit": {
+          "const": "fresh_process_complete_trace"
+        }
+      }
+    },
+    "result_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timing_values",
+        "qor",
+        "max_paths",
+        "nworst",
+        "file_artifacts"
+      ],
+      "properties": {
+        "timing_values": {
+          "const": "all_nodes_arrival_required_slack"
+        },
+        "qor": {
+          "const": "complete"
+        },
+        "max_paths": {
+          "const": 20
+        },
+        "nworst": {
+          "const": 20
+        },
+        "file_artifacts": {
+          "const": false
+        }
+      }
+    },
+    "debug_checks_enabled": {
+      "const": false
+    },
+    "correctness_comparison": {
+      "const": "not_run"
+    },
+    "diagnostics": {
+      "const": "not_run"
+    },
+    "sampling_kind": {
+      "enum": [
+        "short_smoke",
+        "engineering"
+      ]
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode",
+          "warmup",
+          "repetition",
+          "raw_file",
+          "child_wall_ms",
+          "consumer_step_ms",
+          "load_initialize_ms",
+          "workload_ms",
+          "cleanup_ms",
+          "cold_end_to_end_ms",
+          "batch_timings",
+          "threads_requested",
+          "cpu_affinity",
+          "thread_activity",
+          "device",
+          "backend_setup_ms",
+          "consumer_loop_ms",
+          "edit_sta_loop_ms",
+          "lifecycle_cleanup_completed",
+          "result"
+        ],
+        "properties": {
+          "mode": {
+            "enum": [
+              "cpu/full",
+              "cuda/incremental"
+            ]
+          },
+          "warmup": {
+            "type": "boolean"
+          },
+          "repetition": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "raw_file": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "child_wall_ms": {"type": "number", "minimum": 0},
+          "consumer_step_ms": {"type": "number", "minimum": 0},
+          "load_initialize_ms": {"type": "number", "minimum": 0},
+          "workload_ms": {"type": "number", "minimum": 0},
+          "cleanup_ms": {"type": "number", "minimum": 0},
+          "cold_end_to_end_ms": {"type": "number", "minimum": 0},
+          "batch_timings": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "generation_after",
+                "commit_ms",
+                "query_materialize_ms",
+                "consumer_read_ms",
+                "consumer_step_ms",
+                "fallback",
+                "executed_backend",
+                "executed_strategy",
+                "report_prepare_ms",
+                "results_consumed"
+              ],
+              "properties": {
+                "generation_after": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "commit_ms": {"type": "number", "minimum": 0},
+                "query_materialize_ms": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "consumer_read_ms": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "consumer_step_ms": {"type": "number", "minimum": 0},
+                "fallback": {
+                  "const": false
+                },
+                "executed_backend": {
+                  "enum": [
+                    "cpu",
+                    "cuda"
+                  ]
+                },
+                "executed_strategy": {
+                  "enum": [
+                    "full",
+                    "incremental"
+                  ]
+                },
+                "allocations": {"type": "integer", "minimum": 0},
+                "h2d_bytes": {"type": "integer", "minimum": 0},
+                "d2h_bytes": {"type": "integer", "minimum": 0},
+                "explicit_kernel_launches": {"type": "integer", "minimum": 0},
+                "device_algorithm_calls": {"type": "integer", "minimum": 0},
+                "levelization_decision_bytes": {"type": "integer", "minimum": 0},
+                "readback": {
+                  "$ref": "#/$defs/cudaReadback"
+                },
+                "report_prepare_ms": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "results_consumed": {
+                  "type": "boolean"
+                },
+                "native_edit_prepare_ms": {"type": "number", "minimum": 0},
+                "native_execution_ms": {"type": "number", "minimum": 0},
+                "publication_ms": {"type": "number", "minimum": 0},
+                "direct_prepare_ms": {"type": "number", "minimum": 0},
+                "csr_update_ms": {"type": "number", "minimum": 0},
+                "mixed_build_ms": {"type": "number", "minimum": 0},
+                "mixed_kahn_ms": {"type": "number", "minimum": 0},
+                "mixed_prepare_ms": {"type": "number", "minimum": 0},
+                "cuda_phases": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "encode_ms",
+                    "h2d_ms",
+                    "levelization_ms",
+                    "propagation_ms",
+                    "delivery_d2h_ms",
+                    "device_end_to_end_ms"
+                  ],
+                  "properties": {
+                    "encode_ms": {"type": "number", "minimum": 0},
+                    "h2d_ms": {"type": "number", "minimum": 0},
+                    "levelization_ms": {"type": "number", "minimum": 0},
+                    "propagation_ms": {"type": "number", "minimum": 0},
+                    "delivery_d2h_ms": {"type": "number", "minimum": 0},
+                    "device_end_to_end_ms": {"type": "number", "minimum": 0}
+                  }
+                }
+              }
+            }
+          },
+          "threads_requested": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cpu_affinity": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "integer", "minimum": 0}
+          },
+          "thread_activity": {
+            "const": "external_profile"
+          },
+          "device": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "uuid",
+              "driver_version",
+              "runtime_version"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uuid": {
+                "type": "string",
+                "pattern": "^GPU-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+              },
+              "driver_version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "runtime_version": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "backend_setup_ms": {"type": "number", "minimum": 0},
+          "consumer_loop_ms": {"type": "number", "minimum": 0},
+          "edit_sta_loop_ms": {"type": "number", "minimum": 0},
+          "lifecycle_cleanup_completed": {
+            "const": true
+          },
+          "result": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "generation",
+              "report_consumptions",
+              "timing_node_count",
+              "baseline_instance_count",
+              "baseline_timing_node_count"
+            ],
+            "properties": {
+              "generation": {"type": "integer", "minimum": 0},
+              "report_consumptions": {
+                "const": 1
+              },
+              "timing_node_count": {"type": "integer", "minimum": 0},
+              "baseline_instance_count": {"type": "integer", "minimum": 0},
+              "baseline_timing_node_count": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "summaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu/full",
+        "cuda/incremental"
+      ],
+      "properties": {
+        "cpu/full": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "median_ms",
+            "p95_ms",
+            "mad_ms"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "median_ms": {"type": "number", "minimum": 0},
+            "p95_ms": {"type": "number", "minimum": 0},
+            "mad_ms": {"type": "number", "minimum": 0}
+          }
+        },
+        "cuda/incremental": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "median_ms",
+            "p95_ms",
+            "mad_ms"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "median_ms": {"type": "number", "minimum": 0},
+            "p95_ms": {"type": "number", "minimum": 0},
+            "mad_ms": {"type": "number", "minimum": 0}
+          }
+        }
+      }
+    },
+    "comparisons": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cuda/incremental_vs_cpu/full"
+      ],
+      "properties": {
+        "cuda/incremental_vs_cpu/full": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "paired_speedup_median",
+            "ci95",
+            "lower_bound_above_one"
+          ],
+          "properties": {
+            "paired_speedup_median": {"type": "number", "minimum": 0},
+            "ci95": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {"type": "number", "minimum": 0}
+            },
+            "lower_bound_above_one": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "performance_gate": {
+      "enum": [
+        "not_run",
+        "passed",
+        "failed"
+      ]
+    },
+    "report_schedule": {
+      "const": "final_only"
+    },
+    "primary_metric": {
+      "const": "consumer_loop_ms"
+    },
+    "stage_acceptance": {
+      "const": "not_run"
+    }
+  },
+  "$defs": {
+    "cudaReadbackGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bytes",
+        "wait_ms"
+      ],
+      "properties": {
+        "bytes": {"type": "integer", "minimum": 0},
+        "wait_ms": {"type": "number", "minimum": 0}
+      }
+    },
+    "cudaReadback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "stream_waits",
+        "stream_wait_ms",
+        "other_d2h_bytes",
+        "levelization_decisions",
+        "level_metadata",
+        "status",
+        "candidate",
+        "result"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "ista-cuda-readback/1.0.0"
+        },
+        "stream_waits": {"type": "integer", "minimum": 0},
+        "stream_wait_ms": {"type": "number", "minimum": 0},
+        "other_d2h_bytes": {"type": "integer", "minimum": 0},
+        "levelization_decisions": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "level_metadata": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "status": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "candidate": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        },
+        "result": {
+          "$ref": "#/$defs/cudaReadbackGroup"
+        }
+      }
+    }
+  }
+}

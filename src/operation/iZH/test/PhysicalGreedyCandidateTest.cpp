@@ -58,10 +58,8 @@ void equalGainOrder(csr::detail::NativeLibraryModels& models, const LibraryCellR
 void physicalGreedyCandidateContract(bool with_cuda)
 {
   std::vector<StaExecutionRequest> requests{
-      {StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError},
-      {StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError}};
+      {StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError}};
   if (with_cuda) {
-    requests.push_back({StaBackend::kCuda, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
     requests.push_back({StaBackend::kCuda, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError});
   }
   std::optional<PhysicalGreedySelection> expected;
@@ -88,7 +86,7 @@ void physicalGreedyCandidateContract(bool with_cuda)
     const auto cell = nativeLibraryCellRef(database, "BUF_X1");
     const auto driver = editTestCreationToken(1);
     const auto old_native = csr::exportCsrGraphSnapshot(database);
-    const bool csr_mode = request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental;
+    const bool csr_mode = request.backend == StaBackend::kCuda;
     for (std::uint64_t before = 0; before != 3; ++before) {
       const auto token = editTestCreationToken(before + 1);
       const auto x = 5000 + static_cast<std::int32_t>(before) * 3000;
@@ -123,7 +121,7 @@ void physicalGreedyCandidateContract(bool with_cuda)
         [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority& authority) {
       auto& owner = StaTimingEditSessionProbeAccess::physicalState(context);
       owner.materialize(database, context, authority);
-      const auto& resolver = owner.full ? owner.full->resolver() : owner.cpu ? owner.cpu->committed().resolver
+      const auto& resolver = owner.full ? owner.full->resolver()
 #if ISTA_ENABLE_CUDA
           : owner.cuda_graph->resolver
 #else

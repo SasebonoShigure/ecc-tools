@@ -116,7 +116,7 @@ class IncrementalStaSession
   StaExecutionResult runPhysicalBaselineImpl(const PhysicalStaConfig& config, bool recovery);
   [[nodiscard]] StaStatus withCurrentState(StaStatus status) const;
   [[nodiscard]] StaStatus invalidState(std::string message) const;
-  [[nodiscard]] bool usesCpuSnapshot() const noexcept;
+  [[nodiscard]] bool supportsCpuDiagnostics() const noexcept;
   [[nodiscard]] std::optional<std::string> observationOwnershipError(const csr::CsrSnapshotObservation& observation) const;
 
   StaExecutionRequest _request;

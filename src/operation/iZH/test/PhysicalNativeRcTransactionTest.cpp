@@ -102,41 +102,33 @@ void recoveryRecordContract(const EditBatch& batch, std::span<const PhysicalBuff
   }
   rejected("{\"schema_version\":\"duplicate\"," + bytes.substr(1));
 }
-void cpuBaselineModes()
+void cpuBaseline()
 {
-  std::optional<PhysicalStaCurrentResult> expected;
-  for (auto strategy : {StaUpdateStrategy::kFull, StaUpdateStrategy::kIncremental}) {
-    NativeTransactionRuntime runtime;
-    installNativeTransactionBaseline();
-    PhysicalDesign physical;
-    RecoveryDirectory recovery;
-    auto analysis = editTestAnalysisContext(); analysis.rc_corner = "pre_route";
-    GuardedTestSession session({StaBackend::kCpu, strategy, StaFallbackPolicy::kError}, analysis);
-    const auto baseline = session.session().runPhysicalBaseline(recovery.config());
-    if (!baseline.ok()) throw std::runtime_error("CPU physical baseline: " + baseline.status.message);
-    const auto result = session.session().readPhysicalResult();
-    require(result.generation == 0 && !baseline.record->incremental_batch_executed,
-            "CPU baseline counted as an incremental edit");
-    if (expected)
-      require(result.timing == expected->timing && result.qor_json == expected->qor_json
-                  && result.paths_json == expected->paths_json,
-              "CPU CSR physical baseline differs from native full");
-    else expected = result;
-    const auto placement = session.session().readPhysicalPlacement(0, {"BUF_X1"});
-    require(placement.generation == 0 && placement.dbu_per_um == 1000
-        && placement.cells.at("BUF_X1") == std::array<std::int32_t, 2>{1000, 2000}
-        && placement.geometry.obstacles.empty(), "physical placement query changed baseline geometry");
-    bool stale = false;
-    try { static_cast<void>(session.session().readPhysicalPlacement(1, {"BUF_X1"})); }
-    catch (const StaSessionException&) { stale = true; }
-    require(stale, "physical placement query accepted a stale generation");
-    physicalOutputFailureRetry(physical.design);
-    physicalQueryAllocationRetry(session.session());
+  NativeTransactionRuntime runtime;
+  installNativeTransactionBaseline();
+  PhysicalDesign physical;
+  RecoveryDirectory recovery;
+  auto analysis = editTestAnalysisContext(); analysis.rc_corner = "pre_route";
+  GuardedTestSession session({StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError}, analysis);
+  const auto baseline = session.session().runPhysicalBaseline(recovery.config());
+  if (!baseline.ok()) throw std::runtime_error("CPU physical baseline: " + baseline.status.message);
+  const auto result = session.session().readPhysicalResult();
+  require(result.generation == 0 && !baseline.record->incremental_batch_executed,
+          "CPU baseline counted as an incremental edit");
+  const auto placement = session.session().readPhysicalPlacement(0, {"BUF_X1"});
+  require(placement.generation == 0 && placement.dbu_per_um == 1000
+      && placement.cells.at("BUF_X1") == std::array<std::int32_t, 2>{1000, 2000}
+      && placement.geometry.obstacles.empty(), "physical placement query changed baseline geometry");
+  bool stale = false;
+  try { static_cast<void>(session.session().readPhysicalPlacement(1, {"BUF_X1"})); }
+  catch (const StaSessionException&) { stale = true; }
+  require(stale, "physical placement query accepted a stale generation");
+  physicalOutputFailureRetry(physical.design);
+  physicalQueryAllocationRetry(session.session());
 #if ECC_INCREGPUSTA_DEBUG_CHECKS
-    physicalDiagnosticCanary(session.session(), physical.design);
+  physicalDiagnosticCanary(session.session(), physical.design);
 #endif
-    require(session.closeAndRelease().ok(), "CPU physical baseline close failed");
-  }
+  require(session.closeAndRelease().ok(), "CPU physical baseline close failed");
 }
 void recoveryModelIdentity()
 {
@@ -186,10 +178,10 @@ void recoveryModelIdentity()
     require(session.closeAndRelease().ok(), "model identity recovery close failed");
   }
 }
-void baselineRejections()
+void baselineRejections(bool cuda)
 {
   NativeTransactionRuntime runtime;
-  for (int scenario = 0; scenario != 4; ++scenario) {
+  for (int scenario = cuda ? 3 : 0; scenario != (cuda ? 4 : 3); ++scenario) {
     installNativeTransactionBaseline();
     PhysicalDesign physical;
     auto analysis = editTestAnalysisContext(); analysis.rc_corner = "pre_route";
@@ -202,7 +194,7 @@ void baselineRejections()
       STADM.getDatabase().get_timing_constraint().get_case_analysis_map().emplace("in", false);
       STADM.getDatabase().get_timing_constraint().get_clock_map().emplace("test_clock", std::move(clock));
     }
-    GuardedTestSession session({StaBackend::kCpu, gated ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull,
+    GuardedTestSession session({cuda ? StaBackend::kCuda : StaBackend::kCpu, cuda ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull,
                                StaFallbackPolicy::kError}, analysis);
     if (scenario == 2) {
       auto& pins = STADM.getDatabase().get_net_map().at("n0").get_pin_name_list();
@@ -262,8 +254,8 @@ void run()
   guarded([&](std::uint64_t token, StaCsrSessionContext& context, const NativeExecutionAuthority& authority) {
     auto& database = STADM.getDatabase();
     auto& owner = StaTimingEditSessionProbeAccess::physicalState(context);
-    require(owner.generation(context).value() == 0 && owner.cpu == nullptr,
-            "CPU/full baseline installed a second backend");
+    require(owner.generation(context).value() == 0 && owner.full != nullptr,
+            "CPU/full baseline did not bind native state");
     owner.prepareReport(database, context, authority);
     auto exported = csr::exportCsrReferenceInputCandidate(database, analysis, token);
     require(std::holds_alternative<csr::CsrReferenceInput>(exported), "physical native baseline export failed");
@@ -490,10 +482,8 @@ void physicalBatches(bool with_cuda)
 {
   std::vector<PhysicalStaCurrentResult> oracle;
   std::vector<StaExecutionRequest> requests{
-      {StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError},
-      {StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError}};
+      {StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError}};
   if (with_cuda) {
-    requests.push_back({StaBackend::kCuda, StaUpdateStrategy::kFull, StaFallbackPolicy::kError});
     requests.push_back({StaBackend::kCuda, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError});
   }
   for (const auto request : requests) {
@@ -571,13 +561,13 @@ void physicalBatches(bool with_cuda)
         std::filesystem::remove(collision);
         const auto native_before = csr::exportCsrGraphSnapshot(STADM.getDatabase());
         mode_check(session.session().applyPhysicalBatch(batch, locations), before + 1);
-        if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental)
+        if (request.backend == StaBackend::kCuda)
           require(csr::exportCsrGraphSnapshot(STADM.getDatabase()) == native_before,
                   "CSR mode edited native timing before a query");
         const auto selection = session.session().selectPhysicalBuffers(before + 1, {"BUF_X1"}, 100, 100);
         require(selection == session.session().selectPhysicalBuffers(before + 1, {"BUF_X1"}, 100, 100),
                 "repeated candidate selection changed the committed result");
-        if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental) {
+        if (request.backend == StaBackend::kCuda) {
           require(csr::exportCsrGraphSnapshot(STADM.getDatabase()) == native_before,
                   "candidate selection materialized the native graph");
           physicalColdViewRetry(session.session());
@@ -586,7 +576,7 @@ void physicalBatches(bool with_cuda)
         const auto candidate_status = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(session.session(),
             [&](std::uint64_t, StaCsrSessionContext& context, const NativeExecutionAuthority&) {
           const auto& owner = StaTimingEditSessionProbeAccess::physicalState(context);
-          const auto& resolver = owner.full ? owner.full->resolver() : owner.cpu ? owner.cpu->committed().resolver
+          const auto& resolver = owner.full ? owner.full->resolver()
 #if ISTA_ENABLE_CUDA
               : owner.cuda_graph->resolver
 #else
@@ -623,10 +613,10 @@ void physicalBatches(bool with_cuda)
       auto analysis = editTestAnalysisContext(); analysis.rc_corner = "pre_route";
       GuardedTestSession session(request, analysis);
       mode_check(session.session().recoverPhysicalBaseline(recovery.config()), 2);
-      if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental)
+      if (request.backend == StaBackend::kCuda)
         require(STADM.getDatabase().get_instance_map().empty() && STADM.getDatabase().get_pin_map().size() == 2,
                 "CSR recovery materialized unrequested native timing");
-      if (request.backend == StaBackend::kCuda || request.update_strategy == StaUpdateStrategy::kIncremental)
+      if (request.backend == StaBackend::kCuda)
         physicalColdViewRetry(session.session());
       check(session.session().readPhysicalResult());
       mode_check(session.session().applyPhysicalBatch(next, next_locations), 3);
@@ -646,9 +636,10 @@ int main(int argc, char** argv)
     require(argc == 1 || (argc == 2 && std::string(argv[1]) == "--cuda"), "usage: physical-test [--cuda]");
     if (argc == 2) {
       require(incregpusta_cuda_enabled, "CUDA physical test needs a CUDA build");
+      baselineRejections(true);
       physicalBatches(true);
       physicalGreedyCandidateContract(true);
-    } else { recoveryModelIdentity(); baselineRejections(); cpuBaselineModes(); run(); run(); physicalBatches(false); physicalGreedyCandidateContract(false); physicalFirstReportFailure(); }
+    } else { recoveryModelIdentity(); baselineRejections(false); cpuBaseline(); run(); run(); physicalBatches(false); physicalGreedyCandidateContract(false); physicalFirstReportFailure(); }
     std::cout << "physical/native RC multi-batch apply, rollback and commit passed\n";
   }
   catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

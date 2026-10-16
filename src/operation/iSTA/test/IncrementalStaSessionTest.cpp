@@ -153,11 +153,6 @@ StaExecutionRequest fullRequest()
   return {StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError};
 }
 
-StaExecutionRequest incrementalRequest()
-{
-  return {StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError};
-}
-
 void testFullSessionAndRetry()
 {
   auto operations = std::make_unique<FakeOperations>();
@@ -175,21 +170,22 @@ void testFullSessionAndRetry()
   require(!session.snapshotObservation(), "full session exposed an observation before run");
 
   const StaExecutionResult result = session.runFullBaseline();
-  require(result.ok() && fake->run_calls == 1 && !fake->received_context, "full baseline did not use the null-context path");
-  require(!session.snapshotObservation(), "full session exposed an observation after run");
+  require(result.ok() && fake->run_calls == 1 && fake->received_context == incregpusta_debug_checks_enabled,
+          "full baseline context must follow the diagnostic build mode");
+  require(fake->copy_calls == 0 && !fake->active_observation, "full baseline created an unrequested observation");
   require(session.close().ok() && session.close().ok(), "full session close was not idempotent");
   require(fake->close_calls == 1 && fake->close_token == *token, "full session close count or token drifted");
   require(session.sessionToken() == token, "readonly token changed after close");
 }
 
-void testIncrementalObservationLifecycle()
+void testDiagnosticObservationLifecycle()
 {
   auto operations = std::make_unique<FakeOperations>();
   FakeOperations* fake = operations.get();
-  IncrementalStaSession session(incrementalRequest(), std::move(operations));
-  require(session.initialize(testAnalysisContext(), {}).ok(), "incremental initialize failed");
+  IncrementalStaSession session(fullRequest(), std::move(operations));
+  require(session.initialize(testAnalysisContext(), {}).ok(), "diagnostic session initialize failed");
   const std::uint64_t token = *session.sessionToken();
-  require(session.runFullBaseline().ok(), "incremental baseline failed");
+  require(session.runFullBaseline().ok(), "diagnostic session baseline failed");
 
   require(fake->copy_calls == 0 && !fake->active_observation, "baseline must not capture a diagnostic observation");
   if constexpr (!incregpusta_debug_checks_enabled) {
@@ -200,18 +196,18 @@ void testIncrementalObservationLifecycle()
   }
   auto ready = session.snapshotObservation();
   require(ready && ready->state == csr::CsrSnapshotState::kReady && ready->identity.session_token == token,
-          "incremental getter did not return the ready observation");
+          "diagnostic getter did not return the ready observation");
   ready->identity.topology_fingerprint = "mutated-detached-value";
   auto stable = session.snapshotObservation();
   require(stable && stable->identity.topology_fingerprint == std::string(64, 'a'), "detached observation mutation leaked into session state");
 
-  require(session.close().ok(), "incremental close failed");
+  require(session.close().ok(), "diagnostic close failed");
   auto released = session.snapshotObservation();
   require(released && released->state == csr::CsrSnapshotState::kReleased && released->identity.session_token == token,
           "closed getter did not return the released cache");
   released->state = csr::CsrSnapshotState::kReady;
   require(session.snapshotObservation()->state == csr::CsrSnapshotState::kReleased, "released getter did not return a detached copy");
-  require(session.close().ok() && fake->close_calls == 1, "incremental double close retried cleanup");
+  require(session.close().ok() && fake->close_calls == 1, "diagnostic double close retried cleanup");
 }
 
 void testHandoffSurvivesCloseThrow()
@@ -219,7 +215,7 @@ void testHandoffSurvivesCloseThrow()
   auto operations = std::make_unique<FakeOperations>();
   FakeOperations* fake = operations.get();
   fake->throw_close = true;
-  IncrementalStaSession session(incrementalRequest(), std::move(operations));
+  IncrementalStaSession session(fullRequest(), std::move(operations));
   require(session.initialize(testAnalysisContext(), {}).ok() && session.runFullBaseline().ok(), "handoff fixture setup failed");
 
   require(bool(session.snapshotObservation()) == incregpusta_debug_checks_enabled, "explicit observation request disagrees with build mode");
@@ -250,7 +246,7 @@ void testGetterVersusClose()
 {
   auto operations = std::make_unique<FakeOperations>();
   FakeOperations* fake = operations.get();
-  IncrementalStaSession session(incrementalRequest(), std::move(operations));
+  IncrementalStaSession session(fullRequest(), std::move(operations));
   require(session.initialize(testAnalysisContext(), {}).ok() && session.runFullBaseline().ok(), "concurrency fixture setup failed");
 
   if constexpr (!incregpusta_debug_checks_enabled) {
@@ -288,7 +284,7 @@ void testGetterVersusClose()
 int main()
 {
   testFullSessionAndRetry();
-  testIncrementalObservationLifecycle();
+  testDiagnosticObservationLifecycle();
   testHandoffSurvivesCloseThrow();
   testSameSessionReentrancy();
   testGetterVersusClose();
@@ -305,17 +301,17 @@ int main()
   require(full_session.close().ok() && full_session.close().ok(), "idempotent close");
   require(full_fake->initialize_calls == 1 && full_fake->run_calls == 1 && full_fake->close_calls == 1, "exact operation counts");
 
-  StaExecutionRequest incremental_request{StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError};
-  auto incremental_operations = std::make_unique<FakeOperations>();
-  FakeOperations* incremental_fake = incremental_operations.get();
-  IncrementalStaSession incremental_session(incremental_request, std::move(incremental_operations));
-  require(incremental_session.initialize(testAnalysisContext(), {}).ok(), "incremental initialize");
-  StaExecutionResult baseline = incremental_session.runFullBaseline();
-  require(baseline.ok() && baseline.record->execution_kind == StaExecutionKind::kBaselineOnly, "baseline-only record");
-  require(!baseline.record->fallback_to_full, "baseline-only is not fallback");
-  require(!incremental_fake->active_observation, "baseline must not capture an observation");
-  require(incremental_session.close().ok(), "incremental close");
-  require(!incremental_fake->active_observation && !incremental_session.snapshotObservation(), "close must not create an unrequested observation");
+  for (const auto request : {StaExecutionRequest{StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError},
+                             StaExecutionRequest{StaBackend::kCuda, StaUpdateStrategy::kFull, StaFallbackPolicy::kError}}) {
+    auto operations = std::make_unique<FakeOperations>();
+    auto* fake = operations.get();
+    IncrementalStaSession session(request, std::move(operations));
+    const auto status = session.initialize(testAnalysisContext(), {});
+    require(status.code == StaSessionStatusCode::kUnsupported
+                && status.capability_reason == StaCapabilityReason::kUnsupportedExecutionMode
+                && !session.sessionToken() && fake->initialize_calls == 0 && fake->run_calls == 0,
+            "retired mode must fail before token allocation or native work");
+  }
 
   auto failed_operations = std::make_unique<FakeOperations>();
   FakeOperations* failed_fake = failed_operations.get();
@@ -343,28 +339,26 @@ int main()
   }
 
   if constexpr (incregpusta_cuda_enabled) {
-    for (auto strategy : {StaUpdateStrategy::kFull, StaUpdateStrategy::kIncremental}) {
       for (bool fail : {false, true}) {
         auto operations = std::make_unique<FakeOperations>();
         auto* fake = operations.get();
         fake->throw_run = fail;
-        IncrementalStaSession session({StaBackend::kCuda, strategy, StaFallbackPolicy::kError}, std::move(operations));
-        require(session.initialize(testAnalysisContext(), {}).ok(), "CUDA full initializes on an available device");
+        IncrementalStaSession session({StaBackend::kCuda, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError}, std::move(operations));
+        require(session.initialize(testAnalysisContext(), {}).ok(), "CUDA baseline initializes on an available device");
         const auto result = session.runFullBaseline();
-        require(fake->received_context, "CUDA full receives its owned session context");
+        require(fake->received_context, "CUDA baseline receives its owned session context");
         if (fail) {
           require(!result.ok() && session.state() == StaSessionState::kPoisoned, "CUDA run failure poisons the session");
           require(session.runFullBaseline().status.code == StaSessionStatusCode::kInvalidState, "poisoned CUDA session cannot run again");
         } else {
           require(
               result.ok() && result.record->executed_backend == StaBackend::kCuda
-                  && result.record->execution_kind == (strategy == StaUpdateStrategy::kFull ? StaExecutionKind::kFullUpdate : StaExecutionKind::kBaselineOnly)
+                  && result.record->execution_kind == StaExecutionKind::kBaselineOnly
                   && !result.record->fallback_to_full,
-              "CUDA full records the actual backend without fallback");
+              "CUDA baseline records the actual backend without fallback");
         }
         require(session.close().ok() && fake->close_calls == 1, "CUDA closes after success or failure");
       }
-    }
   }
 
   auto created_operations = std::make_unique<FakeOperations>();

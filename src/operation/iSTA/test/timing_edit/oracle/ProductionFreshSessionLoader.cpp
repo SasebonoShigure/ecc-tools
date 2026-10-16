@@ -79,17 +79,18 @@ std::map<std::string, std::any> makeConfig(const fs::path& run_directory, std::i
           {"-timing_corner", std::string{}}};
 }
 
-void requireFullRecord(const StaExecutionRecord& record, StaBackend backend)
+void requireBaselineRecord(const StaExecutionRecord& record, StaBackend backend)
 {
+  const bool cuda = backend == StaBackend::kCuda;
   if (record.requested_backend != backend
-      || record.requested_update_strategy != StaUpdateStrategy::kFull
+      || record.requested_update_strategy != (cuda ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull)
       || record.fallback_policy != StaFallbackPolicy::kError
       || record.executed_backend != backend
       || record.executed_update_strategy != StaUpdateStrategy::kFull
-      || record.execution_kind != StaExecutionKind::kFullUpdate
+      || record.execution_kind != (cuda ? StaExecutionKind::kBaselineOnly : StaExecutionKind::kFullUpdate)
       || record.propagation_scope != StaPropagationScope::kFullGraph
       || record.incremental_batch_executed || record.fallback_to_full
-      || record.fallback_reason) {
+      || record.fallback_reason != (cuda ? std::optional{StaFallbackReason::kNotApplicableNoMutation} : std::nullopt)) {
     fail("native baseline did not execute the requested full backend contract");
   }
 }
@@ -134,14 +135,10 @@ void loadArtifacts(const FreshBaselineArtifacts& artifacts)
   }
 }
 
-}  // namespace
+using SessionWork = std::function<void(const ProductionNativeSessionView&, csr::CsrReferenceInput&)>;
 
-void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
-                                       const ProductionFreshSessionWork& work, StaBackend backend)
+void runSession(const FreshBaselineArtifacts& supplied, const SessionWork& work, StaBackend backend)
 {
-  if (!work) {
-    fail("guarded work callback is empty");
-  }
   if (supplied.top.empty()) {
     fail("top name is empty");
   }
@@ -183,7 +180,7 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
   loadArtifacts(artifacts);
   csr::CsrReferenceInput baseline_input;
   IncrementalStaSession session(
-      {backend, StaUpdateStrategy::kFull, StaFallbackPolicy::kError},
+      {backend, backend == StaBackend::kCuda ? StaUpdateStrategy::kIncremental : StaUpdateStrategy::kFull, StaFallbackPolicy::kError},
       std::make_unique<TimingOnlySessionOperations>(backend, baseline_input));
   throwOnStaFailure(session.initialize(artifacts.analysis_context, makeConfig(artifacts.run_directory, artifacts.threads)),
                     session.request());
@@ -191,7 +188,7 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
   if (!token || *token == 0 || session.state() != StaSessionState::kInitialized) {
     fail("initialized session token/state differs");
   }
-  requireFullRecord(requireStaExecutionRecord(session.runFullBaseline(), session.request()), backend);
+  requireBaselineRecord(requireStaExecutionRecord(session.runFullBaseline(), session.request()), backend);
   if (session.state() != StaSessionState::kBaselineExecuted) {
     fail("baseline session state differs");
   }
@@ -201,21 +198,8 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
     const StaStatus guarded = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
         session, [&](std::uint64_t guarded_token, StaCsrSessionContext& context,
                      const NativeExecutionAuthority& authority) {
-          if (backend == StaBackend::kCpu) {
-            auto exported = csr::exportCsrReferenceInputCandidate(
-                STADM.getDatabase(), artifacts.analysis_context, guarded_token, context.libraryModels(STADM.getDatabase()));
-            auto* reference = std::get_if<csr::CsrReferenceInput>(&exported);
-            if (!reference)
-              fail("fresh native baseline CSR export failed");
-            baseline_input = std::move(*reference);
-          }
-          if (baseline_input.source_identity.session_token != guarded_token
-              || baseline_input.source_identity.graph_generation != 0
-              || !baseline_input.unsupported_reasons.empty()) {
-            fail("fresh analyzed baseline is not a supported generation-zero CSR reference input");
-          }
-          work(ProductionFreshSessionView{session, context, STADM.getDatabase(), baseline_input,
-                                          authority, guarded_token, artifact_evidence});
+          work(ProductionNativeSessionView{session, context, STADM.getDatabase(),
+                                           authority, guarded_token, artifact_evidence}, baseline_input);
           return StaStatus::success(StaSessionState::kBaselineExecuted);
         });
     if (!guarded.ok()) {
@@ -236,6 +220,40 @@ void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& supplied,
   if (work_failure) {
     std::rethrow_exception(work_failure);
   }
+}
+
+}  // namespace
+
+void ProductionFreshSessionLoader::runNative(const FreshBaselineArtifacts& artifacts,
+                                             const ProductionNativeSessionWork& work)
+{
+  if (!work)
+    fail("guarded work callback is empty");
+  runSession(artifacts, [&](const auto& view, auto&) { work(view); }, StaBackend::kCpu);
+}
+
+void ProductionFreshSessionLoader::run(const FreshBaselineArtifacts& artifacts,
+                                       const ProductionFreshSessionWork& work, StaBackend backend)
+{
+  if (!work)
+    fail("guarded work callback is empty");
+  runSession(artifacts, [&](const auto& view, auto& baseline_input) {
+    if (backend == StaBackend::kCpu) {
+      auto exported = csr::exportCsrReferenceInputCandidate(
+          view.database, artifacts.analysis_context, view.session_token,
+          view.session_context.libraryModels(view.database));
+      auto* reference = std::get_if<csr::CsrReferenceInput>(&exported);
+      if (!reference)
+        fail("fresh native baseline CSR export failed");
+      baseline_input = std::move(*reference);
+    }
+    if (baseline_input.source_identity.session_token != view.session_token
+        || baseline_input.source_identity.graph_generation != 0
+        || !baseline_input.unsupported_reasons.empty()) {
+      fail("fresh analyzed baseline is not a supported generation-zero CSR reference input");
+    }
+    work(ProductionFreshSessionView{view, baseline_input});
+  }, backend);
 }
 
 }  // namespace ista::timing_edit::oracle

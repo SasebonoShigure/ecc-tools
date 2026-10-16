@@ -35,11 +35,11 @@ struct CudaTargetedTraceBatch
 };
 struct CudaTargetedTraceResult
 {
-  double backend_setup_ms{}, edit_sta_loop_ms{};
+  double backend_setup_ms{}, edit_sta_loop_ms{}, consumer_loop_ms{};
   CudaDualCsrTelemetry initialization;
   std::vector<CudaTargetedTraceBatch> batches;
 };
-// The operation guard owns the CSR/device transaction for the complete prefix.
+// The operation guard owns the complete prefix; the optional consumer runs only after its final report.
 class CudaTargetedTraceReplayer final
 {
  public:

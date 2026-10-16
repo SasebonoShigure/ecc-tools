@@ -30,17 +30,22 @@ class NativeExecutionAuthority;
 
 namespace ista::timing_edit::oracle {
 
-struct ProductionFreshSessionView
+struct ProductionNativeSessionView
 {
   IncrementalStaSession& session;
   StaCsrSessionContext& session_context;
   Database& database;
-  const csr::CsrReferenceInput& reference_input;
   const NativeExecutionAuthority& authority;
   std::uint64_t session_token;
   const std::vector<FreshArtifactEvidence>& artifact_evidence;
 };
 
+struct ProductionFreshSessionView : ProductionNativeSessionView
+{
+  const csr::CsrReferenceInput& reference_input;
+};
+
+using ProductionNativeSessionWork = std::function<void(const ProductionNativeSessionView&)>;
 using ProductionFreshSessionWork = std::function<void(const ProductionFreshSessionView&)>;
 
 // Loads the real artifacts into a fresh full session with the selected native backend, then lends the
@@ -49,6 +54,9 @@ using ProductionFreshSessionWork = std::function<void(const ProductionFreshSessi
 class ProductionFreshSessionLoader final
 {
  public:
+  // Native consumers do not export a CSR graph or inherit its supported-subset restriction.
+  static void runNative(const FreshBaselineArtifacts& artifacts,
+                        const ProductionNativeSessionWork& work);
   static void run(const FreshBaselineArtifacts& artifacts,
                   const ProductionFreshSessionWork& work,
                   StaBackend backend = StaBackend::kCpu);

@@ -216,7 +216,7 @@ StaExecutionResult IncrementalStaSession::runFullBaseline()
   StaStatus status;
   try {
     status = _operations->runFullBaseline(_token.load(std::memory_order_acquire),
-                                          (usesCpuSnapshot() || _request.backend == StaBackend::kCuda) ? _context.get() : nullptr);
+                                          (supportsCpuDiagnostics() || _request.backend == StaBackend::kCuda) ? _context.get() : nullptr);
   } catch (...) {
     _state.store(StaSessionState::kPoisoned, std::memory_order_release);
     return StaExecutionResult::failure(StaStatus::failure(StaSessionStatusCode::kRunFailed, state(), "STA baseline threw: " + exceptionMessage()));
@@ -281,7 +281,7 @@ StaStatus IncrementalStaSession::close()
 StaCsrReferenceAttempt IncrementalStaSession::computeCsrReferenceForTesting()
 {
   SessionApiGuard guard(this, _api_mutex);
-  if (!incregpusta_debug_checks_enabled || !guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !usesCpuSnapshot() || !_context)
+  if (!incregpusta_debug_checks_enabled || !guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !supportsCpuDiagnostics() || !_context)
     return invalidReferenceAttempt();
   return _operations->computeCsrReferenceForTesting(_token.load(std::memory_order_acquire), _context.get());
 }
@@ -289,7 +289,7 @@ StaCsrReferenceAttempt IncrementalStaSession::computeCsrReferenceForTesting()
 StaCsrScatterAttempt IncrementalStaSession::scatterCsrTimingResultForTesting(const csr::CsrTimingResult& result)
 {
   SessionApiGuard guard(this, _api_mutex);
-  if (!incregpusta_debug_checks_enabled || !guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !usesCpuSnapshot() || !_context)
+  if (!incregpusta_debug_checks_enabled || !guard || !_baseline_executed || state() != StaSessionState::kBaselineExecuted || !supportsCpuDiagnostics() || !_context)
     return invalidScatterAttempt();
   StaCsrScatterAttempt attempt = _operations->scatterCsrTimingResultForTesting(_token.load(std::memory_order_acquire), _context.get(), result);
   if (attempt.value.scatter_result.code == csr::CsrScatterCode::kSnapshotInvalidated)
@@ -314,7 +314,7 @@ std::unique_ptr<csr::CsrSnapshotObservation> IncrementalStaSession::snapshotObse
     return std::make_unique<csr::CsrSnapshotObservation>(*_released_observation);
   }
 
-  if (!_baseline_executed || !usesCpuSnapshot())
+  if (!_baseline_executed || !supportsCpuDiagnostics())
     return nullptr;
 
   std::unique_ptr<csr::CsrSnapshotObservation> detached;
@@ -352,9 +352,9 @@ StaStatus IncrementalStaSession::invalidState(std::string message) const
   return StaStatus::failure(StaSessionStatusCode::kInvalidState, state(), std::move(message));
 }
 
-bool IncrementalStaSession::usesCpuSnapshot() const noexcept
+bool IncrementalStaSession::supportsCpuDiagnostics() const noexcept
 {
-  return _request.backend == StaBackend::kCpu && _request.update_strategy == StaUpdateStrategy::kIncremental;
+  return incregpusta_debug_checks_enabled && _request.backend == StaBackend::kCpu;
 }
 
 std::optional<std::string> IncrementalStaSession::observationOwnershipError(const csr::CsrSnapshotObservation& observation) const

@@ -4,18 +4,10 @@
 #include <unistd.h>
 
 #include "DualCsrReplayTypes.hpp"
-#include "IncreGpuStaBuildConfig.hpp"
+#include "IncreGpuStaBuildInfo.hpp"
 #include "json.hpp"
 
 namespace ista::timing_dual_csr::test {
-
-inline nlohmann::json incregpustaBuildInfo()
-{
-  return {{"debug_checks_enabled", incregpusta_debug_checks_enabled},
-          {"build_config", incregpusta_build_config},
-          {"compiler_id", incregpusta_compiler_id},
-          {"compiler_version", incregpusta_compiler_version}};
-}
 
 inline nlohmann::json performanceResultToJson(const DualCsrTraceRunResult& replay, std::uint64_t prefix, nlohmann::json phase_timings)
 {

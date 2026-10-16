@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release/OFF timing: legacy smoke or frozen four-mode consumer experiments."""
+"""Release/OFF timing: legacy smoke or frozen two-mode final-only experiments."""
 
 import argparse
 import datetime
@@ -151,14 +151,15 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
     # The existing schema/semantic validator is also the statistics implementation.
     schema_root = pathlib.Path(__file__).resolve().parents[2] / "benchmark" / "schema"
     sys.path.insert(0, str(schema_root))
-    from validate_incremental_sta_samples import (
+    from consumer_trace_samples import (
         BOOTSTRAP_RESAMPLES,
         BOOTSTRAP_SEED,
-        MODES,
+        TIMING_MODES,
+        TIMING_PAIRS,
         consumer_statistics,
         validate_consumer_measurement,
-        validate_document,
     )
+    from validate_incremental_sta_samples import validate_document
 
     manifest_path = args.manifest.resolve(strict=True)
     manifest_identity = _file_reference(manifest_path)
@@ -173,7 +174,9 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
     profile = manifest["thread_execution_evidence"]
     _verified_file(profile)
     prefix = selected["prefix_batches"]
-    workload = read_json(trace)["workload"]
+    workload = read_json(trace)
+    require(workload["schema_version"] == "ista-scale-compact-replay/2",
+            "compact input v2 required")
     require(prefix == len(workload["batches"]),
             "consumer experiments require the complete frozen trace")
     del workload
@@ -194,7 +197,7 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
     for warmup, count in ((True, args.warmup_runs), (False, args.samples)):
         for repetition in range(1, count + 1):
             # Fixed round-robin order; matching repetition is the pairing key.
-            for mode in MODES:
+            for mode in TIMING_MODES:
                 backend, strategy = mode.split("/")
                 name = f'{"warmup" if warmup else "sample"}-{repetition}/{backend}-{strategy}'
                 raw_path = root / name / "consumer.json"
@@ -222,14 +225,16 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
             "benchmark executable changed during sampling")
     for source in (manifest_identity, selected["trace"], profile, *manifest["input_files"]):
         _verified_file(source)
-    summaries, comparisons = consumer_statistics(samples)
+    summaries, comparisons = consumer_statistics(
+        samples, "consumer_loop_ms", modes=TIMING_MODES, pairs=TIMING_PAIRS)
     engineering = args.warmup_runs >= 5 and args.samples >= 30
     output = {
-        "schema_version": "2.0.0", "manifest": manifest_identity,
+        "schema_version": "3.0.0", "manifest": manifest_identity,
+        "report_schedule": "final_only", "primary_metric": "consumer_loop_ms",
         "case": case, "build": build, "thread_execution_evidence": profile,
         "environment": environment,
         "protocol": {
-            "mode_order": list(MODES), "warmups": args.warmup_runs,
+            "mode_order": list(TIMING_MODES), "warmups": args.warmup_runs,
             "repetitions": args.samples, "bootstrap_seed": BOOTSTRAP_SEED,
             "bootstrap_resamples": BOOTSTRAP_RESAMPLES,
             "pairing_unit": "fresh_process_complete_trace",
@@ -243,9 +248,9 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
             "passed" if all(value["lower_bound_above_one"] for value in comparisons.values())
             else "failed"
         ) if engineering else "not_run",
-        "stage12_acceptance": "not_run",
+        "stage_acceptance": "not_run",
     }
-    validate_document(output, read_json(schema_root / "incremental_sta_samples_v2.schema.json"))
+    validate_document(output, read_json(schema_root / "incremental_sta_samples_v3.schema.json"))
     write_json(args.output.resolve(), output)
     return True
 

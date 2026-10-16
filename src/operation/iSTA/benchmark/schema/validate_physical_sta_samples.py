@@ -6,10 +6,11 @@ import json
 import math
 from pathlib import Path
 
-from validate_incremental_sta_samples import (
+from consumer_trace_samples import (
     BOOTSTRAP_RESAMPLES,
     BOOTSTRAP_SEED,
     MODES,
+    TIMING_MODES,
     consumer_statistics,
 )
 
@@ -28,7 +29,11 @@ def duration(value):
 
 
 def validate_sample(value: dict) -> None:
-    require(value["schema_version"] == "physical-sta-sample/2.0.0", "sample schema differs")
+    require(
+        value["schema_version"] in ("physical-sta-sample/2.0.0", "physical-sta-sample/3.0.0"),
+        "sample schema differs",
+    )
+    modes = MODES if value["schema_version"] == "physical-sta-sample/2.0.0" else TIMING_MODES
     require(
         value["debug_checks_enabled"] is False
         and value["build"]["debug_checks_enabled"] is False
@@ -62,7 +67,7 @@ def validate_sample(value: dict) -> None:
     )
     request = value["requested"]
     mode = f"{request['backend']}/{request['update_strategy']}"
-    require(mode in MODES and request["fallback_policy"] == "error", "invalid performance request")
+    require(mode in modes and request["fallback_policy"] == "error", "invalid performance request")
     requirements = value["result_requirements"]
     require(
         requirements["per_round"] == "candidate_inputs"
@@ -141,14 +146,25 @@ def validate_sample(value: dict) -> None:
 
 
 def validate_document(document: dict) -> tuple[dict, dict]:
-    require(document["schema_version"] == "physical-sta-samples/2.0.0", "summary schema differs")
+    require(
+        document["schema_version"] in ("physical-sta-samples/2.0.0", "physical-sta-samples/3.0.0"),
+        "summary schema differs",
+    )
+    historical = document["schema_version"] == "physical-sta-samples/2.0.0"
+    modes = MODES if historical else TIMING_MODES
+    sample_schema = "physical-sta-sample/2.0.0" if historical else "physical-sta-sample/3.0.0"
+    pairs = (
+        (("cpu/full", "cuda/full"), ("cuda/full", "cuda/incremental"))
+        if historical
+        else (("cpu/full", "cuda/incremental"),)
+    )
     protocol = document["protocol"]
     warmups, repeats = protocol["warmups"], protocol["repetitions"]
     require(
         type(warmups) is int and warmups >= 0 and type(repeats) is int and repeats > 0,
         "invalid sample counts",
     )
-    require(protocol["mode_order"] == list(MODES), "mode order differs from frozen rotation")
+    require(protocol["mode_order"] == list(modes), "mode order differs from frozen rotation")
     require(
         protocol["bootstrap_seed"] == BOOTSTRAP_SEED
         and protocol["bootstrap_resamples"] == BOOTSTRAP_RESAMPLES
@@ -164,7 +180,7 @@ def validate_document(document: dict) -> tuple[dict, dict]:
         (warmup, repetition, mode)
         for warmup, count in ((True, warmups), (False, repeats))
         for repetition in range(1, count + 1)
-        for mode in MODES
+        for mode in modes
     ]
     samples = document["samples"]
     actual = [(s["warmup"], s["repetition"], s["mode"]) for s in samples]
@@ -173,6 +189,7 @@ def validate_document(document: dict) -> tuple[dict, dict]:
     rows = []
     for sample in samples:
         value = sample["measurement"]
+        require(value["schema_version"] == sample_schema, "sample and summary schema differ")
         validate_sample(value)
         require(
             sample["mode"]
@@ -204,7 +221,9 @@ def validate_document(document: dict) -> tuple[dict, dict]:
                 "optimization_end_to_end_ms": value["optimization_end_to_end_ms"],
             }
         )
-    summaries, comparisons = consumer_statistics(rows, metric="optimization_end_to_end_ms")
+    summaries, comparisons = consumer_statistics(
+        rows, metric="optimization_end_to_end_ms", modes=modes, pairs=pairs
+    )
     require(
         document["summaries"] == summaries and document["comparisons"] == comparisons,
         "saved statistics differ from paired raw samples",
@@ -218,7 +237,7 @@ def main():
     args = parser.parse_args()
     for path in args.documents:
         value = json.loads(path.read_text())
-        if value["schema_version"] == "physical-sta-sample/2.0.0":
+        if value["schema_version"] in ("physical-sta-sample/2.0.0", "physical-sta-sample/3.0.0"):
             validate_sample(value)
         else:
             validate_document(value)

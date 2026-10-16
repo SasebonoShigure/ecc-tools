@@ -3,17 +3,61 @@
 
 import argparse
 import json
+import math
 import pathlib
 import subprocess
 import sys
 
-from cuda_full_trace_controller import require_cuda_telemetry, require_final_consumption
 from dual_csr_trace_controller import first_difference, require, run_child, write_json
 
 sys.path.insert(
     0, str(pathlib.Path(__file__).resolve().parents[1] / "timing_incremental_levelization")
 )
 from incremental_levelization_controller import validate_functional  # noqa: E402
+
+
+def require_cuda_telemetry(timing: dict) -> None:
+    for field in ("explicit_kernel_launches", "device_algorithm_calls",
+                  "levelization_decision_bytes"):
+        require(type(timing.get(field)) is int and timing[field] >= 0,
+                f"missing nonnegative CUDA {field}")
+    require("kernel_launches" not in timing, "ambiguous CUDA total launch count")
+    readback = timing["readback"]
+    require(readback["schema_version"] == "ista-cuda-readback/1.0.0",
+            "unknown CUDA readback accounting")
+    require(type(readback["stream_waits"]) is int and readback["stream_waits"] >= 0,
+            "invalid CUDA stream wait count")
+    total_bytes = readback["other_d2h_bytes"]
+    require(type(total_bytes) is int and total_bytes >= 0, "invalid unclassified readback bytes")
+    waits = 0.0
+    for category in ("levelization_decisions", "level_metadata", "status", "candidate", "result"):
+        item = readback[category]
+        require(type(item["bytes"]) is int and item["bytes"] >= 0,
+                f"invalid {category} readback bytes")
+        require(type(item["wait_ms"]) in (int, float)
+                and math.isfinite(item["wait_ms"]) and item["wait_ms"] >= 0,
+                f"invalid {category} readback wait")
+        total_bytes += item["bytes"]
+        waits += item["wait_ms"]
+    require(type(timing["d2h_bytes"]) is int and total_bytes == timing["d2h_bytes"],
+            "CUDA readback categories differ from actual D2H bytes")
+    total_wait = readback["stream_wait_ms"]
+    require(type(total_wait) in (int, float) and math.isfinite(total_wait) and total_wait >= 0
+            and waits <= total_wait + 1e-6,
+            "CUDA readback waits exceed recorded Runtime waits")
+
+
+
+def require_final_consumption(timing: dict, *, final: bool) -> None:
+    require(timing["result_consumption"] == ("completed" if final else "not_run"),
+            "ordinary CUDA replay must consume full results only at the final prefix")
+    for field in ("query_materialize_ms", "report_ms"):
+        value = timing[field]
+        require(
+            type(value) in (int, float) and math.isfinite(value) and value >= 0
+            if final else value is None,
+            f"{field} must reflect actual result consumption",
+        )
 
 
 def require_performance_result(result: dict, strategy: str, expected_prefix: int) -> None:
@@ -108,7 +152,7 @@ def run(args: argparse.Namespace) -> int:
         else [
             f"{role}-{prefix}.json"
             for prefix in range(1, len(batches) + 1)
-            for role in ("targeted", "cuda-full", "fresh")
+            for role in ("targeted", "fresh")
         ]
         + ["rollback.json"]
     )
@@ -158,10 +202,6 @@ def run(args: argparse.Namespace) -> int:
         )
         return 0
 
-    require(args.full_probe is not None, "diagnostics require an independent full probe")
-    full_probe = args.full_probe.resolve(strict=True)
-    full_build = json.loads(subprocess.check_output([str(full_probe), "build-info"], text=True))
-    require(full_build["debug_checks_enabled"] is True, "full oracle probe requires checks ON")
     verdicts = []
     previous_batches = []
     for prefix in range(1, len(batches) + 1):
@@ -175,17 +215,8 @@ def run(args: argparse.Namespace) -> int:
             args.timeout_seconds,
             input_flag=input_flag,
         )
-        full, full_ms = run_child(
-            full_probe,
-            "cuda",
-            trace,
-            prefix,
-            root / f"cuda-full-{prefix}.json",
-            args.timeout_seconds,
-            input_flag=input_flag,
-        )
         fresh, fresh_ms = run_child(
-            full_probe,
+            probe,
             "fresh",
             trace,
             prefix,
@@ -208,12 +239,18 @@ def run(args: argparse.Namespace) -> int:
             and targeted["lifecycle_cleanup_completed"],
             "targeted prefix omitted a batch, device observation or lifecycle cleanup",
         )
-        for ordinal, (values, full_values) in enumerate(
-            zip(targeted["batches"], full["batches"], strict=True)
-        ):
-            compare_values(
-                values, full_values, f"CUDA/full batch {ordinal + 1}", incremental=incremental
-            )
+        require(
+            fresh["schema_version"] == "ista-native-fresh-trace/1.0.0"
+            and fresh["prefix_batches"] == prefix
+            and fresh["debug_checks_enabled"] is True
+            and fresh["executed_backend"] == "cpu"
+            and fresh["executed_strategy"] == "full"
+            and fresh["fallback_count"] == 0,
+            "fresh oracle did not execute independent native CPU/full",
+        )
+        for ordinal, values in enumerate(targeted["batches"]):
+            if incremental:
+                validate_functional(values, f"incremental batch {ordinal + 1}")
             timing = targeted["batch_timings"][ordinal]
             require_execution(timing, args.strategy)
             require(
@@ -245,10 +282,8 @@ def run(args: argparse.Namespace) -> int:
         verdicts.append(
             {
                 "prefix": prefix,
-                "cuda_full_equivalent": True,
                 "fresh_cpu_equivalent": True,
                 "targeted_process_ms": targeted_ms,
-                "cuda_full_process_ms": full_ms,
                 "fresh_cpu_process_ms": fresh_ms,
             }
         )
@@ -270,9 +305,8 @@ def run(args: argparse.Namespace) -> int:
     write_json(
         root / "verdict.json",
         {
-            "schema_version": f"ista-cuda-{protocol}-verdict/8.0.0",
+            "schema_version": f"ista-cuda-{protocol}-verdict/9.0.0",
             "build": build,
-            "full_oracle_build": full_build,
             "prefixes": verdicts,
         },
     )
@@ -282,7 +316,6 @@ def run(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", type=pathlib.Path, required=True)
-    parser.add_argument("--full-probe", type=pathlib.Path)
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--trace", type=pathlib.Path)
     inputs.add_argument("--replay", type=pathlib.Path)

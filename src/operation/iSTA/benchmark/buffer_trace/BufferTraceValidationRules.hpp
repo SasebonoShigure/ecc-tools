@@ -13,10 +13,14 @@
 
 namespace ista::buffer_trace::detail {
 
+[[nodiscard]] BufferTraceContractViolations validateReplayBatches(
+    const ReplayHeader& header, const std::vector<timing_edit::EditBatch>& batches);
+
 // Cross-field replay rules live outside canonical encoding so the public
 // parser cannot bypass profile/workload limits while the encoder stays small.
 void appendReplayProfileViolations(
-    const ReplayProgram& program, BufferTraceContractViolations& errors);
+    const ReplayHeader& header, const std::vector<timing_edit::EditBatch>& batches,
+    BufferTraceContractViolations& errors);
 
 // Decision and physical numeric evidence must describe a state the greedy
 // selector can actually emit. Arithmetic reproducibility remains at the

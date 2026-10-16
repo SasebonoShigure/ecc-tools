@@ -148,6 +148,48 @@ foreach(stage IN ITEMS dual_csr stage6)
       SKIP_RETURN_CODE 77 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 endforeach()
 
+# Native transaction coverage must also run in a build without CUDA.
+add_executable(ista_native_full_transaction_test
+    NativeFullTransactionTest.cpp
+    timing_dual_csr/DualCsrTargetedArtifactSupport.cpp
+    timing_edit/oracle/ProductionFreshSessionLoader.cpp
+    timing_edit/StaTimingEditSessionProbeAccess.cpp)
+target_include_directories(ista_native_full_transaction_test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
+    ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
+target_link_libraries(ista_native_full_transaction_test PRIVATE
+    ista_timing_reporter ${ISTA_BUFFER_TRACE_PROBE_LINKS})
+target_compile_options(ista_native_full_transaction_test PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
+add_test(NAME ista_native_full_transactions
+    COMMAND ista_native_full_transaction_test
+      "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json")
+set_tests_properties(ista_native_full_transactions PROPERTIES
+    LABELS "ista_cpu;ista_integration;ista_timing_edit" TIMEOUT 300 RUN_SERIAL TRUE)
+
+add_executable(ista_timing_workload_probe
+    TimingWorkloadProbe.cpp
+    timing_dual_csr/DualCsrTargetedArtifactSupport.cpp
+    timing_edit/oracle/ProductionFreshSessionLoader.cpp
+    timing_edit/StaTimingEditSessionProbeAccess.cpp)
+target_include_directories(ista_timing_workload_probe PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
+    ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
+target_link_libraries(ista_timing_workload_probe PRIVATE
+    ista_timing_reporter ${ISTA_BUFFER_TRACE_PROBE_LINKS})
+target_compile_options(ista_timing_workload_probe PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
+if(ISTA_ENABLE_CUDA)
+  target_link_libraries(ista_timing_workload_probe PRIVATE ista_cuda_targeted_trace_runtime)
+endif()
+
+add_test(NAME ista_timing_workload_contract
+    COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/test_timing_workload_probe.py"
+      --probe "$<TARGET_FILE:ista_timing_workload_probe>"
+      --run-root "${CMAKE_CURRENT_BINARY_DIR}/timing-workload-contract")
+set_tests_properties(ista_timing_workload_contract PROPERTIES
+    LABELS "ista_cpu;ista_integration;ista_timing_edit" TIMEOUT 900 RUN_SERIAL TRUE
+    SKIP_RETURN_CODE 77 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+
 if(ISTA_ENABLE_CUDA)
   # Explicit acceptance output can inspect OFF/ON state without enabling
   # diagnostics in production or ordinary performance runs.
@@ -162,9 +204,8 @@ if(ISTA_ENABLE_CUDA)
       ista_cuda_targeted_trace_runtime ${ISTA_TIMING_EDIT_PRODUCTION_ORACLE_LINKS})
   if(ECC_INCREGPUSTA_DEBUG_CHECKS)
     target_sources(ista_cuda_dual_csr_session_test PRIVATE CudaSemanticFaultTest.cpp)
-    target_link_libraries(ista_cuda_dual_csr_session_test PRIVATE ista_cuda_full_trace_runtime)
     target_include_directories(ista_cuda_dual_csr_session_test PRIVATE ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
-    foreach(mode full targeted mixed)
+    foreach(mode targeted mixed)
       add_test(NAME ista_cuda_semantic_fault_${mode}
         COMMAND ista_cuda_dual_csr_session_test --semantic-context-fault ${mode}
           "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json")
@@ -174,41 +215,6 @@ if(ISTA_ENABLE_CUDA)
   endif()
   set(ISTA_CUDA_TRACE_PROBE_SOURCES ${ISTA_DUAL_CSR_FRESH_PROBE_SOURCES})
   list(REMOVE_ITEM ISTA_CUDA_TRACE_PROBE_SOURCES timing_dual_csr/DualCsrTraceProductionFreshProbe.cpp)
-  add_executable(ista_cuda_full_trace_probe CudaFullTraceProbe.cpp
-      timing_dual_csr/CudaTargetedTimingProjection.cpp
-      timing_dual_csr/CudaTargetedDeviceComparison.cpp ${ISTA_CUDA_TRACE_PROBE_SOURCES})
-  target_include_directories(ista_cuda_full_trace_probe PRIVATE
-      ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
-      ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
-  target_link_libraries(ista_cuda_full_trace_probe PRIVATE ista_cuda_full_trace_runtime ista_cuda_targeted_trace_runtime ista_dual_csr_trace_runtime ista_timing_reporter ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS})
-  target_compile_options(ista_cuda_full_trace_probe PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
-  add_test(NAME ista_native_full_transactions
-    COMMAND ista_cuda_full_trace_probe native-transactions
-      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
-      --prefix 2 --output "${CMAKE_CURRENT_BINARY_DIR}/native-full-transactions.json")
-  set_tests_properties(ista_native_full_transactions PROPERTIES
-    LABELS "ista_cpu;ista_integration;ista_timing_edit" TIMEOUT 300 RUN_SERIAL TRUE)
-
-endif()
-
-if(ISTA_ENABLE_CUDA)
-  foreach(trace IN ITEMS synthetic_two_batch real_buffer_fanout)
-    if(ECC_INCREGPUSTA_DEBUG_CHECKS)
-      set(cuda_trace_mode)
-    else()
-      set(cuda_trace_mode --performance --warmup-runs 1 --samples 3)
-    endif()
-    add_test(NAME ista_cuda_full_trace_${trace}
-      COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
-      "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/cuda_full_trace_controller.py"
-      --probe "$<TARGET_FILE:ista_cuda_full_trace_probe>"
-      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/${trace}.json"
-      --run-root "${CMAKE_CURRENT_BINARY_DIR}/cuda-full-traces/${trace}"
-      ${cuda_trace_mode})
-    set_tests_properties(ista_cuda_full_trace_${trace} PROPERTIES
-      LABELS "ista_cuda;ista_integration" TIMEOUT 2400 SKIP_RETURN_CODE 77
-      ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
-  endforeach()
 endif()
 
 if(ISTA_ENABLE_CUDA)
@@ -220,9 +226,15 @@ if(ISTA_ENABLE_CUDA)
       ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)
   target_link_libraries(ista_cuda_targeted_trace_probe PRIVATE ista_cuda_targeted_trace_runtime ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS})
   target_compile_options(ista_cuda_targeted_trace_probe PRIVATE ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS})
+  add_test(NAME ista_cuda_incremental_public_report
+      COMMAND ista_cuda_targeted_trace_probe public
+      --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
+      --prefix 2 --output "${CMAKE_CURRENT_BINARY_DIR}/cuda-incremental-public.json")
+  set_tests_properties(ista_cuda_incremental_public_report PROPERTIES
+      LABELS "ista_cuda;ista_integration" TIMEOUT 300)
   foreach(trace IN ITEMS synthetic_two_batch real_buffer_fanout)
     if(ECC_INCREGPUSTA_DEBUG_CHECKS)
-      set(cuda_targeted_mode --full-probe "$<TARGET_FILE:ista_cuda_full_trace_probe>")
+      set(cuda_targeted_mode)
     else()
       set(cuda_targeted_mode --performance --warmup-runs 1 --samples 3)
     endif()

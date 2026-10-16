@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <sstream>
 
 #include "DataManager.hpp"
 #include "DelayCalculator.hpp"
@@ -14,7 +15,33 @@
 #include "TimingReporter.hpp"
 #include "json.hpp"
 
+namespace ista {
+class TimingReporterProbeAccess final
+{
+ public:
+  static nlohmann::json read()
+  {
+    TimingReporter reporter;
+    std::ostringstream qor, paths;
+    reporter.outputQorSummaryReport(&qor);
+    reporter.outputTimingPathsJson(&paths);
+    return {{"qor", nlohmann::json::parse(qor.str())}, {"paths", nlohmann::json::parse(paths.str())}};
+  }
+};
+}  // namespace ista
+
 namespace ista::test {
+inline void requireTimingOnlyFiles(const std::filesystem::path& directory)
+{
+  for (const auto& entry : std::filesystem::recursive_directory_iterator(directory)) {
+    const auto ext = entry.path().extension();
+    const auto name = entry.path().filename();
+    if (entry.is_regular_file()
+        && (ext == ".rpt" || ext == ".sdf" || ext == ".bin"
+            || name == "qor_summary.json" || name == "timing_paths.json"))
+      throw std::runtime_error("timing workload generated a disk artifact: " + entry.path().string());
+  }
+}
 // Explicit acceptance output only. Fresh native and targeted computations
 // share the public reporter, never their timing calculation.
 inline nlohmann::json capturePublicTiming()

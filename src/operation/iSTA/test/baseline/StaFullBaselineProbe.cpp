@@ -637,7 +637,7 @@ int main(int argc, char* argv[])
         throw std::runtime_error("failed to read Liberty");
       }
       const ista::StaUpdateStrategy strategy
-          = run == 0 || options.backend == ista::StaBackend::kCuda ? ista::StaUpdateStrategy::kFull : ista::StaUpdateStrategy::kIncremental;
+          = options.backend == ista::StaBackend::kCpu ? ista::StaUpdateStrategy::kFull : ista::StaUpdateStrategy::kIncremental;
       ista::IncrementalStaSession session({options.backend, strategy, ista::StaFallbackPolicy::kError});
       ista::throwOnStaFailure(session.initialize(ista::csr::StaAnalysisContext{"slow", "25", "__no_rc_corner__"}, config), session.request());
       if (run == 0) {

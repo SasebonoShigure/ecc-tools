@@ -68,6 +68,8 @@ class FakeSessionOperations final : public StaSessionOperations
   StaStatus runFullBaseline(std::uint64_t token,
                             StaCsrSessionContext* context) override
   {
+    if constexpr (!incregpusta_debug_checks_enabled)
+      return StaStatus::success(StaSessionState::kBaselineExecuted);
     if (context == nullptr || context->token() != token) {
       return StaStatus::failure(StaSessionStatusCode::kRunFailed,
                                 StaSessionState::kInitialized,
@@ -157,7 +159,7 @@ NativeTransactionRuntime::~NativeTransactionRuntime()
 }
 
 GuardedTestSession::GuardedTestSession()
-    : GuardedTestSession({StaBackend::kCpu, StaUpdateStrategy::kIncremental, StaFallbackPolicy::kError},
+    : GuardedTestSession({StaBackend::kCpu, StaUpdateStrategy::kFull, StaFallbackPolicy::kError},
                          editTestAnalysisContext(), true) {}
 GuardedTestSession::GuardedTestSession(StaExecutionRequest request, csr::StaAnalysisContext context)
     : GuardedTestSession(request, std::move(context), false) {}
@@ -167,7 +169,7 @@ GuardedTestSession::GuardedTestSession(StaExecutionRequest request, csr::StaAnal
   _session = std::make_unique<IncrementalStaSession>(request, std::make_unique<FakeSessionOperations>());
   if (!_session->initialize(context, {}).ok()
       || (capture_baseline && !_session->runFullBaseline().ok()) || !_session->sessionToken().has_value())
-    throw std::runtime_error("fake incremental session initialization failed");
+    throw std::runtime_error("test session initialization or baseline failed");
   _token = TimingEditSessionToken{*_session->sessionToken()};
   StaInterfaceLifecycleTestAccess::acquireSession(_token.value(), _physical_baseline);
   _lease_active = true;

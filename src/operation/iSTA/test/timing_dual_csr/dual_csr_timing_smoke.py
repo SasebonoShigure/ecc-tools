@@ -12,7 +12,7 @@ import sys
 from typing import Any
 
 from dual_csr_timing_evidence import duration_ms, validate_batch_phase_timings
-from dual_csr_trace_controller import (
+from trace_process import (
     ControllerError,
     read_json,
     require,

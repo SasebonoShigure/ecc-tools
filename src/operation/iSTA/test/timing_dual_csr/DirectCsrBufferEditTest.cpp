@@ -7,8 +7,10 @@
 
 #include "CanonicalTimingRecordProjectorInternal.hpp"
 #include "DataManager.hpp"
-#include "CpuDualCsrBaseline.hpp"
-#include "DualCsrTransactionCoordinator.hpp"
+#include "CsrCpuReferenceBackend.hpp"
+#include "DualCsrEdgeViewImpl.hpp"
+#include "DualCsrTimingPayloadViewImpl.hpp"
+#include "DualCsrSemanticIdentity.hpp"
 #include "SemanticCsrNativeView.hpp"
 #include "Instance.hpp"
 #include "CanonicalGraphConstruction.hpp"
@@ -187,7 +189,7 @@ void addParallelLibraryInstance(Database& database)
   require(canonical_graph::appendLibraryCellArcs(database, database.get_instance_map().at("parallel")),
           "parallel fixture did not construct its library arcs");
 }
-void lazySemanticView(bool move_created_input, bool parallel = false)
+void lazySemanticView(bool move_created_input, bool parallel = false, std::uint64_t inactive_ordinal = 0)
 {
   using namespace timing_edit;
   timing_edit::test::installNativeTransactionBaseline();
@@ -205,11 +207,11 @@ void lazySemanticView(bool move_created_input, bool parallel = false)
   timing_edit::test::GuardedTestSession session;
   auto fixture = structured_support::makeStructuredFixture(database, session.token());
   csr::detail::NativeLibraryModels models(database);
-  DualCsrTransactionCoordinator coordinator(makeCpuDualCsrBaseline(database, fixture.baseline_reference_input, session.token()));
+  csr::CsrTimingValues timing;
   SemanticCsrNativeView view(session.token());
   std::vector<EditBatch> history;
   const auto commit = [&] {
-    const auto generation = coordinator.committed().generation;
+    const auto generation = fixture.graph.generation;
     auto edit = fixture.plan.edits.front();
     edit.creation_token.batch_ordinal = generation.value() + 1;
     if (!history.empty()) {
@@ -219,37 +221,80 @@ void lazySemanticView(bool move_created_input, bool parallel = false)
       else
         edit.original_net = CreatedNetRef{previous, CreatedNetRole::kOutputNet};
     }
-    history.push_back({generation, {std::move(edit)}});
-    auto direct = build(session, coordinator.prepareBatch(history.back()), models);
-    auto attempt = makeStagedDualCsrAnalysisState(coordinator, std::move(direct));
-    require(attempt.success(), "semantic lazy-view CSR computation failed");
-    const auto published = coordinator.publish(std::move(*attempt.staged));
-    require(published.ok() && published.published, "semantic lazy-view CSR commit failed");
+    EditBatch edits{generation, {std::move(edit)}};
+    history.reserve(history.size() + 1);
+    auto plan = fixture.plan;
+    plan.expected_generation = generation;
+    plan.edits = edits.edits;
+    auto direct = build(session, DualCsrStructuredBatchPreparer::prepare(
+        plan, fixture.resolver, DualSemanticReadView(fixture.graph), fixture.graph,
+        fixture.identity, fixture.arc_group_index), models);
+    detail::PreparedDualCsrGraphPatch graph_patch(fixture.graph, direct.descriptor());
+    detail::PreparedDualCsrIndexPatch index_patch(fixture.graph, fixture.arc_group_index, direct.descriptor());
+    PreparedTimingEditResolverPatch resolver_patch(fixture.resolver, fixture.resolver.prepare(direct.preparedBatch()));
+    graph_patch.apply();
+    index_patch.apply();
+    resolver_patch.apply();
+    // The component under test consumes timing; its producer is independent.
+    auto computed = csr::CsrCpuReferenceBackend{}.computeWithTelemetry(
+        DualCsrEdgeViewImpl(fixture.graph), DualCsrTimingPayloadViewImpl(fixture.graph));
+    auto* values = std::get_if<csr::CsrTimingResult>(&computed.computation.outcome);
+    require(values != nullptr, "semantic lazy-view fixture timing failed");
+    auto identity = deriveDualCsrCommittedIdentity(fixture.graph, fixture.resolver);
+    graph_patch.commit();
+    index_patch.commit();
+    resolver_patch.commit();
+    fixture.identity = std::move(identity);
+    timing = std::move(*values);
+    history.push_back(std::move(edits));
   };
   const auto original = csr::exportCsrGraphSnapshot(database);
   commit();
+  if (parallel) {
+    auto deleted = std::ranges::find_if(fixture.graph.arc_slots, [](const auto& slot) { return !slot.active; });
+    const auto peer = std::ranges::find_if(fixture.graph.arc_slots, [](const auto& slot) {
+      return slot.active && slot.payload.key.base.owner_name == "parallel" && slot.payload.key.parallel_ordinal == 0;
+    });
+    require(deleted != fixture.graph.arc_slots.end() && peer != fixture.graph.arc_slots.end(),
+            "inactive-peer fixture lacks a tombstone or live parallel arc");
+    const csr::ArcId deleted_id{static_cast<std::uint64_t>(deleted - fixture.graph.arc_slots.begin())};
+    const auto identity = deriveDualCsrCommittedIdentity(fixture.graph, fixture.resolver);
+    deleted->payload = peer->payload;
+    deleted->payload.key.parallel_ordinal = inactive_ordinal;
+    const DualSemanticReadView semantic(fixture.graph);
+    const auto inactive = semantic.arcById(deleted_id);
+    const auto active = semantic.arcByKey(peer->payload.key);
+    const auto* indexed = fixture.arc_group_index.slot(deleted_id);
+    require(!inactive && inactive.error() == DualSemanticReadError::kInactiveArc
+                && active && &active.value() == &peer->payload
+                && indexed && !indexed->current_active_key
+                && std::ranges::any_of(fixture.resolver.arcBindings(), [&](const auto& item) {
+                     return item.second.slot.value() == deleted_id.value() && item.second.tombstone;
+                   })
+                && deriveDualCsrCommittedIdentity(fixture.graph, fixture.resolver) == identity,
+            "inactive same-base payload changed the live identity or resolver");
+  }
   commit();
   require(csr::exportCsrGraphSnapshot(database) == original, "no-query semantic commits changed native graph");
   const auto materialize = [&](const csr::CsrTimingValues& values) {
     const auto status = StaTimingEditSessionProbeAccess::runWithSingleOperationGuard(
         session.session(), [&](std::uint64_t, StaCsrSessionContext&, const NativeExecutionAuthority& authority) {
-          const auto& current = coordinator.committed();
-          view.materialize(database, authority, current.graph, current.resolver, history, values);
+          view.materialize(database, authority, fixture.graph, fixture.resolver, history, values);
           return StaStatus::success(session.session().state());
         });
     return status.ok();
   };
-  auto malformed = coordinator.committed().timing.values;
+  auto malformed = timing;
   malformed.nodes.slacks.values.pop_back();
   require(!materialize(malformed), "semantic view accepted malformed final timing");
   require(csr::exportCsrGraphSnapshot(database) == original,
           "failed two-batch native view left a partially applied suffix");
-  require(materialize(coordinator.committed().timing.values), "semantic view could not retry after final scatter failure");
+  require(materialize(timing), "semantic view could not retry after final scatter failure");
   const auto two_batches = csr::exportCsrGraphSnapshot(database);
   require(two_batches != original, "successful semantic view did not publish new topology");
   if constexpr (incregpusta_debug_checks_enabled)
   for (unsigned mutation = 0; mutation != 3; ++mutation) {
-    auto bad_identity = coordinator.committed().graph;
+    auto bad_identity = fixture.graph;
     const auto active = std::ranges::find_if(bad_identity.arc_slots, [](const auto& slot) { return slot.active; });
     require(active != bad_identity.arc_slots.end(), "semantic view fixture has no active arc");
     switch (mutation) {
@@ -262,7 +307,7 @@ void lazySemanticView(bool move_created_input, bool parallel = false)
         session.session(), [&](std::uint64_t, StaCsrSessionContext&, const NativeExecutionAuthority&) {
           try {
             static_cast<void>(csr::detail::prepareDualCsrTimingResult(
-                database, bad_identity, coordinator.committed().timing.values));
+                database, bad_identity, timing));
           } catch (const std::exception&) {
             bad_identity_rejected = true;
           }
@@ -271,21 +316,20 @@ void lazySemanticView(bool move_created_input, bool parallel = false)
     require(check.ok() && bad_identity_rejected && csr::exportCsrGraphSnapshot(database) == two_batches,
             "native view accepted altered arc identity or published a partial scatter");
   }
-  require(materialize(coordinator.committed().timing.values)
+  require(materialize(timing)
               && csr::exportCsrGraphSnapshot(database) == two_batches, "same-generation semantic view changed its graph");
   commit();
   require(csr::exportCsrGraphSnapshot(database) == two_batches, "edit after query eagerly changed the native view");
-  require(materialize(coordinator.committed().timing.values), "semantic view failed after query and another edit");
-  const auto& current = coordinator.committed();
-  require(database.get_pin_map().size() == current.graph.nodes.size(), "semantic final view has stale nodes");
-  for (const auto& node : current.graph.nodes)
+  require(materialize(timing), "semantic view failed after query and another edit");
+  require(database.get_pin_map().size() == fixture.graph.nodes.size(), "semantic final view has stale nodes");
+  for (const auto& node : fixture.graph.nodes)
     require(database.get_pin_map().at(node.key.full_name).get_net_name() == node.net_name,
             "semantic final native connection differs from committed CSR");
   if (parallel) {
     const auto& children = database.get_timing_library().get_cell_map().at("INV_X1").get_cell_arc_list();
     std::vector<const csr::ArcSemanticPayload*> payloads;
-    for (std::size_t id = 0; id < current.graph.arc_slots.size(); ++id) {
-      const auto& slot = current.graph.arc_slots[id];
+    for (std::size_t id = 0; id < fixture.graph.arc_slots.size(); ++id) {
+      const auto& slot = fixture.graph.arc_slots[id];
       if (!slot.active || slot.payload.key.base.owner_name != "parallel") continue;
       const auto& payload = slot.payload;
       payloads.push_back(&payload);
@@ -294,7 +338,7 @@ void lazySemanticView(bool move_created_input, bool parallel = false)
         return arc.get_owner_name() == "parallel" && arc.get_timing_cell_arc() == child;
       });
       require(found != database.get_arc_list().end(), "native query lost a parallel library arc");
-      const auto& values = current.timing.values.arcs;
+      const auto& values = timing.arcs;
       require(found->get_delay() == values.delays.values.at(id)
                   && found->get_delay_min() == values.min_delays.values.at(id)
                   && found->get_delay_max() == values.max_delays.values.at(id),
@@ -416,8 +460,10 @@ int main()
     ista::timing_dual_csr::test::sinkPolicy();
     ista::timing_dual_csr::test::lazySemanticView(false);
     ista::timing_dual_csr::test::lazySemanticView(true);
-    ista::timing_dual_csr::test::lazySemanticView(false, true);
-    ista::timing_dual_csr::test::lazySemanticView(true, true);
+    for (std::uint64_t ordinal : {0, 97}) {
+      ista::timing_dual_csr::test::lazySemanticView(false, true, ordinal);
+      ista::timing_dual_csr::test::lazySemanticView(true, true, ordinal);
+    }
   } catch (const std::exception& error) {
     std::cerr << error.what() << std::endl;
     return 1;

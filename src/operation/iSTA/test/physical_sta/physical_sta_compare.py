@@ -11,14 +11,14 @@ TEST = Path(__file__).resolve().parents[1]
 for directory in ("timing_dual_csr", "real_differential"):
     sys.path.insert(0, str(TEST / directory))
 
-from dual_csr_trace_controller import (  # noqa: E402
+from real_differential_wire_contract import validate_neutral_wire  # noqa: E402
+from trace_process import (  # noqa: E402
     ABS_TOLERANCE,
     REL_TOLERANCE,
     first_difference,
     require,
     require_exact_keys,
 )
-from real_differential_wire_contract import validate_neutral_wire  # noqa: E402
 
 
 def functional(value, generation):

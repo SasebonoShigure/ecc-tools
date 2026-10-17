@@ -6,14 +6,9 @@ import json
 import math
 import pathlib
 import subprocess
-import sys
 
-from dual_csr_trace_controller import first_difference, require, run_child, write_json
-
-sys.path.insert(
-    0, str(pathlib.Path(__file__).resolve().parents[1] / "timing_incremental_levelization")
-)
-from incremental_levelization_controller import validate_functional  # noqa: E402
+from functional_timing import validate_functional
+from trace_process import first_difference, require, run_child, write_json
 
 
 def require_cuda_telemetry(timing: dict) -> None:
@@ -45,7 +40,6 @@ def require_cuda_telemetry(timing: dict) -> None:
     require(type(total_wait) in (int, float) and math.isfinite(total_wait) and total_wait >= 0
             and waits <= total_wait + 1e-6,
             "CUDA readback waits exceed recorded Runtime waits")
-
 
 
 def require_final_consumption(timing: dict, *, final: bool) -> None:

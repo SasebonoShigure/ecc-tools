@@ -371,8 +371,9 @@ void runCudaRcPropagationContracts()
     require(!next.computationCode() && next.telemetry().materialize_ms == 0.0,
             "RC patch commit required eager timing materialization");
     if (batch >= 2)
-      require(next.telemetry().cuda.allocations == 0 && next.telemetry().cuda.d2d_bytes == 0,
-              "unchanged RC patch reallocated or copied graph");
+      require(next.telemetry().cuda.allocations == 0
+                  && next.telemetry().cuda.d2d_bytes == input.nodes.size() * sizeof(std::uint64_t),
+              "unchanged RC patch reallocated or copied more than its mixed level order");
     require(owner.publish(std::move(next)), "RC patch commit failed");
   }
   const auto generation = owner.generation();

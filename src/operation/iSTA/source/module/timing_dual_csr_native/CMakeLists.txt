@@ -148,7 +148,7 @@ if(BUILD_TESTING)
       ${ISTA_MODULE}/timing_csr_snapshot
       ${ISTA_TEST}/timing_dual_csr ${ISTA_TEST}/timing_edit)
   target_link_libraries(ista_timing_direct_csr_edit_test PRIVATE
-      ista_timing_dual_csr_native ista_timing_graph_csr_adapter ista_timing_dual_csr_transaction
+      ista_timing_dual_csr_native ista_timing_graph_csr_adapter
       ista_interface ista_data_manager ista_delay_calculator)
   target_compile_options(ista_timing_direct_csr_edit_test PRIVATE
       -Wall -Wextra -Werror -pedantic -ffp-contract=off)

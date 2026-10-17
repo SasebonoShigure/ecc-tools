@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 
-from dual_csr_trace_controller import first_difference, require, write_json
+from trace_process import first_difference, require, write_json
 
 SCHEMA_ROOT = pathlib.Path(__file__).resolve().parents[2] / "benchmark/schema"
 sys.path.insert(0, str(SCHEMA_ROOT))

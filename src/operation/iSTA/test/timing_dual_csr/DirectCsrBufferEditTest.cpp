@@ -338,6 +338,27 @@ void lazySemanticView(bool move_created_input, bool parallel = false, std::uint6
         return arc.get_owner_name() == "parallel" && arc.get_timing_cell_arc() == child;
       });
       require(found != database.get_arc_list().end(), "native query lost a parallel library arc");
+      const auto rank = static_cast<std::size_t>(found - database.get_arc_list().begin());
+      // Force each valid child winner, including one the normal timing tie never selects.
+      auto selected = timing;
+      const auto sink = payload.sink.value();
+      selected.nodes.predecessor_nodes.values.at(sink) = payload.source;
+      selected.nodes.predecessor_nodes.presence.at(sink) = 1;
+      selected.nodes.predecessor_arcs.values.at(sink) = csr::ArcId{id};
+      selected.nodes.predecessor_arcs.presence.at(sink) = 1;
+      csr::CsrReportValues report{{}, {}, &selected};
+      csr::detail::CsrReportNodeReader complete(database, fixture.graph, fixture.resolver, report, {}, {});
+      complete.preparePathTrace();
+      require(complete.point(payload.key.base.sink.full_name).get_predecessor_arc_idx() == rank,
+              "complete report mapped a parallel child to another native arc");
+      report.complete = nullptr;
+      auto& sparse_node = report.nodes[sink];
+      sparse_node.timing.predecessor_node = payload.source.value();
+      sparse_node.timing.predecessor_arc = id;
+      csr::detail::CsrReportNodeReader sparse(database, fixture.graph, fixture.resolver, report, {}, {});
+      sparse.preparePathTrace();
+      require(sparse.point(payload.key.base.sink.full_name).get_predecessor_arc_idx() == rank,
+              "sparse report mapped a parallel child to another native arc");
       const auto& values = timing.arcs;
       require(found->get_delay() == values.delays.values.at(id)
                   && found->get_delay_min() == values.min_delays.values.at(id)

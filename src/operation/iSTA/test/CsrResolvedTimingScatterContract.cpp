@@ -7,6 +7,8 @@
 #include "CsrTimingScatterTestFixture.hpp"
 #include "Database.hpp"
 #include "TimingResultScatterInternal.hpp"
+#include "DualCsrBaselineFactory.hpp"
+#include "TimingEditResolver.hpp"
 
 namespace ista::csr::test {
 
@@ -81,8 +83,15 @@ void runResolvedTimingScatterContract(ReferenceNativeFixtureCase fixture_case)
   missing.nodes.back().point = nullptr;
   requireTimingScatter(rejected(bad, missing) == CsrScatterCode::kShapeMismatch, "parallel preparation changed error precedence");
 
+  const auto resolver = timing_edit::TimingEditResolverState::bindBaseline(fixture.database());
+  const auto baseline = timing_dual_csr::DualCsrBaselineFactory::create(input,
+      timing_edit::TimingEditSessionToken{input.source_identity.session_token}, resolver.highWater());
+  requireTimingScatter(baseline.success(), "report fixture graph preparation failed");
+  const CsrReportValues report_values{{}, {}, &values};
+
   // Report queries decode only requested points and never publish into the native owner.
-  detail::CsrReportNodeReader reader(targets, layout, values);
+  detail::CsrReportNodeReader reader(fixture.database(), *baseline.state, resolver, report_values, {}, {});
+  reader.preparePathTrace();
   auto& first = reader.point(input.nodes.front().key.full_name);
   requireTimingScatter(&first == &reader.point(input.nodes.front().key.full_name), "report node cache did not reuse its value");
   requireNativeTimingOracleEqual(readNativeTimingOracle(fixture.database()), before, "report node query mutated native timing");
@@ -92,6 +101,13 @@ void runResolvedTimingScatterContract(ReferenceNativeFixtureCase fixture_case)
   expected_nodes.nodes = fixture.expected_oracle.nodes;
   requireNativeTimingOracleEqual(readNativeTimingOracle(fixture.database()), expected_nodes, "report node decoding differs from full native oracle");
   requireTimingScatter(&first == &reader.point(input.nodes.front().key.full_name), "report cache invalidated an earlier point");
+  // getPathState may insert a default when the report re-resolves a missing clock tag.
+  first.get_path_state_map()[AnalysisType::kMax][PathSourceType::kInput][TransType::kRise]["missing-report-tag"];
+  reader.prepare({});
+  for (const auto& node : input.nodes)
+    fixture.database().get_timing_point_map().at(node.key.full_name) = reader.point(node.key.full_name);
+  requireNativeTimingOracleEqual(readNativeTimingOracle(fixture.database()), expected_nodes,
+                                "next report preparation reused an inserted missing-tag default");
   poisonTimingScatterFixture(fixture, 73);
 
   auto result = detail::prepareResolvedTimingResult(targets, layout, values);

@@ -418,16 +418,14 @@ void queryAllocationRetry(const timing_edit::oracle::ProductionFreshSessionView&
     require(summary.worst_slack == saved_slack, "report preparation retry failed");
     auto& owned = context.cudaState(loaded.authority);
     const auto& graph = owned.host->graph;
-    const auto targets = csr::detail::resolveDualCsrTimingTargets(loaded.database, graph);
-    const auto& layout = graph.reference_payload;
     const auto& values = owned.device.timingValues();
+    const csr::CsrReportValues report_values{{}, {}, &values};
     std::size_t csr_allocations{};
     const auto counted = executeStaLifecyclePipeline(
         {{"CSR report allocation count", [] {}, [&] {
           ista_test_allocation::armCountOnly();
           try {
-            csr::detail::CsrReportNodeReader reader(targets,
-                {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, values);
+            csr::detail::CsrReportNodeReader reader(loaded.database, graph, owned.host->resolver, report_values, {}, {});
             static_cast<void>(TimingReporter::readCsrReport(reader));
           } catch (...) {
             static_cast<void>(ista_test_allocation::disable());
@@ -744,6 +742,7 @@ int main(int argc, char** argv)
     csr::test::runCudaDualCsrStorageContracts(mode);
     CudaDualCsrTestReader::reportQueryContracts(mode);
     CudaDualCsrTestReader::reportChainContracts();
+    CudaDualCsrTestReader::scalarQueryContracts(mode);
     runCudaClockContracts();
     runCudaSequentialContracts();
     runCudaRcPropagationContracts();

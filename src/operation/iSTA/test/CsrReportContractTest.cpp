@@ -3,6 +3,8 @@
 #include "CsrTimingScatterTestFixture.hpp"
 #include "CsrNativeTimingOracleTestSupport.hpp"
 #include "TimingResultScatterInternal.hpp"
+#include "DualCsrBaselineFactory.hpp"
+#include "TimingEditResolver.hpp"
 #include "BenchmarkTimingConsumer.hpp"
 #include "BufferTraceReplayInput.hpp"
 #include "DualCsrTargetedArtifactSupport.hpp"
@@ -36,13 +38,12 @@ void compareReport(const timing_edit::oracle::ProductionFreshSessionView& view, 
     file << expected;
   }
   requireTimingScatter(!expected.at("paths").at("paths").empty(), "native report fixture contains no selected path");
-  detail::StableScatterTargets targets;
-  targets.timing_order = &database.get_timing_order_list();
-  for (const auto& node : input.nodes)
-    targets.nodes.push_back({&database.get_timing_point_map().at(node.key.full_name), &node.key.full_name});
-  for (const auto& arc : input.arcs)
-    targets.arcs.push_back({&database.get_arc_list().at(arc.native_traversal_rank), static_cast<std::size_t>(arc.native_traversal_rank)});
-  const detail::TimingScatterLayout layout{input.analysis_order, input.path_source_order, input.transition_order, input.clock_tags};
+  const auto resolver = timing_edit::TimingEditResolverState::bindBaseline(database);
+  const auto baseline = timing_dual_csr::DualCsrBaselineFactory::create(input,
+      timing_edit::TimingEditSessionToken{input.source_identity.session_token}, resolver.highWater());
+  requireTimingScatter(baseline.success(), "report fixture graph preparation failed");
+  const CsrReportValues report_values{{}, {}, &values};
+
   for (auto& [name, point] : database.get_timing_point_map()) {
     static_cast<void>(name);
     point = TimingPoint{};
@@ -59,7 +60,7 @@ void compareReport(const timing_edit::oracle::ProductionFreshSessionView& view, 
   const auto status = executeStaLifecyclePipeline(
       {{"CSR report contract", [] {}, [&] {
         for (int repeat = 0; repeat != 2; ++repeat) {
-          detail::CsrReportNodeReader reader(targets, layout, values);
+          detail::CsrReportNodeReader reader(database, *baseline.state, resolver, report_values, {}, {});
           const auto summary = TimingReporter::readCsrReport(reader, true);
           requireTimingScatter(nlohmann::json::parse(summary.first) == expected.at("qor") && summary.second.empty(),
                                "summary-only query changed QOR or generated paths");

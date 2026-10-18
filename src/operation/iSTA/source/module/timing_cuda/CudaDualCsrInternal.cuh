@@ -287,6 +287,7 @@ struct ReportTransfer
   // Empty IDs with a nonempty value buffer request the contiguous identity range.
   std::vector<Index> nodes, paths;
   std::vector<value_detail::NodeValue> node_values;
+  std::vector<value_detail::NodeDetails> node_details;
   std::vector<PathState> path_values;
 };
 struct ClockWorkItem { Index node, owner; };
@@ -320,7 +321,7 @@ struct DeviceStorage
   DeviceBuffer<ReportChain> report_chains;
   DeviceBuffer<ReportChainStep> report_chain_steps;
   DeviceBuffer<Status> report_chain_status;
-  DeviceBuffer<value_detail::NodeValue> report_node_values;
+  DeviceBuffer<std::byte> report_node_data;
   DeviceBuffer<PathState> report_path_values;
   ResultBuffers results[2];
   PathDomainBuffers domain;
@@ -379,6 +380,7 @@ struct CudaDualCsrSession::Impl
   };
   std::optional<CandidateTiming> candidate_timing;
   CsrReportValues report_values;
+  std::optional<std::vector<value_detail::NodeTimingScalars>> timing_scalars;
 
   void initializeFull(cuda_detail::HostData& packed, const InputPortRcThresholds& thresholds);
   Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water);
@@ -408,6 +410,9 @@ struct CudaDualCsrSession::Impl
   const std::vector<BufferCandidateTiming>& readCandidateTiming(std::span<const NodeId> nodes);
   const CsrReportValues& readReportValues(std::span<const NodeId> nodes, std::span<const CsrQueryPath> paths);
   void enqueueReportRead(cuda_detail::ReportTransfer& transfer);
+  void prepareReportNodes(cuda_detail::ReportTransfer& transfer, std::size_t count) const;
+  value_detail::NodeValue reportNode(const cuda_detail::ReportTransfer& transfer, std::size_t slot) const;
+  const std::vector<value_detail::NodeTimingScalars>& readTimingScalars();
   std::vector<CsrQueryPath> prepareReportRead(const CsrReportRequest& request);
   std::vector<cuda_detail::ReportChainStep> readReportChains(std::span<const cuda_detail::ReportChain> chains);
   std::optional<CsrFifoLevelization> reconstructMixed();

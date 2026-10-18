@@ -133,14 +133,12 @@ const std::pair<std::string, std::string>& StaCudaSessionState::readReport(Datab
   if (_csr_report_generation == device.generation()) return _csr_report;
   const auto& graph = host->graph;
   _native_view.prepareMetadata(database, authority, graph, host->resolver, history);
-  const auto& values = device.timingValues();
+  const auto& values = device.reportValues({}, {});
   std::pair<std::string, std::string> report;
   const auto status = executeStaLifecyclePipeline(
       {{"CSR report", [] {}, [&] {
-        const auto targets = csr::detail::resolveDualCsrTimingTargets(database, graph);
-        const auto& layout = graph.reference_payload;
-        csr::detail::CsrReportNodeReader reader(targets,
-            {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, values);
+        csr::detail::CsrReportNodeReader reader(database, graph, host->resolver, values, device.reportClockNames(),
+            [&](const csr::CsrReportRequest& request) { return device.prepareReport(request); });
         report = TimingReporter::readCsrReport(reader);
       }, [] {}}},
       StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});

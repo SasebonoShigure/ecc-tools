@@ -67,6 +67,7 @@ ista_add_step6_target(
     ISTA_STEP6_SCATTER_CONTRACT_SOURCES
     ISTA_STEP6_FUNCTIONAL_LINKS
 )
+target_link_libraries(ista_csr_timing_scatter_contract_test PRIVATE ista_timing_edit_native)
 
 set(ISTA_STEP6_SCATTER_ATOMICITY_SOURCES
     ${ISTA_STEP6_COMMON_SOURCES}

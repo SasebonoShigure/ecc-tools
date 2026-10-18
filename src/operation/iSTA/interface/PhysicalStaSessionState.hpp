@@ -11,6 +11,7 @@
 #include "StaExecutionContract.hpp"
 #if ISTA_ENABLE_CUDA
 #include "CudaCsrEditState.hpp"
+namespace ista::csr { class CudaDualCsrSession; }
 #endif
 
 namespace ista {
@@ -53,8 +54,10 @@ class PhysicalStaSessionState final
  private:
   void prepareCsrView(Database& database, const timing_edit::NativeExecutionAuthority& authority,
       const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues* values);
+#if ISTA_ENABLE_CUDA
   PhysicalStaCurrentResult readCsr(Database& database, const timing_edit::NativeExecutionAuthority& authority,
-      const timing_dual_csr::DualCsrState& graph, const csr::CsrTimingValues& values, bool summary_only);
+      csr::CudaDualCsrSession& device, bool summary_only);
+#endif
   std::pair<std::string, std::string> _csr_report;
   std::optional<timing_edit::TransactionGeneration> _csr_report_generation;
   void materializeCsr(Database& database, const timing_edit::NativeExecutionAuthority& authority,

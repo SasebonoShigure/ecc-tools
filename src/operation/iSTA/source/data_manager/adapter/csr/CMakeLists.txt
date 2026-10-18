@@ -11,6 +11,7 @@ set(ISTA_TIMING_GRAPH_CSR_ADAPTER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatterValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatterPreparation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CsrReportNodeReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DualCsrNativeResultPreparation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TimingResultScatterPublish.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/CsrConstraintExport.cpp

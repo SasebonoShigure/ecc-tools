@@ -58,6 +58,7 @@ class CudaDualCsrSession final
   [[nodiscard]] bool close() noexcept;
   void requireCommitted() const;
   [[nodiscard]] const CsrTimingValues& timingValues() const;
+  [[nodiscard]] const std::vector<value_detail::NodeTimingScalars>& timingScalars() const;
   [[nodiscard]] std::optional<CsrComputationCode> computationCode() const noexcept;
   [[nodiscard]] const CudaDualCsrTelemetry& telemetry() const;
   [[nodiscard]] timing_edit::TransactionGeneration generation() const noexcept;

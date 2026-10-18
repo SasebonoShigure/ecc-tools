@@ -25,11 +25,15 @@ struct ClockLane
   std::uint8_t predecessor_transition{2};
 };
 
-struct NodeValue
+struct NodeTimingScalars
 {
   double arrival{-std::numeric_limits<double>::infinity()};
   double required{std::numeric_limits<double>::infinity()};
   double slack{0.0};
+};
+
+struct NodeDetails
+{
   double launch{0.0};
   Index clock_name{absent};
   Index predecessor_node{absent};
@@ -39,6 +43,8 @@ struct NodeValue
   bool propagated_clock{false};
   ClockLane physical_clock[4];
 };
+
+struct NodeValue : NodeTimingScalars, NodeDetails {};
 
 struct PathState
 {
@@ -55,6 +61,7 @@ struct PathState
   bool present{false};
 };
 
-static_assert(std::is_trivially_copyable_v<NodeValue> && std::is_trivially_copyable_v<PathState>);
+static_assert(std::is_trivially_copyable_v<NodeTimingScalars> && std::is_trivially_copyable_v<NodeDetails>
+              && std::is_trivially_copyable_v<NodeValue> && std::is_trivially_copyable_v<PathState>);
 
 }  // namespace ista::csr::value_detail

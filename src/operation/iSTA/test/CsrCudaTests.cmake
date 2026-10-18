@@ -56,7 +56,7 @@ endif()
 
 if(ISTA_ENABLE_CUDA)
   add_executable(ista_cuda_dual_csr_session_test CudaDualCsrSessionTest.cpp CudaDualCsrStorageContract.cpp CudaMixedTopologyContract.cpp CudaPathDomainContract.cpp CudaPathDomainAllocationContract.cpp CudaParallelPatchContract.cpp CsrCpuReferenceTestFixture.cpp CsrCpuReferenceDagFixture.cpp
-      CudaDualCsrTestReader.cu CudaReportQueryContract.cu CudaReportChainContract.cu CudaClockWorkContract.cu CsrCudaSequentialContract.cu CsrCudaRcPropagationTest.cpp timing_edit/BufferTraceCsrJson.cpp)
+      CudaDualCsrTestReader.cu CudaReportQueryContract.cu CudaReportChainContract.cu CudaScalarQueryContract.cu CudaClockWorkContract.cu CsrCudaSequentialContract.cu CsrCudaRcPropagationTest.cpp timing_edit/BufferTraceCsrJson.cpp)
   target_sources(ista_cuda_dual_csr_session_test PRIVATE AllocationFailureSupport.cpp CudaCandidateAllocationFailure.cu)
   target_link_options(ista_cuda_dual_csr_session_test PRIVATE -Wl,--wrap=cudaMalloc)
   target_include_directories(ista_cuda_dual_csr_session_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

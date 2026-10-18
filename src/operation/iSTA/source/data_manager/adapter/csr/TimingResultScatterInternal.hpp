@@ -27,10 +27,12 @@
 #include <vector>
 
 #include "Arc.hpp"
+#include "CsrReportValues.hpp"
 #include "TimingPoint.hpp"
 #include "TimingResultScatter.hpp"
 
 namespace ista::timing_dual_csr { struct DualCsrState; }
+namespace ista::timing_edit { class TimingEditResolverState; }
 
 namespace ista::csr::detail {
 
@@ -123,18 +125,36 @@ struct PreparedTimingResult
 class CsrReportNodeReader final
 {
  public:
-  CsrReportNodeReader(const StableScatterTargets& targets, const TimingScatterLayout& layout, const CsrTimingValues& values);
+  CsrReportNodeReader(Database& database, const timing_dual_csr::DualCsrState& graph,
+      const timing_edit::TimingEditResolverState& resolver, const CsrReportValues& values,
+      std::span<const std::string> clock_names, PrepareCsrReport prepare);
   CsrReportNodeReader(const CsrReportNodeReader&) = delete;
   CsrReportNodeReader& operator=(const CsrReportNodeReader&) = delete;
-  [[nodiscard]] bool contains(std::string_view name) const { return _ids.contains(name); }
-  [[nodiscard]] ista::TimingPoint& point(std::string_view name);
+  [[nodiscard]] bool contains(const std::string& name) const;
+  [[nodiscard]] NodeId nodeId(const std::string& name) const;
+  [[nodiscard]] ClockTagId clockTag(std::string_view name) const;
+  void prepare(const CsrReportRequest& request);
+  void preparePathTrace();
+  [[nodiscard]] ista::TimingPoint& point(const std::string& name);
 
  private:
-  const StableScatterTargets& _targets;
-  TimingScatterLayout _layout;
-  const CsrTimingValues& _values;
-  std::unordered_map<std::string_view, std::size_t> _ids;
+  Database& _database;
+  const timing_dual_csr::DualCsrState& _graph;
+  const timing_edit::TimingEditResolverState& _resolver;
+  const CsrReportValues& _values;
+  std::span<const std::string> _clock_names;
+  PrepareCsrReport _prepare;
+  std::map<std::uint64_t, std::map<std::uint64_t, std::uint64_t>> _path_slots;
   std::map<std::size_t, ista::TimingPoint> _points;
+  std::map<std::uint64_t, std::size_t> _arc_ranks;
+  bool _path_trace{false};
+  [[nodiscard]] std::optional<NodeId> findNode(const std::string& name) const;
+  [[nodiscard]] const std::string& nodeName(std::uint64_t id) const;
+  [[nodiscard]] std::size_t arcRank(std::uint64_t id);
+  void appendPath(PreparedTimingPointState& prepared, std::uint64_t row, std::uint64_t tag,
+                  const value_detail::PathState& value);
+  void decodeComplete(std::size_t id, PreparedTimingPointState& prepared);
+  void decodeSparse(std::size_t id, PreparedTimingPointState& prepared);
 };
 
 struct TimingResultPreparationFailure

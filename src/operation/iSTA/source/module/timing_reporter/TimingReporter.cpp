@@ -672,6 +672,13 @@ void TimingReporter::outputTimingPathsJson(std::ostream* json_output)
       return getClockName(*left.second) < getClockName(*right.second);
     });
 
+    if (_analyzer) {
+      std::vector<TimingPath*> selected;
+      const auto count = std::min(timing_paths.size(), static_cast<std::size_t>(path_limit));
+      selected.reserve(count);
+      for (std::size_t i = 0; i < count; ++i) selected.push_back(timing_paths[i].second);
+      _analyzer->prepareCsrPaths(selected);
+    }
     int32_t output_count = 0;
     for (const auto& [path_group_name, timing_path] : timing_paths) {
       if (output_count >= path_limit) {

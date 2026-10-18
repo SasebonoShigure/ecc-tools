@@ -339,7 +339,8 @@ const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
     order.resize(view.node_count);
   ReportTransfer transfer;
   if (report_values.nodes.empty()) {
-    transfer.node_values.resize(view.node_count);
+    prepareReportNodes(transfer, view.node_count);
+    if (timing_scalars) data.nodes.resize(view.node_count);
   } else {
     data.nodes.resize(view.node_count);
     transfer.nodes.reserve(view.node_count - report_values.nodes.size());
@@ -348,7 +349,7 @@ const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
       if (cached != report_values.nodes.end()) data.nodes[node] = cached->second.timing;
       else transfer.nodes.push_back(node);
     }
-    transfer.node_values.resize(transfer.nodes.size());
+    prepareReportNodes(transfer, transfer.nodes.size());
   }
   const auto& domain = storage->domain.host;
   if (report_values.paths.empty() && domain.live_tags == view.path_count) {
@@ -381,9 +382,11 @@ const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
     telemetry.cuda.result_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
     telemetry.cuda.result_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
     if (data.nodes.empty()) data.nodes = std::move(transfer.node_values);
-    else
-      for (std::size_t slot = 0; slot < transfer.nodes.size(); ++slot)
-        data.nodes[transfer.nodes[slot]] = transfer.node_values[slot];
+    else {
+      const auto count = transfer.node_values.size() + transfer.node_details.size();
+      for (std::size_t slot = 0; slot < count; ++slot)
+        data.nodes[transfer.nodes.empty() ? slot : transfer.nodes[slot]] = reportNode(transfer, slot);
+    }
     if (data.paths.empty()) data.paths = std::move(transfer.path_values);
     else
       for (std::size_t slot = 0; slot < transfer.paths.size(); ++slot)

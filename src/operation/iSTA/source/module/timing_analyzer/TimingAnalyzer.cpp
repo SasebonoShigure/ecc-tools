@@ -65,6 +65,7 @@ void TimingAnalyzer::analyze()
 std::vector<TimingPathGroup> TimingAnalyzer::prepareReportGroups(TASummary& summary)
 {
   TAModel ta_model = initTAModel();
+  if (_csr_points) prepareCsrEndpoints();
   analyzeEndPointList(ta_model);
   // Allocate every report object before publishing either paths or summary.
   // A failed preparation leaves the last complete result intact for a retry.

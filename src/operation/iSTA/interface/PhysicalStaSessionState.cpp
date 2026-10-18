@@ -136,7 +136,7 @@ PhysicalStaCurrentResult PhysicalStaSessionState::read(Database& database, StaCs
 #if ISTA_ENABLE_CUDA
   if (cuda_graph) {
     try {
-      return readCsr(database, authority, cuda_graph->graph, context._cuda->device.timingValues(), summary_only);
+      return readCsr(database, authority, context._cuda->device, summary_only);
     } catch (...) {
       if (context._cuda->_poisoned || context._cuda->device.poisoned()) authority.poison();
       throw;
@@ -163,19 +163,19 @@ PhysicalStaCurrentResult PhysicalStaSessionState::read(Database& database, StaCs
   }
   return result;
 }
+#if ISTA_ENABLE_CUDA
 PhysicalStaCurrentResult PhysicalStaSessionState::readCsr(Database& database,
-    const timing_edit::NativeExecutionAuthority& authority, const timing_dual_csr::DualCsrState& graph,
-    const csr::CsrTimingValues& values, bool summary_only)
+    const timing_edit::NativeExecutionAuthority& authority, csr::CudaDualCsrSession& device, bool summary_only)
 {
+  const auto& graph = cuda_graph->graph;
+  const auto& values = device.reportValues({}, {});
   prepareCsrView(database, authority, graph, nullptr);
   if (_csr_report_generation != graph.generation || (!summary_only && _csr_report.second.empty())) {
     std::pair<std::string, std::string> report;
     const auto status = executeStaLifecyclePipeline(
         {{"CSR report", [] {}, [&] {
-          const auto targets = csr::detail::resolveDualCsrTimingTargets(database, graph);
-          const auto& layout = graph.reference_payload;
-          csr::detail::CsrReportNodeReader reader(targets,
-              {layout.analysis_order, layout.path_source_order, layout.transition_order, layout.clock_tags}, values);
+          csr::detail::CsrReportNodeReader reader(database, graph, cuda_graph->resolver, values, device.reportClockNames(),
+              [&](const csr::CsrReportRequest& request) { return device.prepareReport(request); });
           report = TimingReporter::readCsrReport(reader, summary_only);
         }, [] {}}},
         StaLifecycleStage{"DelayCalculator runtime", [] { STADC.init(); }, [] {}, [] { STADC.destroy(); }});
@@ -189,14 +189,16 @@ PhysicalStaCurrentResult PhysicalStaSessionState::readCsr(Database& database,
   result.qor_json = _csr_report.first;
   if (!summary_only) {
     result.paths_json = _csr_report.second;
+    const auto& timing = device.timingScalars();
     result.timing.reserve(graph.nodes.size());
     for (const auto& node : graph.nodes) {
       const auto id = node.id.value();
       result.timing.emplace_back(node.key.full_name,
-          std::array{values.nodes.arrivals.values[id], values.nodes.requireds.values[id], values.nodes.slacks.values[id]});
+          std::array{timing[id].arrival, timing[id].required, timing[id].slack});
     }
     std::ranges::sort(result.timing, {}, [](const auto& entry) -> const std::string& { return entry.first; });
   }
   return result;
 }
+#endif
 }  // namespace ista

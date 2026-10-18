@@ -17,6 +17,7 @@
 
 #include <optional>
 
+#include <span>
 #include "Database.hpp"
 #include "TAModel.hpp"
 
@@ -50,6 +51,8 @@ class TimingAnalyzer
   bool hasTimingPoint(const std::string& name);
   std::vector<TimingPathGroup> prepareReportGroups(TASummary& summary);
   void expandPathTrace(TimingPath& path);
+  void prepareCsrEndpoints();
+  void prepareCsrPaths(std::span<TimingPath* const> paths);
   TimingAnalyzer(const TimingAnalyzer& other) = delete;
   TimingAnalyzer(TimingAnalyzer&& other) = delete;
   ~TimingAnalyzer() = default;

@@ -16,7 +16,16 @@ void CudaDualCsrTestReader::reportChainContracts()
 {
   using namespace cuda_detail;
   using test::requireCpuReference;
-  const auto input = test::makeCpuReferenceDagFixture(7, {{0, 1}, {1, 2}, {2, 3}, {4, 5}, {5, 6}});
+  // Component seeds exercise path propagation; strict native inputs use the production trace tests.
+  const auto withPaths = [](CsrReferenceInput input) {
+    for (auto& seed : input.start_seeds) {
+      seed.path_source = PathSource::kInput;
+      for (auto& lane : seed.arrival) for (auto& value : lane) value = 0.0;
+    }
+    test::refreshCpuReferenceIdentity(input);
+    return input;
+  };
+  const auto input = withPaths(test::makeCpuReferenceDagFixture(7, {{0, 1}, {1, 2}, {2, 3}, {4, 5}, {5, 6}}));
   const std::array endpoints{NodeId{3}, NodeId{3}};
   const std::array chains{
       CsrPathChainSeed{NodeId{3}, AnalysisMode::kMax, PathSource::kInput, Transition::kRise, ClockTagId{0}},
@@ -77,7 +86,7 @@ void CudaDualCsrTestReader::reportChainContracts()
   std::vector<test::DagArc> edges;
   std::vector<CsrPathChainSeed> roots;
   for (Index node = 1; node < 130; ++node) edges.push_back({node - 1, node});
-  const auto deep = test::makeCpuReferenceDagFixture(130, edges);
+  const auto deep = withPaths(test::makeCpuReferenceDagFixture(130, edges));
   for (Index node = 0; node < 130; ++node)
     roots.push_back({NodeId{node}, AnalysisMode::kMax, PathSource::kInput, Transition::kRise, ClockTagId{0}});
   for (const unsigned threads : {64U, 257U}) {

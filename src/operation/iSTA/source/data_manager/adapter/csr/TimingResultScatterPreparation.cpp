@@ -481,30 +481,6 @@ bool validResolvedTimingShapes(const CsrTimingValues& result, std::size_t node_c
 
 }  // namespace
 
-CsrReportNodeReader::CsrReportNodeReader(const StableScatterTargets& targets, const TimingScatterLayout& layout,
-                                       const CsrTimingValues& values)
-    : _targets(targets), _layout(layout), _values(values)
-{
-  if (!validResolvedTimingShapes(values, targets.nodes.size(), targets.arcs.size()))
-    throw std::invalid_argument("CSR report timing has inconsistent dimensions");
-  _ids.reserve(targets.nodes.size());
-  for (std::size_t id = 0; id < targets.nodes.size(); ++id)
-    _ids.emplace(*targets.nodes[id].full_name, id);
-}
-
-ista::TimingPoint& CsrReportNodeReader::point(std::string_view name)
-{
-  const auto id = _ids.at(name);
-  if (const auto found = _points.find(id); found != _points.end()) return found->second;
-  PreparedTimingPointState prepared;
-  if (const auto failure = prepareNodeState(_values, _layout, _targets, id, prepared))
-    throw std::runtime_error("CSR report node cannot be decoded: " + std::string(token(*failure)));
-  auto& point = _points.try_emplace(id).first->second;
-  prepared.target = &point;
-  publishPreparedTimingPoint(prepared);
-  return point;
-}
-
 TimingResultPreparationResult prepareTimingResultScatter(ista::Database& database, const CsrReferenceInput& committed_input,
                                                          const CsrReferenceInput& current_input, const CsrTimingResult& result)
 {

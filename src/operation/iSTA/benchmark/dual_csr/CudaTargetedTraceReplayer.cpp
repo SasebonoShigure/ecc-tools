@@ -73,7 +73,7 @@ CudaTargetedTraceResult CudaTargetedTraceReplayer::run(StaCsrSessionContext& ses
       if (index + 1 == prefix) result.edit_sta_loop_ms = elapsed(loop_started);
       if (index + 1 == prefix) {
         auto phase = Clock::now();
-        static_cast<void>(owned.device.timingValues());
+        static_cast<void>(owned.device.timingScalars());
         batch.query_materialize_ms = elapsed(phase);
         phase = Clock::now();
         static_cast<void>(session.readCudaReport(baseline, authority));

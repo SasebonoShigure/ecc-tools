@@ -143,10 +143,9 @@ struct Present
 {
   __host__ __device__ bool operator()(Index node) const { return node != absent; }
 };
-__global__ void finishLevels(DeviceView view, Index count, Index processed)
+__global__ void finishLevels(DeviceView view, Index processed)
 {
   if (blockIdx.x == 0 && threadIdx.x == 0) {
-    *view.level_offset_count = count;
     if (processed != view.node_count)
       recordFailure(view.status, Status::cycle);
   }
@@ -165,6 +164,8 @@ void CudaDualCsrSession::Impl::levelizeFull()
       ++telemetry.grown_buffers;
     return buffer.data;
   };
+  view.indegrees = ensure(storage->indegrees, view.node_count);
+  view.node_levels = ensure(storage->results[result_index].node_levels, view.node_count);
   auto* wake_keys = ensure(storage->wake_keys, view.node_count);
   auto* selected_count = ensure(storage->frontier_count, 1);
   memory.zero(wake_keys, view.node_count);
@@ -248,8 +249,9 @@ void CudaDualCsrSession::Impl::levelizeFull()
       levels.level_offsets.push_back(tail);
   }
   // Member-owned upload storage stays alive through execute's delivery wait.
+  view.level_offsets = ensure(storage->results[result_index].level_offsets, levels.level_offsets.size());
   memory.upload(levels.level_offsets, view.level_offsets);
-  finishLevels<<<1, threads, 0, memory.stream()>>>(view, levels.level_offsets.size(), tail);
+  finishLevels<<<1, threads, 0, memory.stream()>>>(view, tail);
   check(cudaGetLastError(), "CUDA full frontier completion launch");
   ++telemetry.cuda.kernel_launches;
 }

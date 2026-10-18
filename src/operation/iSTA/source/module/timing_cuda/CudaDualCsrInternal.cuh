@@ -106,11 +106,12 @@ struct NewNodePlacement
   Index node, position;
 };
 // The one host graph used by the committed owner and its exclusive candidate.
-// Result path domains belong to the double-buffered calculation, not this state.
+// Path identities have their own local undo; only calculation results are double-buffered.
 struct HostGraphState
 {
   std::vector<Index> out_offsets, in_offsets, roots, ends;
   std::vector<ArcBinding> bindings;
+  std::vector<Index> eligible_indegrees;
   std::vector<PathAdjacency> adjacency;
   ResultLayout layout;
   std::vector<NodeSeed> node_seeds;
@@ -123,6 +124,7 @@ struct HostGraphUndo
   std::shared_ptr<HostGraphState> target;
   Index nodes{}, arcs{}, children{}, names{}, node_seeds{}, path_seeds{};
   std::vector<std::pair<Index, ArcBinding>> bindings;
+  std::vector<std::pair<Index, Index>> eligible_indegrees;
   std::vector<SeedLoadUndo> seed_loads;
   std::vector<std::pair<Index, ArcLayout>> layouts;
   std::vector<std::pair<Index, std::int32_t>> child_indices;
@@ -139,6 +141,7 @@ struct HostGraphUndo
   {
     target.reset();
     bindings.clear();
+    eligible_indegrees.clear();
     seed_loads.clear();
     layouts.clear();
     child_indices.clear();
@@ -164,6 +167,9 @@ struct HostGraphUndo
     }
     for (const auto& [id, value] : bindings)
       target->bindings[id] = value;
+    for (const auto& [node, value] : eligible_indegrees)
+      target->eligible_indegrees[node] = value;
+    target->eligible_indegrees.resize(nodes);
     for (const auto& [id, value] : layouts)
       target->layout.arcs[id] = value;
     for (const auto& [id, value] : child_indices)
@@ -195,11 +201,27 @@ struct HostGraphUndo
 struct PathDomainBuffers
 {
   PathDomain host;
-  DeviceBuffer<Index> offsets, tags;
+  PathDomainUndo undo;
+  DeviceBuffer<PathRow> rows;
+  DeviceBuffer<Index> tags, spare_tags;
+  DeviceBuffer<PathRowUpdate> updates;
+  bool tags_swapped{false}, uploaded{false};
+
+  void restoreHost() noexcept
+  {
+    undo.restore(host);
+    if (tags_swapped) std::swap(tags, spare_tags);
+    tags_swapped = false;
+  }
+  void clear() noexcept
+  {
+    undo.clear();
+    tags_swapped = uploaded = false;
+  }
 };
 struct ResultBuffers
 {
-  DeviceBuffer<Index> order, node_levels, level_offsets, level_offset_count, storage_visits;
+  DeviceBuffer<Index> order, node_levels, level_offsets, storage_visits;
   DeviceBuffer<NodeState> nodes;
   DeviceBuffer<PathState> paths;
   DeviceBuffer<ArcState> arcs;
@@ -253,7 +275,14 @@ struct GraphBuffers
   DeviceBuffer<RcBinding> rc_bindings;
   DeviceBuffer<Index> rc_net_by_node;
 };
-struct ClockWorkItem { Index node, owner, level; };
+struct ReportTransfer
+{
+  // Empty IDs with a nonempty value buffer request the contiguous identity range.
+  std::vector<Index> nodes, paths;
+  std::vector<value_detail::NodeValue> node_values;
+  std::vector<PathState> path_values;
+};
+struct ClockWorkItem { Index node, owner; };
 struct DeviceStorage
 {
   explicit DeviceStorage(CsrCudaTelemetry& telemetry) : memory(telemetry) {}
@@ -269,6 +298,8 @@ struct DeviceStorage
   DeviceBuffer<int> frontier_count;
   DeviceBuffer<std::byte> algorithm_scratch;
   std::vector<ClockWorkItem> clock_work;
+  std::vector<Index> clock_group_offsets;
+  std::weak_ptr<std::vector<Index>> clock_group_owner;
   DeviceBuffer<ClockWorkItem> clock_work_device;
   DeviceBuffer<double> end_arrivals, default_required;
   std::vector<AuxBinding> aux_bindings;
@@ -277,8 +308,12 @@ struct DeviceStorage
   DeviceBuffer<RcLoadCell> rc_load_cells;
   DeviceBuffer<double> tables;
   DeviceBuffer<BufferCandidateTiming> candidate_timing;
+  DeviceBuffer<Index> candidate_nodes;
+  DeviceBuffer<Index> report_nodes, report_paths;
+  DeviceBuffer<value_detail::NodeValue> report_node_values;
+  DeviceBuffer<PathState> report_path_values;
   ResultBuffers results[2];
-  PathDomainBuffers domains[2];
+  PathDomainBuffers domain;
   DeviceBuffer<SlotPatch> removes, changes, reverse_changes;
   DeviceBuffer<PayloadPatch> payloads;
   DeviceBuffer<SeedLoadPatch> seed_loads;
@@ -288,6 +323,7 @@ struct DeviceStorage
   DeviceBuffer<Index> aux_values;
   DeviceBuffer<SlotUndo> slot_undo;
   DeviceBuffer<ArcUndo> arc_undo;
+  std::vector<NewNodePlacement> mixed_placements;
   DeviceBuffer<NewNodePlacement> placements;
   Index slot_undo_count{}, arc_undo_count{}, seed_undo_count{};
   bool pending{false}, undo_captured{false}, poisoned{false}, closed{false};
@@ -304,7 +340,7 @@ struct CudaDualCsrSession::Impl
   CudaDualCsrTelemetry telemetry;
   std::shared_ptr<cuda_detail::DeviceStorage> storage;
   cuda_detail::Runtime& memory;
-  unsigned result_index{}, domain_index{};
+  unsigned result_index{};
   cuda_detail::DeviceView view;
   cuda_detail::NodeSeed* seed_nodes{};
   cuda_detail::PathSeed* seed_paths{};
@@ -318,8 +354,21 @@ struct CudaDualCsrSession::Impl
   mutable bool poisoned{false};
   std::optional<CsrComputationCode> code;
   CsrFifoLevelization levels;
+  // Old-node membership is stable across mixed batches; only this generation's
+  // group-to-level map changes. Full levelization creates a new membership owner.
+  std::shared_ptr<std::vector<cuda_detail::Index>> node_groups;
+  std::vector<cuda_detail::Index> group_levels;
+  [[nodiscard]] cuda_detail::Index levelOf(cuda_detail::Index node) const noexcept
+  {
+    return group_levels[(*node_groups)[node]];
+  }
   std::optional<CsrTimingValues> values;
-  std::optional<std::vector<BufferCandidateTiming>> candidate_timing;
+  struct CandidateTiming {
+    std::vector<cuda_detail::Index> nodes;
+    std::vector<BufferCandidateTiming> values;
+  };
+  std::optional<CandidateTiming> candidate_timing;
+  CsrReportValues report_values;
 
   void initializeFull(cuda_detail::HostData& packed, const InputPortRcThresholds& thresholds);
   Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water);
@@ -333,6 +382,9 @@ struct CudaDualCsrSession::Impl
   cuda_detail::PackedPatch& prepare(const Impl& before, const CudaDualCsrPatch& patch);
   ~Impl();
   void allocate();
+  void allocatePathDomain();
+  void transferPathDomain();
+  void restorePathRows(CsrCudaTelemetry& cleanup);
   void bindGraph() noexcept;
   void transferRc(cuda_detail::HostData& packed);
   std::uint64_t bindAuxRows();
@@ -343,7 +395,9 @@ struct CudaDualCsrSession::Impl
   void propagate();
   void execute(CudaLevelizationMode mode = CudaLevelizationMode::kFull);
   const CsrTimingValues& materialize();
-  const std::vector<BufferCandidateTiming>& readCandidateTiming();
+  const std::vector<BufferCandidateTiming>& readCandidateTiming(std::span<const NodeId> nodes);
+  const CsrReportValues& readReportValues(std::span<const NodeId> nodes, std::span<const CsrQueryPath> paths);
+  void enqueueReportRead(cuda_detail::ReportTransfer& transfer);
   std::optional<CsrFifoLevelization> reconstructMixed();
   void transferPatch(const Impl& before, const CudaDualCsrPatch& patch, cuda_detail::PackedPatch& packed);
 };

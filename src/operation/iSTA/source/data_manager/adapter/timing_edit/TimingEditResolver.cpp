@@ -280,10 +280,16 @@ StableNetRef TimingEditResolverState::stableNetForNativeName(const std::string& 
 
 namespace {
 template <class Map, class Key>
-const typename Map::mapped_type* findValue(const Map& values, const Key& key)
+const typename Map::value_type* findEntry(const Map& values, const Key& key)
 {
   const auto found = values.find(key);
-  return found == values.end() ? nullptr : &found->second;
+  return found == values.end() ? nullptr : &*found;
+}
+template <class Map, class Key>
+const typename Map::mapped_type* findValue(const Map& values, const Key& key)
+{
+  const auto* entry = findEntry(values, key);
+  return entry ? &entry->second : nullptr;
 }
 const NativeSlotBinding& requireLive(const NativeSlotBinding* binding, const char* kind)
 {
@@ -293,41 +299,54 @@ const NativeSlotBinding& requireLive(const NativeSlotBinding* binding, const cha
 }
 }  // namespace
 
-const NativeSlotBinding* TimingEditResolverView::findNodeBinding(const StableNodeRef& ref) const
+const NodeBindingEntry* TimingEditResolverView::findNodeEntry(const StableNodeRef& ref) const
 {
   if (_delta)
-    if (const auto* value = findValue(_delta->_changes._nodes, ref))
-      return value;
-  return findValue(_base._nodes, ref);
+    if (const auto* value = findEntry(_delta->_changes._nodes, ref)) return value;
+  return findEntry(_base._nodes, ref);
 }
-const NativeSlotBinding* TimingEditResolverView::findNodeBindingForKey(const csr::NodeKey& key) const
+const NativeSlotBinding* TimingEditResolverView::findNodeBinding(const StableNodeRef& ref) const
 {
-  if (const auto* baseline = findNodeBinding(ExistingNodeRef{key}))
-    return baseline;
-  // A committed peer can originate in an earlier edit. Its stable identity is
-  // still the creation token, even when it is outside this batch's capture plan.
-  // ponytail: linear in created history; add a reverse index only if profiling
-  // shows this uncommon peer lookup dominating capture.
-  const auto created = [&](const auto& values) -> const NativeSlotBinding* {
+  const auto* entry = findNodeEntry(ref);
+  return entry ? &entry->second : nullptr;
+}
+const NodeBindingEntry* TimingEditResolverView::findNodeEntryForKey(const csr::NodeKey& key) const
+{
+  if (const auto* baseline = findNodeEntry(ExistingNodeRef{key})) return baseline;
+  // shortcut: created identities scan edit history; index only if this lookup dominates.
+  const auto created = [&](const auto& values) -> const NodeBindingEntry* {
     for (const auto& [token, names] : values) {
-      if (names.input_pin_name == key.full_name)
-        return findNodeBinding(CreatedNodeRef{token, CreatedNodeRole::kInput});
-      if (names.output_pin_name == key.full_name)
-        return findNodeBinding(CreatedNodeRef{token, CreatedNodeRole::kOutput});
+      if (names.input_pin_name == key.full_name) return findNodeEntry(CreatedNodeRef{token, CreatedNodeRole::kInput});
+      if (names.output_pin_name == key.full_name) return findNodeEntry(CreatedNodeRef{token, CreatedNodeRole::kOutput});
     }
     return nullptr;
   };
   if (_delta)
-    if (const auto* binding = created(_delta->_changes._materializations))
-      return binding;
+    if (const auto* entry = created(_delta->_changes._materializations)) return entry;
   return created(_base._materializations);
+}
+const NetBindingEntry* TimingEditResolverView::findNetEntry(const StableNetRef& ref) const
+{
+  if (_delta)
+    if (const auto* value = findEntry(_delta->_changes._nets, ref)) return value;
+  return findEntry(_base._nets, ref);
 }
 const NativeSlotBinding* TimingEditResolverView::findNetBinding(const StableNetRef& ref) const
 {
+  const auto* entry = findNetEntry(ref);
+  return entry ? &entry->second : nullptr;
+}
+const NetBindingEntry* TimingEditResolverView::findNetEntryForName(const std::string& name) const
+{
+  if (const auto* baseline = findNetEntry(ExistingNetRef{name})) return baseline;
+  const auto created = [&](const auto& values) -> const NetBindingEntry* {
+    for (const auto& [token, names] : values)
+      if (names.output_net_name == name) return findNetEntry(CreatedNetRef{token, CreatedNetRole::kOutputNet});
+    return nullptr;
+  };
   if (_delta)
-    if (const auto* value = findValue(_delta->_changes._nets, ref))
-      return value;
-  return findValue(_base._nets, ref);
+    if (const auto* entry = created(_delta->_changes._materializations)) return entry;
+  return created(_base._materializations);
 }
 const NativeSlotBinding* TimingEditResolverView::findArcBinding(const StableArcRef& ref) const
 {

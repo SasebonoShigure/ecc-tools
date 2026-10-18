@@ -186,6 +186,12 @@ void checkCreatedCommittedPeer()
   state.generation = TransactionGeneration{1};
   state.nodes.resize(state.high_water.node_slots);
   const auto& names = batch.tokenMaterializations().front();
+  const auto* net_entry = overlay.findNetEntryForName(names.output_net_name);
+  const auto* committed_net_entry = TimingEditResolverView(staged).findNetEntryForName(names.output_net_name);
+  require(net_entry && committed_net_entry && *net_entry == *committed_net_entry
+              && net_entry->first == StableNetRef{CreatedNetRef{names.creation_token, CreatedNetRole::kOutputNet}}
+              && !net_entry->second.tombstone,
+          "created net entry lost its stable identity across resolver publish");
   for (const auto& assignment : batch.slotPlan().nodes) {
     auto& node = state.nodes.at(assignment.slot.value());
     node.id = csr::NodeId{assignment.slot.value()};
@@ -200,9 +206,9 @@ void checkCreatedCommittedPeer()
   const DualSemanticReadView committed{state};
   for (const auto& assignment : batch.slotPlan().nodes) {
     const auto& node = state.nodes.at(assignment.slot.value());
-    const auto* overlay_binding = overlay.findNodeBindingForKey(node.key);
-    require(overlay_binding && !overlay_binding->tombstone
-                && overlay_binding->slot == assignment.slot,
+    const auto* overlay_binding = overlay.findNodeEntryForKey(node.key);
+    require(overlay_binding && overlay_binding->first == assignment.ref && !overlay_binding->second.tombstone
+                && overlay_binding->second.slot == assignment.slot,
             "created peer in unapplied resolver delta was not found");
     auto missing = untouched;
     missing.before = resolver.highWater();

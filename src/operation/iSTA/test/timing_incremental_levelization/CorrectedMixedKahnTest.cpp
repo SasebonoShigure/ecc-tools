@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 
+#include "ActualDagCycleClassifier.hpp"
 #include "CorrectedMixedKahnLevelizer.hpp"
 #include "IncrementalLevelizationTestSupport.hpp"
 #include "MixedLevelizationValidation.hpp"
@@ -80,6 +81,29 @@ void indegreeKahnAndDeterministicFrontiers()
           "same-frontier vertices were not sorted by MixedVertexId");
 }
 
+void distinguishesActualAndQuotientCycles()
+{
+  const auto previous = makeLevels(2, {{0}, {1}});
+  TestEdgeView quotient(3);
+  quotient.addArc({1, 2});
+  quotient.addArc({2, 0});
+  TestEdgeView cycle(3);
+  cycle.addArc({0, 2});
+  cycle.addArc({2, 0});
+  TestEdgeView self_loop(3);
+  self_loop.addArc({2, 2, true, csr::EdgeStorageKind::kAuxOut});
+  for (const auto* edges : {&quotient, &cycle, &self_loop}) {
+    const auto built = buildMixedLevelizationGraph(*edges, previous, {2, 0, 1});
+    const auto attempt = runCorrectedMixedKahn(std::get<MixedPrecedenceGraph>(built));
+    require(std::get<MixedKahnFailure>(attempt).code == MixedKahnFailureCode::kMixedCycle,
+            "mixed quotient cycle was not detected");
+    const auto expected = edges == &quotient ? ActualDagClassificationCode::kDag
+                                           : ActualDagClassificationCode::kCycle;
+    require(classifyActualDag(*edges).code == expected,
+            "actual cycle classifier confused an acyclic quotient conflict with a cycle");
+  }
+}
+
 void cycleAndInvariantFailures()
 {
   const auto cycle = runCorrectedMixedKahn(cycleGraph());
@@ -105,6 +129,7 @@ int main()
   try {
     ista::timing_incremental_levelization::test::indegreeKahnAndDeterministicFrontiers();
     ista::timing_incremental_levelization::test::cycleAndInvariantFailures();
+    ista::timing_incremental_levelization::test::distinguishesActualAndQuotientCycles();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

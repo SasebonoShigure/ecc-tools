@@ -4,10 +4,12 @@
 // ***************************************************************************************
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 #include "IncrementalLevelizationTestSupport.hpp"
 #include "MixedLevelizationValidation.hpp"
+#include "MixedTopologyInternal.hpp"
 
 namespace ista::timing_incremental_levelization::test {
 namespace {
@@ -76,6 +78,54 @@ void fourClassesDedupAndAux()
           "validator accepted a graph with its virtual chain removed");
 }
 
+void previousNewNodeBecomesOldInNextBatch()
+{
+  const auto previous = makeLevels(3, {{0}, {2}, {1}});
+  TestEdgeView edges(4);
+  edges.addArc({0, 2});
+  edges.addArc({2, 1});
+  edges.addArc({2, 3, true, csr::EdgeStorageKind::kAuxOut});
+  edges.addArc({3, 1});
+  const auto built = buildMixedLevelizationGraph(edges, previous, {3, 1, 2});
+  const auto& graph = std::get<MixedPrecedenceGraph>(built);
+  const std::vector<std::uint64_t> groups{2, 1, 3, 999}, remap{0, 3, 1, 2};
+  const detail::PreviousLevels owned(previous.level_offsets, previous.level_nodes,
+      std::span<const std::uint64_t>(groups).first(3), remap, true);
+  const auto remapped = detail::buildOwnedMixedGraph(detail::topologyTraversal(edges), owned, {3, 1, 2});
+  require(std::get<MixedPrecedenceGraph>(remapped) == graph,
+          "stable group mapping changed mixed topology or consumed the uncommitted suffix");
+  require(graph.domain == MixedIdDomain{3, 4, 1, 3, 4}
+              && graph.adjacency_offsets == std::vector<std::uint64_t>{0, 1, 3, 3, 4}
+              && graph.successors == std::vector<MixedVertexId>{
+                  MixedVertexId{1}, MixedVertexId{2}, MixedVertexId{3}, MixedVertexId{2}},
+          "prior-batch new node did not move into the old/virtual domain");
+}
+
+void malformedPreviousVariants()
+{
+  const auto valid = makeLevels(2, {{0}, {1}});
+  auto offsets = valid;
+  offsets.level_offsets = {0, 2, 1};
+  auto duplicate = valid;
+  duplicate.level_nodes = {csr::NodeId{0}, csr::NodeId{0}};
+  auto inverse = valid;
+  inverse.node_to_level[1] = 1;
+  auto view_error = valid;
+  view_error.view_error = csr::CsrViewError::kMalformedAdjacency;
+  TestEdgeView edges(2);
+  for (const auto* malformed : {&offsets, &duplicate, &inverse, &view_error}) {
+    const auto attempt = buildMixedLevelizationGraph(edges, *malformed, {2, 0, 1});
+    require(std::get<MixedGraphBuildFailure>(attempt).code
+                == MixedGraphBuildFailureCode::kMalformedPreviousLevels,
+            "malformed previous levels were accepted at the public builder boundary");
+  }
+  const auto high_water = buildMixedLevelizationGraph(
+      edges, valid, {std::numeric_limits<std::uint64_t>::max(), 0, 1});
+  require(std::get<MixedGraphBuildFailure>(high_water).code
+              == MixedGraphBuildFailureCode::kMappingOverflow,
+          "old-node high-water exceeding current nodes was accepted");
+}
+
 void builderTypedFailures()
 {
   const auto previous = makeLevels(3, {{0, 1}, {2}});
@@ -121,6 +171,8 @@ int main()
   try {
     ista::timing_incremental_levelization::test::fourClassesDedupAndAux();
     ista::timing_incremental_levelization::test::builderTypedFailures();
+    ista::timing_incremental_levelization::test::previousNewNodeBecomesOldInNextBatch();
+    ista::timing_incremental_levelization::test::malformedPreviousVariants();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

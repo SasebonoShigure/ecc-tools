@@ -1,4 +1,5 @@
 #include <chrono>
+#include <numeric>
 
 #include "CsrCudaKernels.cuh"
 #include "CsrReferenceValidator.hpp"
@@ -14,6 +15,16 @@ double elapsed(Clock::time_point start)
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
+std::optional<CsrComputationCode> failureCode(Status status)
+{
+  switch (status) {
+    case Status::success: return std::nullopt;
+    case Status::cycle: return CsrComputationCode::kCycle;
+    case Status::numeric: return CsrComputationCode::kNumericFailure;
+    case Status::invariant: return CsrComputationCode::kInvariantViolation;
+  }
+  return CsrComputationCode::kInvariantViolation;
+}
 }  // namespace
 CudaDualCsrSession::Impl::Impl(const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater water)
     : storage(std::make_shared<DeviceStorage>(telemetry.cuda)), memory(storage->memory),
@@ -29,9 +40,13 @@ void CudaDualCsrSession::Impl::initializeFull(HostData& packed, const InputPortR
 {
   host = std::make_shared<HostGraphState>();
   host->layout = std::move(packed.layout);
-  auto& paths = storage->domains[domain_index].host;
+  auto& paths = storage->domain.host;
   paths = std::move(packed.paths);
   host->bindings = std::move(packed.bindings);
+  host->eligible_indegrees.assign(packed.node_count, 0);
+  for (const auto& arc : host->bindings)
+    if (arc.active && arc.levelization)
+      host->eligible_indegrees[arc.sink] = checkedAdd(host->eligible_indegrees[arc.sink], 1);
   host->adjacency = std::move(packed.adjacency);
   host->path_seeds = std::move(packed.path_seeds);
   host->node_seeds = std::move(packed.node_seeds);
@@ -75,7 +90,7 @@ void CudaDualCsrSession::Impl::initializeFull(HostData& packed, const InputPortR
       memory.upload(storage->models.tables.data() + table_begin, const_cast<double*>(view.table_data) + table_begin, table_count - table_begin);
     memory.upload(host->node_seeds, seed_nodes);
     memory.upload(host->path_seeds, seed_paths);
-    memory.upload(paths.offsets, view.path_offsets);
+    memory.upload(paths.rows, view.path_rows);
     memory.upload(paths.tags, view.path_tags);
     memory.record(1);
     execute();
@@ -95,7 +110,7 @@ void CudaDualCsrSession::Impl::initializeFull(HostData& packed, const InputPortR
   }
 }
 CudaDualCsrSession::Impl::Impl(std::shared_ptr<Impl> before, const CudaDualCsrPatch& patch, CudaLevelizationMode mode)
-    : storage(before->storage), memory(storage->memory), result_index(1 - before->result_index), domain_index(before->domain_index),
+    : storage(before->storage), memory(storage->memory), result_index(1 - before->result_index),
       token(before->token), generation(patch.target_generation), high_water(patch.after), origin(std::move(before))
 {
   const auto& prior = *origin;
@@ -124,8 +139,13 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
 {
   CsrCudaTelemetry cleanup;
   storage->host_undo.restore();
+  storage->domain.restoreHost();
+  // A failed candidate constructor also reaches this surviving origin owner.
+  if (node_groups && node_groups->size() > view.node_count)
+    node_groups->resize(view.node_count);
   if (storage->closed) {
     storage->host_undo.clear();
+    storage->domain.clear();
     clearRcPatch();
     storage->pending = false;
     storage->undo_captured = false;
@@ -137,6 +157,7 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
   memory.bindTelemetry(cleanup);
   bindGraph();
   try {
+    restorePathRows(cleanup);
     restoreRcPatch(cleanup);
     if (storage->host_undo.roots)
       memory.upload(host->roots, view.roots);
@@ -163,6 +184,7 @@ CsrCudaTelemetry CudaDualCsrSession::Impl::restorePending() noexcept
   storage->slot_undo_count = storage->arc_undo_count = 0;
   storage->aux_bindings.clear();
   storage->host_undo.clear();
+  storage->domain.clear();
   clearRcPatch();
   // Charge undo waits to the surviving owner, including constructor failures.
   telemetry.cuda.stream_wait_ms += cleanup.stream_wait_ms;
@@ -194,12 +216,6 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode) try
   std::optional<CsrFifoLevelization> oracle;
   if (mode == CudaLevelizationMode::kMixed) {
     oracle = reconstructMixed();
-    if (code) {
-      memory.synchronize();
-      telemetry.cuda.h2d_ms = memory.milliseconds(0, 1);
-      telemetry.update_ms = memory.milliseconds(1, 2);
-      return;
-    }
   } else {
     const auto prior_readback = telemetry.cuda.d2h_bytes;
     const auto prior_wait = telemetry.cuda.stream_wait_ms;
@@ -208,99 +224,97 @@ void CudaDualCsrSession::Impl::execute(CudaLevelizationMode mode) try
     telemetry.cuda.levelization_decision_wait_ms = telemetry.cuda.stream_wait_ms - prior_wait;
   }
   Status status;
-  Index level_count;
   try {
     const auto prior_readback = telemetry.cuda.d2h_bytes;
     const auto prior_wait = telemetry.cuda.stream_wait_ms;
     memory.download(view.status, &status, 1);
-    memory.download(view.level_offset_count, &level_count, 1);
     memory.synchronize();
-    telemetry.cuda.level_metadata_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
-    telemetry.cuda.level_metadata_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
+    telemetry.cuda.status_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+    telemetry.cuda.status_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
   } catch (...) {
-    try {
-      memory.synchronize();
-    } catch (...) {
-      storage->poisoned = true;
-    }
+    try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
     throw;
   }
-  if (status == Status::success) {
-    if (!level_count || level_count > view.node_count + 1)
-      throw std::runtime_error("CUDA targeted returned invalid level count");
-    levels.node_to_level.resize(view.node_count);
-    levels.level_offsets.resize(level_count);
-    std::vector<Index> order;
+  // Device patch failure takes precedence over a CPU mixed conflict, including
+  // the CPU failure exits that did not enqueue reconstruction.
+  if (status != Status::success) {
+    code = failureCode(status);
+    telemetry.mixed_failure.reset();
+  }
+  if (code) {
+    telemetry.cuda.h2d_ms = memory.milliseconds(0, 1);
+    telemetry.update_ms = memory.milliseconds(1, 2);
+    return;
+  }
+  if (mode == CudaLevelizationMode::kFull) {
+    node_groups = std::make_shared<std::vector<Index>>(view.node_count);
+    group_levels.resize(levels.level_offsets.size());
+    std::iota(group_levels.begin(), group_levels.end(), Index{0});
+  }
+  if (mode == CudaLevelizationMode::kFull || incregpusta_debug_checks_enabled) {
+    std::vector<Index> order, inverse;
     if constexpr (incregpusta_debug_checks_enabled) {
       order.resize(view.node_count);
       levels.level_nodes.resize(view.node_count);
+      if (mode == CudaLevelizationMode::kMixed)
+        inverse.resize(view.node_count);
     }
     try {
       const auto prior_readback = telemetry.cuda.d2h_bytes;
       const auto prior_wait = telemetry.cuda.stream_wait_ms;
-      if constexpr (incregpusta_debug_checks_enabled)
+      if (mode == CudaLevelizationMode::kFull)
+        memory.download(view.node_levels, *node_groups);
+      if constexpr (incregpusta_debug_checks_enabled) {
         memory.download(view.order, order);
-      memory.download(view.node_levels, levels.node_to_level);
-      memory.download(view.level_offsets, levels.level_offsets);
+        if (mode == CudaLevelizationMode::kMixed)
+          memory.download(view.node_levels, inverse);
+      }
       memory.synchronize();
       telemetry.cuda.level_metadata_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
       telemetry.cuda.level_metadata_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
     } catch (...) {
-      try {
-        memory.synchronize();
-      } catch (...) {
-        storage->poisoned = true;
-      }
+      try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
       throw;
     }
     if constexpr (incregpusta_debug_checks_enabled) {
       for (std::size_t i = 0; i < order.size(); ++i)
         levels.level_nodes[i] = NodeId{order[i]};
-      if (oracle && (levels.level_offsets != oracle->level_offsets || levels.level_nodes != oracle->level_nodes
-                     || levels.node_to_level != oracle->node_to_level))
-        throw std::runtime_error("GPU mixed reconstruction differs from CPU reconstruction oracle");
-      if (oracle)
+      if (oracle) {
+        if (levels.level_offsets != oracle->level_offsets || levels.level_nodes != oracle->level_nodes
+            || inverse != oracle->node_to_level)
+          throw std::runtime_error("GPU mixed reconstruction differs from CPU reconstruction oracle");
+        for (Index node = 0; node < view.node_count; ++node)
+          if (levelOf(node) != inverse[node])
+            throw std::runtime_error("stable layer membership differs from GPU reconstruction");
+        std::vector<Index> indegrees(view.node_count, 0);
         for (const auto& arc : host->bindings)
-          if (arc.active && arc.levelization && levels.node_to_level[arc.source] >= levels.node_to_level[arc.sink])
-            throw std::runtime_error("GPU mixed levels violate actual edge precedence");
+          if (arc.active && arc.levelization) {
+            if (inverse[arc.source] >= inverse[arc.sink])
+              throw std::runtime_error("GPU mixed levels violate actual edge precedence");
+            indegrees[arc.sink] = checkedAdd(indegrees[arc.sink], 1);
+          }
+        if (indegrees != host->eligible_indegrees)
+          throw std::runtime_error("cached eligible indegrees differ from actual graph");
+      }
     }
-    memory.record(3);
-    propagate();
-    memory.record(4);
-    try {
-      const auto prior_readback = telemetry.cuda.d2h_bytes;
-      const auto prior_wait = telemetry.cuda.stream_wait_ms;
-      memory.download(view.status, &status, 1);
-      memory.record(5);
-      memory.synchronize();
-      telemetry.cuda.status_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
-      telemetry.cuda.status_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
-    } catch (...) {
-      try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
-      throw;
-    }
-    levels.complete = status == Status::success;
-  } else {
-    memory.record(3);
-    memory.record(4);
+  }
+  memory.record(3);
+  propagate();
+  memory.record(4);
+  try {
+    const auto prior_readback = telemetry.cuda.d2h_bytes;
+    const auto prior_wait = telemetry.cuda.stream_wait_ms;
+    memory.download(view.status, &status, 1);
     memory.record(5);
     memory.synchronize();
+    telemetry.cuda.status_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
+    telemetry.cuda.status_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
+  } catch (...) {
+    try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
+    throw;
   }
-  if (status != Status::success) {
-    switch (status) {
-      case Status::cycle:
-        code = CsrComputationCode::kCycle;
-        break;
-      case Status::numeric:
-        code = CsrComputationCode::kNumericFailure;
-        break;
-      case Status::invariant:
-        code = CsrComputationCode::kInvariantViolation;
-        break;
-      case Status::success:
-        break;
-    }
-  }
+  code = failureCode(status);
+  levels.complete = !code;
   telemetry.cuda.h2d_ms = memory.milliseconds(0, 1);
   telemetry.update_ms = memory.milliseconds(1, 2);
   telemetry.cuda.levelization_ms = memory.milliseconds(mode == CudaLevelizationMode::kMixed ? 7 : 2, 3);
@@ -323,16 +337,40 @@ const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
   std::vector<Index> order;
   if constexpr (!incregpusta_debug_checks_enabled)
     order.resize(view.node_count);
-  data.nodes.resize(view.node_count);
-  data.paths.resize(view.path_count);
+  ReportTransfer transfer;
+  if (report_values.nodes.empty()) {
+    transfer.node_values.resize(view.node_count);
+  } else {
+    data.nodes.resize(view.node_count);
+    transfer.nodes.reserve(view.node_count - report_values.nodes.size());
+    for (Index node = 0; node < view.node_count; ++node) {
+      const auto cached = report_values.nodes.find(node);
+      if (cached != report_values.nodes.end()) data.nodes[node] = cached->second.timing;
+      else transfer.nodes.push_back(node);
+    }
+    transfer.node_values.resize(transfer.nodes.size());
+  }
+  const auto& domain = storage->domain.host;
+  if (report_values.paths.empty() && domain.live_tags == view.path_count) {
+    transfer.path_values.resize(view.path_count);
+  } else {
+    data.paths.resize(view.path_count);
+    transfer.paths.reserve(domain.live_tags - report_values.paths.size());
+    for (const auto& segment : domain.segments)
+      if (domain.rows[segment.row] == segment.range)
+        for (Index slot = segment.range.begin; slot < segment.range.end; ++slot) {
+          const auto cached = report_values.paths.find(slot);
+          if (cached != report_values.paths.end()) data.paths[slot] = cached->second;
+          else transfer.paths.push_back(slot);
+        }
+    transfer.path_values.resize(transfer.paths.size());
+  }
   data.arc_state.resize(view.arc_count);
   data.child_state.resize(view.child_state_count);
   try {
     const auto prior_readback = telemetry.cuda.d2h_bytes;
     const auto prior_wait = telemetry.cuda.stream_wait_ms;
-    memory.record(6);
-    memory.download(view.nodes, data.nodes);
-    memory.download(view.paths, data.paths);
+    enqueueReportRead(transfer);
     memory.download(view.arc_state, data.arc_state);
     memory.download(view.child_state, data.child_state);
     if constexpr (!incregpusta_debug_checks_enabled)
@@ -342,22 +380,35 @@ const CsrTimingValues& CudaDualCsrSession::Impl::materialize()
     telemetry.cuda.delivery_d2h_ms += memory.milliseconds(6, 7);
     telemetry.cuda.result_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
     telemetry.cuda.result_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
+    if (data.nodes.empty()) data.nodes = std::move(transfer.node_values);
+    else
+      for (std::size_t slot = 0; slot < transfer.nodes.size(); ++slot)
+        data.nodes[transfer.nodes[slot]] = transfer.node_values[slot];
+    if (data.paths.empty()) data.paths = std::move(transfer.path_values);
+    else
+      for (std::size_t slot = 0; slot < transfer.paths.size(); ++slot)
+        data.paths[transfer.paths[slot]] = transfer.path_values[slot];
     // Publish the cache only after download and all allocating unpack work succeed.
-    auto result = unpackValues(std::move(data), host->layout, storage->domains[domain_index].host);
+    auto result = unpackValues(std::move(data), host->layout, storage->domain.host);
     if constexpr (!incregpusta_debug_checks_enabled) {
       result.level_nodes.reserve(order.size());
       for (const auto node : order)
         result.level_nodes.emplace_back(node);
     }
-    values.emplace(std::move(result));
-    // Keep one owner for functional levels. The next mixed batch borrows them
-    // from this cache after materialization, or from levels before any query.
-    values->level_offsets = std::move(levels.level_offsets);
+    result.level_offsets = levels.level_offsets;
+    result.node_to_level.reserve(view.node_count);
+    for (Index node = 0; node < view.node_count; ++node)
+      result.node_to_level.push_back(levelOf(node));
     if constexpr (incregpusta_debug_checks_enabled)
-      values->level_nodes = std::move(levels.level_nodes);
-    values->node_to_level = std::move(levels.node_to_level);
+      result.level_nodes = std::move(levels.level_nodes);
+    values.emplace(std::move(result));
+    report_values.nodes.clear();
+    report_values.paths.clear();
+    report_values.complete = &*values;
     telemetry.materialize_ms += elapsed(start);
     return *values;
+  } catch (const CudaAllocationError&) {
+    throw;
   } catch (const CudaError&) {
     try {
       memory.synchronize();
@@ -434,6 +485,7 @@ bool CudaDualCsrSession::publish(CudaDualCsrSession&& candidate) noexcept
     _impl->storage->graph.aux_storage[binding.source].count = binding.replacement_count;
   _impl->storage->aux_bindings.clear();
   _impl->storage->host_undo.clear();
+  _impl->storage->domain.clear();
   candidate._impl->clearRcPatch();
   _impl->storage->pending = false;
   _impl->storage->undo_captured = false;

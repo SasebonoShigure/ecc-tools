@@ -21,7 +21,6 @@ namespace ista { class CudaCsrEditState; }
 namespace ista::timing_dual_csr {
 
 class TimingEditDualCsrDescriptorBuilder;
-class DualCsrTransactionCoordinator;
 
 // Borrow only during exclusive descriptor preparation. The builder consumes
 // this binding before graph/index mutation or capacity growth.
@@ -116,7 +115,6 @@ class DualCsrStructuredBatchPreparer final
       const std::optional<timing_edit::CommittedEditIdentity>& exact_committed_identity,
       const DualCsrArcGroupIndex& committed_arc_group_index);
 
-  friend class DualCsrTransactionCoordinator;
   friend class ista::CudaCsrEditState;
 };
 

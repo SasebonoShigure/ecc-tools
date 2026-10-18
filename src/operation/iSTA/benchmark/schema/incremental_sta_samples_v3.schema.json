@@ -527,6 +527,16 @@
         }
       }
     },
+    "additional_metrics": {
+      "description": "Optional for historical v3 files; current runs include these distinct inclusive intervals.",
+      "type": "object", "additionalProperties": false,
+      "required": ["edit_sta_loop_ms", "workload_ms", "cold_end_to_end_ms"],
+      "properties": {
+        "edit_sta_loop_ms": {"$ref": "#/$defs/metricStatistics"},
+        "workload_ms": {"$ref": "#/$defs/metricStatistics"},
+        "cold_end_to_end_ms": {"$ref": "#/$defs/metricStatistics"}
+      }
+    },
     "performance_gate": {
       "enum": [
         "not_run",
@@ -545,6 +555,14 @@
     }
   },
   "$defs": {
+    "metricStatistics": {
+      "type": "object", "additionalProperties": false,
+      "required": ["summaries", "comparisons"],
+      "properties": {
+        "summaries": {"$ref": "#/properties/summaries"},
+        "comparisons": {"$ref": "#/properties/comparisons"}
+      }
+    },
     "cudaReadbackGroup": {
       "type": "object",
       "additionalProperties": false,

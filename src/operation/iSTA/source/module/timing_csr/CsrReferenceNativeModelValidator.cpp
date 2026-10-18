@@ -165,20 +165,36 @@ void validateChild(const ChildTimingArcModel& child, Violations& errors, const s
 
 }  // namespace
 
-void validateTransfer(const CellTransferModel& transfer, Violations& errors, const std::string& field)
+void validateTransferScalars(const CellTransferModel& transfer, Violations& errors, const std::string& field)
 {
   if (!isFinite(transfer.delay) || !isFinite(transfer.delay_min) || !isFinite(transfer.delay_max))
     reject(errors, field, "fallback delay is non-finite");
-  std::vector<std::int32_t> child_indices;
-  child_indices.reserve(transfer.children().size());
-  for (const auto& child : transfer.children()) {
-    validateChild(child, errors, field + ".children");
-    child_indices.push_back(child.signature.arc_index);
-  }
-  std::ranges::sort(child_indices);
-  if (std::ranges::adjacent_find(child_indices) != child_indices.end())
+}
+
+void validateTimingChildren(const std::vector<ChildTimingArcModel>& children, Violations& errors, const std::string& field)
+{
+  for (const auto& child : children)
+    validateChild(child, errors, field);
+}
+
+bool hasUniqueChildArcIndices(const std::vector<ChildTimingArcModel>& children)
+{
+  std::vector<std::int32_t> indices;
+  indices.reserve(children.size());
+  for (const auto& child : children)
+    indices.push_back(child.signature.arc_index);
+  std::ranges::sort(indices);
+  return std::ranges::adjacent_find(indices) == indices.end();
+}
+
+void validateTransfer(const CellTransferModel& transfer, Violations& errors, const std::string& field)
+{
+  validateTransferScalars(transfer, errors, field);
+  validateTimingChildren(transfer.children(), errors, field + ".children");
+  if (!hasUniqueChildArcIndices(transfer.children()))
     reject(errors, field + ".children.signature.arc_index", "arc indices must be unique");
 }
+
 namespace {
 
 const ReferencedLibraryCellModel* findReferencedCell(const CsrReferenceInput& input, const std::string& cell_name)
@@ -461,8 +477,7 @@ void validateLibraryCell(const ReferencedLibraryCellModel& cell, Violations& err
         reject(errors, "referenced_library_cells.timing_checks.check_time", "check time must be finite");
       if (!knownEnum(check.clock_transition) || check.clock_transition == Transition::kNone)
         reject(errors, "referenced_library_cells.timing_checks.clock_transition", "clock transition must be rise or fall");
-      for (const auto& child : check.children())
-        validateChild(child, errors, "referenced_library_cells.timing_checks.children");
+      validateTimingChildren(check.children(), errors, "referenced_library_cells.timing_checks.children");
     }
     validateLibraryRoleDerivation(cell, errors);
 }

@@ -116,18 +116,21 @@ ChildTimingArcModel makeChild()
   child.time_unit_scale = 1000.0;
   child.capacitance_unit_scale = 1000.0;
   child.slew_derate = 0.8;
-  child.slew_lower_threshold_pct = {10.0, 20.0};
-  child.slew_upper_threshold_pct = {90.0, 80.0};
-  child.output_threshold_pct = {45.0, 55.0};
+  child.slew_lower_threshold_pct = {0.1, 0.2};
+  child.slew_upper_threshold_pct = {0.9, 0.8};
+  child.output_threshold_pct = {0.45, 0.55};
   for (unsigned output = 0; output < 2; ++output) {
     auto& delay = child.delay_tables[output];
     delay.present = true;
     delay.variable1 = TableVariable::kInputTransition;
+    delay.variable2 = TableVariable::kOutputCapacitance;
     delay.axes = {{0.0, 250.0}, {0.0, 100.0}};
     delay.values = {20.0, 220.0, 70.0, 270.0};
     auto& slew = child.slew_tables[output];
     slew = delay;
     slew.values = {30.0, 330.0, 130.0, 430.0};
+    child.signature.delay_tables[output] = {true, delay.variable1, delay.variable2};
+    child.signature.slew_tables[output] = {true, slew.variable1, slew.variable2};
   }
   return child;
 }
@@ -222,10 +225,10 @@ void testCudaParasiticPacking()
       "equal Liberty values no longer reuse model storage");
   auto changed = child;
   changed.signature.library_name = "other.lib";
-  changed.output_threshold_pct[0] = 30.0;
+  changed.output_threshold_pct[0] = 0.3;
   const auto second = library.intern(std::make_shared<const std::vector<ChildTimingArcModel>>(std::vector{changed}));
   demand(library.children[first].library != library.children[second].library
-         && library.children[second].output_threshold[0] == 30.0, "RC library/threshold packing lost identity");
+         && library.children[second].output_threshold[0] == 0.3, "RC library/threshold packing lost identity");
 
   std::vector<Request> requests;
   for (unsigned i = 0; i < 1025; ++i) {

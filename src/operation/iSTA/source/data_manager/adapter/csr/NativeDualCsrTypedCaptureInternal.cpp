@@ -86,8 +86,9 @@ PlannedNodeId resolvePlannedNodeId(
   const auto* request = found == index.end() ? nullptr : &found->second;
   if (request != nullptr && *request->key != key)
     return NarrowCaptureError::kBatchBindingMismatch;
+  const auto* entry = request == nullptr ? staged.findNodeEntryForKey(key) : nullptr;
   const auto* binding = request == nullptr
-      ? staged.findNodeBindingForKey(key)
+      ? (entry ? &entry->second : nullptr)
       : staged.findNodeBinding(request->ref);
   if (binding == nullptr)
     return request == nullptr ? NarrowCaptureError::kUnplannedDependency

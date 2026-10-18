@@ -742,6 +742,7 @@ int main(int argc, char** argv)
     if (mode == CudaLevelizationMode::kMixed)
       multiBlockReconstruction();
     csr::test::runCudaDualCsrStorageContracts(mode);
+    CudaDualCsrTestReader::reportQueryContracts(mode);
     runCudaClockContracts();
     runCudaSequentialContracts();
     runCudaRcPropagationContracts();

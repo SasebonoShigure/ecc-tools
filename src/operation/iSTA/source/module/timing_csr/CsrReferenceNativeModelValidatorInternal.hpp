@@ -22,6 +22,10 @@
 
 namespace ista::csr::detail {
 
+void validateTransferScalars(const CellTransferModel& transfer, std::vector<CsrContractViolation>& errors, const std::string& field);
+void validateTimingChildren(const std::vector<ChildTimingArcModel>& children, std::vector<CsrContractViolation>& errors, const std::string& field);
+[[nodiscard]] bool hasUniqueChildArcIndices(const std::vector<ChildTimingArcModel>& children);
+
 // Intrinsic checks for one external transfer, without rebuilding a full input.
 void validateTransfer(const CellTransferModel& transfer, std::vector<CsrContractViolation>& errors, const std::string& field);
 

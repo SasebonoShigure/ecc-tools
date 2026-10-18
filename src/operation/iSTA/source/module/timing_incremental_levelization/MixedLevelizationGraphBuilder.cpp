@@ -133,8 +133,8 @@ MixedGraphBuildAttempt buildGraph(const detail::TopologyTraversal& edges, const 
     const bool sink_old = arc.sink.value() < domain->n_last_nodes;
     if (source_old && sink_old) {
       counter_overflow |= !recordDiagnosticVisit(telemetry.old_old);
-      const std::uint64_t source_level = previous.node_to_level[static_cast<std::size_t>(arc.source.value())];
-      const std::uint64_t sink_level = previous.node_to_level[static_cast<std::size_t>(arc.sink.value())];
+      const std::uint64_t source_level = previous.levelOf(static_cast<std::size_t>(arc.source.value()));
+      const std::uint64_t sink_level = previous.levelOf(static_cast<std::size_t>(arc.sink.value()));
       if (source_level == 0 || source_level > domain->n_old_levels || sink_level == 0 || sink_level > domain->n_old_levels)
         return csr::EdgeVisitResult::fail(csr::CsrViewError::kNodeOutOfRange);
       old_old_conflict |= source_level >= sink_level;

@@ -124,7 +124,7 @@ VirtualLevelMappingAttempt detail::oldNodeLevel(csr::NodeId node, const Previous
     return failure(MixedMappingFailureCode::kMalformedPreviousLevels,
                    "previous inverse map does not cover old nodes");
   const std::uint64_t one_based =
-      previous.node_to_level[static_cast<std::size_t>(node.value())];
+      previous.levelOf(static_cast<std::size_t>(node.value()));
   if (one_based == 0 || one_based > domain.n_old_levels)
     return failure(MixedMappingFailureCode::kMalformedPreviousLevels,
                    "old node has an invalid previous level");

@@ -19,13 +19,7 @@ namespace ista::timing_edit { class NativeExecutionAuthority; }
 namespace ista::timing_dual_csr {
 namespace detail { struct NarrowTimingRecords; }
 
-struct CommittedDualCsrAnalysisState;
-struct DualCsrStageAttempt;
-class DualCsrStageFactoryAccess;
 class VerifiedStructuredBatch;
-namespace test {
-class DualCsrStageFactoryFaultAdapter;
-}
 
 class VerifiedStructuredBatch final
 {
@@ -75,9 +69,7 @@ class VerifiedStructuredBatch final
   std::optional<NarrowCaptureAudit> _capture_audit;
 
   friend class TimingEditDualCsrDescriptorBuilder;
-  friend class DualCsrStageFactoryAccess;
   friend class ista::CudaCsrEditState;
-  friend class test::DualCsrStageFactoryFaultAdapter;
 };
 
 class TimingEditDualCsrDescriptorBuilder final

@@ -27,9 +27,4 @@ PhysicalGreedySelection selectPhysicalBuffers(const Database& database,
     csr::detail::NativeLibraryModels& models, const timing_edit::TimingEditResolverState& resolver,
     std::uint64_t generation, std::span<const std::string> buffer_cells,
     std::uint64_t top_k, std::uint64_t max_buffers, std::int32_t dbu_per_um);
-PhysicalGreedySelection selectCsrPhysicalBuffers(const Database& library, csr::detail::NativeLibraryModels& models,
-    idb::IdbDesign& design, const timing_dual_csr::DualCsrState& graph,
-    const timing_dual_csr::DualCsrArcGroupIndex& index, const timing_edit::TimingEditResolverState& resolver,
-    std::span<const csr::BufferCandidateTiming> timing, std::span<const std::string> buffer_cells,
-    std::uint64_t top_k, std::uint64_t max_buffers, std::int32_t dbu_per_um);
 }  // namespace ista

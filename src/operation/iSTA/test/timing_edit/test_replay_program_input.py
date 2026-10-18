@@ -25,6 +25,7 @@ def main() -> None:
     command = [
         sys.executable, str(args.controller.resolve(strict=True)), "--probe", probe,
         "--replay", str(program), "--run-root", str(root / "controller"),
+        "--strategy", "incremental",
     ]
     (root / "command.json").write_text(json.dumps(command, indent=2) + "\n")
     with (root / "stdout.log").open("w") as out, (root / "stderr.log").open("w") as err:

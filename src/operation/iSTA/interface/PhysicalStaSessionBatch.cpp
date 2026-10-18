@@ -6,8 +6,8 @@
 #include "NativeCandidateExecutor.hpp"
 #include "DataManager.hpp"
 #include "CanonicalTimingRecordProjectorInternal.hpp"
-#include "TimingEditDualCsrDescriptorBuilder.hpp"
 #if ISTA_ENABLE_CUDA
+#include "TimingEditDualCsrDescriptorBuilder.hpp"
 #include "StaCudaSessionState.hpp"
 #include "CudaTargetedExecution.hpp"
 #endif
@@ -67,8 +67,8 @@ PhysicalStaBatchResult PhysicalStaSessionState::applyBatchImpl(Database& databas
     auto physical = preparePhysicalTimingEdit(design, edits, *resolver, locations, technology.dbu_per_um);
     auto placement = placementRows().prepare(physical);
     auto trees = physical.prepareRc(technology);
-    std::optional<timing_dual_csr::PendingStructuredBatch> pending;
 #if ISTA_ENABLE_CUDA
+    std::optional<timing_dual_csr::PendingStructuredBatch> pending;
     if (cuda) {
       if (!cuda_graph || cuda_graph->graph.generation != before || context._cuda->device.generation() != before)
         throw std::logic_error("physical CSR/device origin differs");
@@ -81,14 +81,12 @@ PhysicalStaBatchResult PhysicalStaSessionState::applyBatchImpl(Database& databas
     std::optional<CudaCsrEditState::Patch> host_patch;
     std::optional<csr::CudaDualCsrSession> candidate;
 #endif
-    std::vector<csr::ParasiticNetModel> rc;
-    if (pending) {
+#if ISTA_ENABLE_CUDA
+    if (cuda) {
+      std::vector<csr::ParasiticNetModel> rc;
       rc.reserve(trees.size());
       for (const auto& [name, tree] : trees)
         rc.push_back(csr::detail::projectCanonicalParasiticNet(name, tree));
-    }
-#if ISTA_ENABLE_CUDA
-    if (cuda) {
       using namespace timing_dual_csr;
       auto& host = *cuda_graph;
       auto direct = TimingEditDualCsrDescriptorBuilder::buildDirect(

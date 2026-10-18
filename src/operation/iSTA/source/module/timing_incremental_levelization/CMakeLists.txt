@@ -5,7 +5,6 @@ add_library(ista_timing_incremental_levelization
     ${CMAKE_CURRENT_SOURCE_DIR}/MixedLevelReconstructor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MixedLevelizationValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ActualDagCycleClassifier.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/CpuIncrementalLevelizationPipeline.cpp
 )
 
 target_include_directories(ista_timing_incremental_levelization
@@ -65,11 +64,6 @@ if(BUILD_TESTING)
         ista_corrected_mixed_kahn_test CorrectedMixedKahnTest.cpp)
     ista_add_incremental_levelization_test(
         ista_mixed_reconstruction_test MixedReconstructionTest.cpp)
-    ista_add_incremental_levelization_test(
-        ista_incremental_levelization_pipeline_test
-        IncrementalLevelizationPipelineTest.cpp)
-    target_sources(ista_incremental_levelization_pipeline_test PRIVATE
-        ${ISTA_TEST}/AllocationFailureSupport.cpp)
     ista_add_incremental_levelization_test(
         ista_incremental_levelization_property_test
         IncrementalLevelizationPropertyTest.cpp)

@@ -111,7 +111,7 @@ __device__ void arrivalNode(DeviceView view, Index id)
     for (unsigned kind = 0; kind < 2; ++kind)
       for (unsigned output = 0; output < 2; ++output) {
         const auto row = pathRow(id, analysis, kind, output);
-        for (Index slot = view.path_offsets[row]; slot < view.path_offsets[row + 1]; ++slot) {
+        for (Index slot = view.path_rows[row].begin; slot < view.path_rows[row].end; ++slot) {
           auto& target = view.paths[slot];
           const auto tag = view.path_tags[slot];
           Value<double> best{target.arrival, target.present && isfinite(target.arrival)};
@@ -439,13 +439,25 @@ void CudaDualCsrSession::Impl::propagate()
     return buffer.data;
   };
   auto& clocks = storage->clock_work;
-  clocks.clear();
-  for (const auto& seed : host->node_seeds)
-    if (seed.state.clock_owner != absent)
-      clocks.push_back({seed.node, seed.state.clock_owner, levels.node_to_level[seed.node]});
-  std::sort(clocks.begin(), clocks.end(), [](const ClockWorkItem& a, const ClockWorkItem& b) {
-    return std::tie(a.level, a.owner, a.node) < std::tie(b.level, b.owner, b.node);
-  });
+  auto& clock_offsets = storage->clock_group_offsets;
+  const bool rebuild_clocks = storage->clock_group_owner.lock() != node_groups;
+  if (rebuild_clocks) {
+    storage->clock_group_owner.reset();
+    clocks.clear();
+    for (const auto& seed : host->node_seeds)
+      if (seed.state.clock_owner != absent)
+        clocks.push_back({seed.node, seed.state.clock_owner});
+    std::sort(clocks.begin(), clocks.end(), [&](const ClockWorkItem& a, const ClockWorkItem& b) {
+      return std::tuple{levelOf(a.node), a.owner, a.node} < std::tuple{levelOf(b.node), b.owner, b.node};
+    });
+    clock_offsets.clear();
+    clock_offsets.push_back(0);
+    for (Index i = 1; i < clocks.size(); ++i)
+      if (levelOf(clocks[i - 1].node) != levelOf(clocks[i].node))
+        clock_offsets.push_back(i);
+    if (!clocks.empty())
+      clock_offsets.push_back(clocks.size());
+  }
   auto* clock_work = ensure(storage->clock_work_device, clocks.size());
   auto* end_arrivals = ensure(storage->end_arrivals, view.end_count);
   auto* default_required = ensure(storage->default_required, 1);
@@ -456,7 +468,11 @@ void CudaDualCsrSession::Impl::propagate()
     check(cub::DeviceReduce::Max(nullptr, reduce_bytes, end_arrivals, default_required,
                                 static_cast<int>(view.end_count), memory.stream()), "CUDA required maximum scratch");
   auto* scratch = ensure(storage->algorithm_scratch, reduce_bytes);
-  memory.upload(clocks, clock_work);
+  if (rebuild_clocks) {
+    memory.upload(clocks, clock_work);
+    // Mixed edits preserve old groups and add no clock owners; timing is still recomputed.
+    storage->clock_group_owner = node_groups;
+  }
   auto launched = [&](const char* operation) {
     check(cudaGetLastError(), operation);
     ++telemetry.cuda.kernel_launches;
@@ -471,14 +487,12 @@ void CudaDualCsrSession::Impl::propagate()
   }
   // Only actual clock/domain nodes are visited, with no per-level host wait.
   for (unsigned pass = 0; pass < 2; ++pass)
-    for (std::size_t begin = 0; begin < clocks.size();) {
-      auto end = begin + 1;
-      while (end < clocks.size() && clocks[end].level == clocks[begin].level)
-        ++end;
-      propagateClocks<<<kernelBlocks(end - begin, threads), threads, 0, memory.stream()>>>(
-          view, clock_work, begin, end - begin, pass == 0);
+    for (std::size_t group = 0; group + 1 < clock_offsets.size(); ++group) {
+      const auto begin = clock_offsets[group];
+      const auto count = clock_offsets[group + 1] - begin;
+      propagateClocks<<<kernelBlocks(count, threads), threads, 0, memory.stream()>>>(
+          view, clock_work, begin, count, pass == 0);
       launched("CUDA clock propagation launch");
-      begin = end;
     }
   if (view.node_count) {
     propagateNodes<Pass::sequential><<<kernelBlocks(view.node_count, threads), threads, 0, memory.stream()>>>(view, 0, view.node_count);

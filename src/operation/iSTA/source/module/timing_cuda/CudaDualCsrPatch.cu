@@ -34,9 +34,7 @@ void CudaDualCsrSession::Impl::validatePatch(const Impl& prior, const CudaDualCs
     demand(!(value.is_disabled || value.is_loop_disabled) || !eligible, "CUDA disabled arc remains eligible");
     demand(value.eligibility.levelization || !(value.eligibility.data_arrival || value.eligibility.data_slew || value.eligibility.clock),
            "CUDA propagation arc is not levelization eligible");
-    std::vector<CsrContractViolation> errors;
-    detail::validateTransfer(value.transfer, errors, "patch.transfer");
-    demand(errors.empty(), "CUDA malformed transfer/table payload");
+    (void) prior.storage->models.internTransfer(value.transfer);
     demand(value.source.value() < patch.after.node_slots && value.sink.value() < patch.after.node_slots, "CUDA payload endpoint outside high-water");
     if (value.output_load)
       for (const auto& row : *value.output_load)
@@ -358,6 +356,33 @@ PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDual
         path_seeds.push_back({(seed.seed_node.value() * 2 + analysis) * 4 + transition, tag, state});
       }
   }
+  // Degree changes use actual old bindings, including parallel eligible arcs.
+  std::map<Index, Index> degrees;
+  const auto adjustDegree = [&](Index node, bool added) {
+    auto position = degrees.try_emplace(node, node < prior.view.node_count ? host->eligible_indegrees[node] : 0).first;
+    auto& degree = position->second;
+    if (added)
+      degree = checkedAdd(degree, 1);
+    else {
+      demand(degree != 0, "CUDA eligible indegree underflow");
+      --degree;
+    }
+  };
+  for (const auto& change : packed.deactivations) {
+    const auto& old = host->bindings[change.id];
+    if (old.levelization) adjustDegree(old.sink, false);
+  }
+  for (const auto& change : packed.payloads) {
+    const auto& old = host->bindings[change.id];
+    if (old.active && old.levelization != change.replacement.levelization)
+      adjustDegree(old.sink, change.replacement.levelization);
+  }
+  for (const auto& arc : packed.appends)
+    if (arc.levelization) adjustDegree(arc.sink, true);
+  undo.eligible_indegrees.clear();
+  for (const auto& [node, degree] : degrees)
+    if (node < prior.view.node_count && degree != host->eligible_indegrees[node])
+      undo.eligible_indegrees.emplace_back(node, host->eligible_indegrees[node]);
   // Finish every host capacity change and capture actual old values before apply.
   const auto reserve = []<class T>(std::vector<T>& values, Index count) {
     if (count > values.capacity())
@@ -366,6 +391,7 @@ PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDual
   reserve(host->out_offsets, checkedAdd(patch.after.node_slots, 1));
   reserve(host->in_offsets, checkedAdd(patch.after.node_slots, 1));
   reserve(host->bindings, patch.after.arc_slots);
+  reserve(host->eligible_indegrees, patch.after.node_slots);
   reserve(host->adjacency, patch.after.node_slots);
   undo.adjacency.clear();
   for (const auto& [node, row] : adjacency_appends)
@@ -419,6 +445,9 @@ PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDual
   undo.target = host;
   undo.roots = std::move(roots);
   undo.ends = std::move(ends);
+  host->eligible_indegrees.resize(patch.after.node_slots);
+  for (const auto& [node, degree] : degrees)
+    host->eligible_indegrees[node] = degree;
   if (undo.roots)
     host->roots.swap(*undo.roots);
   if (undo.ends)
@@ -475,11 +504,10 @@ PackedPatch& CudaDualCsrSession::Impl::prepare(const Impl& prior, const CudaDual
   host->node_seeds.insert(host->node_seeds.end(), node_seeds.begin(), node_seeds.end());
   host->path_seeds.insert(host->path_seeds.end(), path_seeds.begin(), path_seeds.end());
   if (!changed_nodes.empty() || patch.after.node_slots != prior.view.node_count) {
-    domain_index = 1 - prior.domain_index;
-    updatePathDomain(host->bindings, host->adjacency, host->path_seeds, storage->domains[prior.domain_index].host,
-                     changed_nodes, storage->domains[domain_index].host);
+    updatePathDomain(host->bindings, host->adjacency, host->path_seeds, changed_nodes,
+                     storage->domain.host, storage->domain.undo);
   }
-  view.path_count = storage->domains[domain_index].host.tags.size();
+  view.path_count = storage->domain.host.tags.size();
   table_count = models.tables.size();
   view.node_count = patch.after.node_slots;
   view.arc_count = patch.after.arc_slots;

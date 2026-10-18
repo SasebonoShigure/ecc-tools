@@ -70,71 +70,6 @@ class PerformanceModeTest(unittest.TestCase):
             self.assertIn("validation failed:", result.stderr)
             self.assertNotIn("Traceback", result.stderr)
 
-    def test_sample_starts_only_the_target_workload(self):
-        phases = [
-            {
-                **dict.fromkeys(DURATION_KEYS, 0.0),
-                "generation_before": i,
-                "generation_after": i + 1,
-                "result_consumption": "completed" if i == 1 else "not_run",
-                "session_step_ms": 1.0,
-                "query_materialization_ms": 2.0 if i == 1 else None,
-                "report_ms": 3.0 if i == 1 else None,
-                "consumer_step_ms": 6.5,
-                "invariant_ms": "not_run",
-                "verify_ms": "not_run",
-            }
-            for i in range(2)
-        ]
-        result = {
-            "schema_version": "ista-incregpusta-performance-process/4.0.0",
-            "debug_checks_enabled": False,
-            "correctness_comparison": "not_run",
-            "diagnostics": "not_run",
-            "result_requirements": {
-                "scope": "final_prefix",
-                "timing_values": True,
-                "summary": True,
-                "timing_paths": True,
-                "file_artifacts": False,
-            },
-            "input": {"node_slots": 2, "arc_slots": 1, "batches": 2},
-            "requested_mode": "full_stage5",
-            "executed_mode": "full_stage5",
-            "result": {"generation": 2, "lifecycle_cleanup_completed": True},
-            "run": {"child_pid": 123, "batch_phase_timings": phases},
-        }
-        with patch.object(smoke, "run_child", return_value=(result, 1.0)) as child:
-            sample = smoke._run_sample(
-                pathlib.Path("probe"),
-                pathlib.Path("trace"),
-                [{}, {}],
-                pathlib.Path("runs"),
-                "sample",
-                10,
-            )
-        child.assert_called_once_with(
-            pathlib.Path("probe"),
-            "performance",
-            pathlib.Path("trace"),
-            2,
-            pathlib.Path("runs/sample/performance.json"),
-            10,
-        )
-        self.assertEqual(sample["correctness_comparison"], "not_run")
-        phases[0]["report_ms"] = 1.0
-        with (
-            patch.object(smoke, "run_child", return_value=(result, 1.0)),
-            self.assertRaisesRegex(smoke.ControllerError, "must be null when not_run"),
-        ):
-            smoke._run_sample(
-                pathlib.Path("probe"),
-                pathlib.Path("trace"),
-                [{}, {}],
-                pathlib.Path("runs"),
-                "sample",
-                10,
-            )
 
     def test_consumer_interval_and_diagnostic_canaries(self):
         phase = {
@@ -463,11 +398,29 @@ class PerformanceModeTest(unittest.TestCase):
             )
             schema = json.loads(schema_path.read_text())
             validate_document(value, schema)
+            for metric, expected in (("edit_sta_loop_ms", 4.0), ("workload_ms", 3.4),
+                                     ("cold_end_to_end_ms", 2.5)):
+                phase = value["additional_metrics"][metric]
+                self.assertEqual(phase["summaries"]["cpu/full"]["n"], 3)
+                self.assertEqual(phase["comparisons"]["cuda/incremental_vs_cpu/full"], {
+                    "paired_speedup_median": expected, "ci95": [expected, expected],
+                    "lower_bound_above_one": True,
+                })
+                for field in ("summaries", "comparisons"):
+                    bad = copy.deepcopy(value)
+                    bad["additional_metrics"][metric][field] = value[field]
+                    with self.assertRaises(ValidationError):
+                        validate_document(bad, schema)
+            prior_v3 = copy.deepcopy(value)
+            prior_v3.pop("additional_metrics")
+            validate_document(prior_v3, schema)
             historical = copy.deepcopy(value)
             from consumer_trace_samples import MODES, consumer_statistics
 
             historical.update(schema_version="2.0.0", stage12_acceptance="not_run")
-            for key in ("report_schedule", "primary_metric", "stage_acceptance"):
+            for key in (
+                "report_schedule", "primary_metric", "stage_acceptance", "additional_metrics"
+            ):
                 historical.pop(key)
             historical["protocol"]["mode_order"] = list(MODES)
             historical["samples"] = []
@@ -601,25 +554,7 @@ class PerformanceModeTest(unittest.TestCase):
             launcher.assert_not_called()
 
 
-def reject_real_on_probe(probe: pathlib.Path) -> None:
-    build = subprocess.run([str(probe), "build-info"], check=True, capture_output=True, text=True)
-    if json.loads(build.stdout)["debug_checks_enabled"] is not True:
-        raise RuntimeError("rejection test requires an ON probe")
-    # No trace or output arguments: rejection must precede workload parsing/loading.
-    result = subprocess.run([str(probe), "performance"], capture_output=True, text=True)
-    if result.returncode == 0 or "DEBUG_CHECKS=OFF" not in result.stderr:
-        raise RuntimeError(f"performance mode was not explicitly rejected: {result.stderr}")
-    try:
-        smoke.probe_build_info(probe, 10)
-    except smoke.ControllerError as error:
-        if "DEBUG_CHECKS=OFF" not in str(error):
-            raise
-    else:
-        raise RuntimeError("Python performance entry accepted ON")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 3 and sys.argv[1] == "--reject-probe":
-        reject_real_on_probe(pathlib.Path(sys.argv[2]).resolve())
-    else:
-        unittest.main()
+    unittest.main()

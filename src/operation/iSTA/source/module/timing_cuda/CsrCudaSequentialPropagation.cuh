@@ -12,7 +12,7 @@ __device__ inline Index pathRow(Index node, unsigned analysis, unsigned source, 
 
 __device__ inline PathState* lookupPath(DeviceView view, Index row, Index tag)
 {
-  Index first = view.path_offsets[row], last = view.path_offsets[row + 1];
+  Index first = view.path_rows[row].begin, last = view.path_rows[row].end;
   while (first < last) {
     const Index middle = first + (last - first) / 2;
     if (view.path_tags[middle] < tag)
@@ -20,7 +20,7 @@ __device__ inline PathState* lookupPath(DeviceView view, Index row, Index tag)
     else
       last = middle;
   }
-  return first == view.path_offsets[row + 1] || view.path_tags[first] != tag ? nullptr : view.paths + first;
+  return first == view.path_rows[row].end || view.path_tags[first] != tag ? nullptr : view.paths + first;
 }
 
 __device__ inline PathState* findPath(DeviceView view, Index row, Index tag)
@@ -138,7 +138,7 @@ __device__ inline const PathState* worstEndpointPath(DeviceView view, Index node
     for (unsigned transition = 0; transition < 2; ++transition) {
       const PathState* lane_best = nullptr;
       const auto row = pathRow(node, 0, source, transition);
-      for (Index slot = view.path_offsets[row]; slot < view.path_offsets[row + 1]; ++slot) {
+      for (Index slot = view.path_rows[row].begin; slot < view.path_rows[row].end; ++slot) {
         const auto& path = view.paths[slot];
         if (path.present && isfinite(path.arrival) && (lane_best == nullptr || epsilonBetter(view, 0, path.arrival, lane_best->arrival)))
           lane_best = &path;

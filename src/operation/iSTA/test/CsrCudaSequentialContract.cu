@@ -98,14 +98,15 @@ void runCudaSequentialContracts()
   view.nodes = memory.allocate<NodeState>(4);
   view.path_count = 64;
   view.paths = memory.allocate<PathState>(64);
-  std::vector<Index> path_offsets(33), path_tags(64);
-  for (Index index = 0; index < path_offsets.size(); ++index)
-    path_offsets[index] = index * 2;
+  std::vector<PathRow> path_rows(32);
+  std::vector<Index> path_tags(64);
+  for (Index index = 0; index < path_rows.size(); ++index)
+    path_rows[index] = {index * 2, index * 2 + 2};
   for (Index slot = 0; slot < path_tags.size(); ++slot)
     path_tags[slot] = slot % 2;
-  view.path_offsets = memory.allocate<Index>(path_offsets.size());
+  view.path_rows = memory.allocate<PathRow>(path_rows.size());
   view.path_tags = memory.allocate<Index>(path_tags.size());
-  memory.upload(path_offsets, view.path_offsets);
+  memory.upload(path_rows, view.path_rows);
   memory.upload(path_tags, view.path_tags);
   view.arcs = memory.allocate<Arc>(1);
   view.children = memory.allocate<Child>(2);

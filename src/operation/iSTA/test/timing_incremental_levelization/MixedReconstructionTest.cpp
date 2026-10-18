@@ -46,6 +46,42 @@ void reconstructsPermutationAndInverse()
           "actual reconstruction lost deterministic expansion semantics");
 }
 
+void reconstructsBoundaryDomains()
+{
+  MixedKahnLevelization all_new;
+  all_new.level_offsets = {0, 1, 3};
+  all_new.level_vertices = {MixedVertexId{0}, MixedVertexId{1}, MixedVertexId{2}};
+  all_new.vertex_to_level = {1, 2, 2};
+  all_new.processed_count = 3;
+  all_new.max_frontier = 2;
+  require(std::get<csr::CsrFifoLevelization>(reconstructMixedLevelization(
+              MixedIdDomain{0, 3, 3, 0, 3}, makeLevels(0, {}), all_new))
+              == makeLevels(3, {{0}, {1, 2}}),
+          "all-new reconstruction lost its node identities");
+
+  MixedKahnLevelization no_new;
+  no_new.level_offsets = {0, 1, 2, 3};
+  no_new.level_vertices = {MixedVertexId{0}, MixedVertexId{1}, MixedVertexId{2}};
+  no_new.vertex_to_level = {1, 2, 3};
+  no_new.processed_count = 3;
+  no_new.max_frontier = 1;
+  const auto previous = makeLevels(3, {{0}, {1}, {2}});
+  require(std::get<csr::CsrFifoLevelization>(reconstructMixedLevelization(
+              MixedIdDomain{3, 3, 0, 3, 3}, previous, no_new)) == previous,
+          "no-new reconstruction changed legal conservative levels");
+
+  MixedKahnLevelization one_old_level;
+  one_old_level.level_offsets = {0, 1, 2};
+  one_old_level.level_vertices = {MixedVertexId{0}, MixedVertexId{1}};
+  one_old_level.vertex_to_level = {1, 2};
+  one_old_level.processed_count = 2;
+  one_old_level.max_frontier = 1;
+  require(std::get<csr::CsrFifoLevelization>(reconstructMixedLevelization(
+              MixedIdDomain{2, 3, 1, 1, 2}, makeLevels(2, {{0, 1}}), one_old_level))
+              == makeLevels(3, {{0, 1}, {2}}),
+          "single-old-level reconstruction lost its expansion");
+}
+
 void reconstructionCanaries()
 {
   const MixedIdDomain domain =
@@ -86,6 +122,7 @@ int main()
 {
   try {
     ista::timing_incremental_levelization::test::reconstructsPermutationAndInverse();
+    ista::timing_incremental_levelization::test::reconstructsBoundaryDomains();
     ista::timing_incremental_levelization::test::reconstructionCanaries();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

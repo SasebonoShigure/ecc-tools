@@ -13,7 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include "CpuIncrementalLevelizationPipeline.hpp"
 #include "MixedLevelizationGraphBuilder.hpp"
 
 namespace ista::timing_incremental_levelization::test {
@@ -164,65 +163,6 @@ inline csr::CsrFifoLevelization makeLevels(
   }
   levels.complete = levels.level_nodes.size() == node_count;
   return levels;
-}
-
-inline void requireIndependentLevelContract(
-    const TestEdgeView& edges, const csr::CsrFifoLevelization& levels)
-{
-  require(levels.complete && !levels.view_error,
-          "levelization is not a sealed success");
-  require(!levels.level_offsets.empty()
-              && levels.level_offsets.front() == 0
-              && levels.level_offsets.back() == edges.nodeCount(),
-          "level offsets do not cover actual nodes");
-  require(levels.level_nodes.size() == edges.nodeCount()
-              && levels.node_to_level.size() == edges.nodeCount(),
-          "permutation or inverse has the wrong size");
-  std::vector<std::uint8_t> seen(edges.nodeCount(), 0);
-  for (std::size_t level = 0; level + 1 < levels.level_offsets.size();
-       ++level) {
-    const std::uint64_t begin = levels.level_offsets[level];
-    const std::uint64_t end = levels.level_offsets[level + 1];
-    require(begin < end, "successful levelization contains an empty level");
-    for (std::uint64_t position = begin; position < end; ++position) {
-      const csr::NodeId node =
-          levels.level_nodes[static_cast<std::size_t>(position)];
-      require(node.value() < edges.nodeCount(), "level node is out of range");
-      require(seen[static_cast<std::size_t>(node.value())]++ == 0,
-              "level node is duplicated");
-      require(levels.node_to_level[static_cast<std::size_t>(node.value())]
-                  == static_cast<std::uint64_t>(level) + 1,
-              "inverse level map disagrees with offsets");
-    }
-  }
-  const csr::EdgeVisitResult visit =
-      edges.forEachActiveArc([&](const csr::EdgeEntry& entry) {
-        const auto payload = edges.arc(entry.arc_id);
-        if (!payload)
-          return csr::EdgeVisitResult::fail(payload.error());
-        const auto& arc = payload.value();
-        if (arc.eligibility.levelization
-            && levels.node_to_level[arc.source.value()]
-                   >= levels.node_to_level[arc.sink.value()])
-          return csr::EdgeVisitResult::fail(
-              csr::CsrViewError::kMalformedAdjacency);
-        return csr::EdgeVisitResult::continueVisit();
-      });
-  require(visit.control == csr::EdgeVisitControl::kContinue,
-          "eligible actual edge does not strictly cross levels");
-}
-
-inline MixedLevelizationSuccess requirePipelineSuccess(
-    const TestEdgeView& edges, const csr::CsrFifoLevelization& previous,
-    std::uint64_t n_last_nodes, std::uint64_t generation = 1)
-{
-  const auto attempt = runCpuIncrementalLevelization(
-      edges, previous,
-      {n_last_nodes, generation - 1, generation});
-  const auto* success = std::get_if<MixedLevelizationSuccess>(&attempt);
-  require(success != nullptr, "mixed pipeline unexpectedly failed");
-  requireIndependentLevelContract(edges, success->levels);
-  return *success;
 }
 
 }  // namespace ista::timing_incremental_levelization::test

@@ -86,6 +86,31 @@ void rejectAndContinue(const Fixture& fixture, bool actual_cycle)
                                                      StaFallbackPolicy::kError, batch.execution, batch.rejected_mixed_attempt);
   require(healthy.timingValues() == before && owner.publish(std::move(healthy)), "healthy batch after policy rejection failed");
 }
+void deviceFailureBeforeMixedConflict(const Fixture& fixture)
+{
+  auto owner = fixture.owner();
+  const auto before = owner.timingValues();
+  auto patch = fixture.conflict;
+  const auto& original = fixture.first.arc_appends.front();
+  auto wrong = original.payload;
+  wrong.output_load = csr::test::outputLoad(123.0);
+  patch.payload_changes = {{original.id, wrong, original.payload}};
+  ExecutionState batch;
+  bool rejected = false;
+  try {
+    auto candidate = csr::detail::stageCudaTargetedBatch(owner, patch, StaUpdateStrategy::kIncremental,
+        StaFallbackPolicy::kFullWithRecord, batch.execution, batch.rejected_mixed_attempt);
+  } catch (const std::runtime_error&) {
+    rejected = true;
+  }
+  require(rejected && !batch.execution.fallback_to_full && !batch.rejected_mixed_attempt,
+          "device payload mismatch was masked by the concurrent mixed conflict");
+  require(!owner.poisoned() && owner.generation().value() == 1 && owner.timingValues() == before,
+          "combined device/mixed failure did not restore the committed result");
+  auto next = owner.stage(fixture.patch(1, fixture.water, fixture.water), CudaLevelizationMode::kMixed);
+  require(!next.computationCode() && next.timingValues() == before && owner.publish(std::move(next)),
+          "combined failure left stale graph or layer state");
+}
 void fallbackAndContinue(const Fixture& fixture)
 {
   auto owner = fixture.owner();
@@ -128,6 +153,8 @@ int main(int argc, char** argv)
     const std::string mode = argc == 2 ? argv[1] : "all";
     require(mode == "all" || mode == "error" || mode == "fallback" || mode == "cycle", "unknown test case");
     const Fixture fixture;
+    if (mode == "all")
+      deviceFailureBeforeMixedConflict(fixture);
     if (mode == "all" || mode == "error")
       rejectAndContinue(fixture, false);
     if (mode == "all" || mode == "fallback")

@@ -33,6 +33,9 @@ struct NativeSlotBinding
   friend bool operator==(const NativeSlotBinding&, const NativeSlotBinding&) = default;
 };
 
+using NodeBindingEntry = std::map<StableNodeRef, NativeSlotBinding>::value_type;
+using NetBindingEntry = std::map<StableNetRef, NativeSlotBinding>::value_type;
+
 // Session-local resolver state. Baseline ArcKey ordinals are bound once by
 // bindBaseline() and are never reinterpreted against a later native vector.
 class TimingEditResolverState final
@@ -106,7 +109,8 @@ class TimingEditResolverView final
   TimingEditResolverView(const TimingEditResolverState& base, const TimingEditResolverDelta& delta) noexcept
       : _base(base), _delta(&delta) {}
   [[nodiscard]] const NativeSlotBinding* findNodeBinding(const StableNodeRef& ref) const;
-  [[nodiscard]] const NativeSlotBinding* findNodeBindingForKey(const csr::NodeKey& key) const;
+  [[nodiscard]] const NodeBindingEntry* findNodeEntryForKey(const csr::NodeKey& key) const;
+  [[nodiscard]] const NetBindingEntry* findNetEntryForName(const std::string& name) const;
   [[nodiscard]] const NativeSlotBinding* findNetBinding(const StableNetRef& ref) const;
   [[nodiscard]] const NativeSlotBinding* findArcBinding(const StableArcRef& ref) const;
   [[nodiscard]] const std::string& resolveNode(const StableNodeRef& ref) const;
@@ -118,6 +122,8 @@ class TimingEditResolverView final
   { return _delta ? _delta->highWater() : _base.highWater(); }
 
  private:
+  [[nodiscard]] const NodeBindingEntry* findNodeEntry(const StableNodeRef& ref) const;
+  [[nodiscard]] const NetBindingEntry* findNetEntry(const StableNetRef& ref) const;
   const TimingEditResolverState& _base;
   const TimingEditResolverDelta* _delta{};
 };

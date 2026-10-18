@@ -246,7 +246,7 @@ add_executable(izh_native_physical_rc_test
     ${ISTA_TIMING_EDIT_NATIVE_TEST_SUPPORT})
 target_include_directories(izh_native_physical_rc_test PRIVATE "${CMAKE_CURRENT_LIST_DIR}" "${CMAKE_CURRENT_LIST_DIR}/timing_edit")
 target_link_libraries(izh_native_physical_rc_test PRIVATE
-    ${ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS} izh_timing_optimization idb geometry_db idm ista_timing_dual_csr_transaction ista_timing_reporter)
+    ${ISTA_TIMING_EDIT_TRANSACTION_TEST_LINKS} izh_timing_optimization idb geometry_db idm ista_timing_reporter)
 if(ECC_INCREGPUSTA_DEBUG_CHECKS)
   target_sources(izh_native_physical_rc_test PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/PhysicalStaDiagnostic.cpp"
@@ -257,6 +257,7 @@ endif()
 ista_register_timing_edit_test(izh_native_physical_rc_test)
 set_tests_properties(izh_native_physical_rc_test PROPERTIES TIMEOUT 180 LABELS "incregpusta;physical_transaction")
 if(ISTA_ENABLE_CUDA)
+  target_link_libraries(izh_native_physical_rc_test PRIVATE ista_cuda)
   add_test(NAME izh_physical_cuda_test COMMAND izh_native_physical_rc_test --cuda)
   set_tests_properties(izh_physical_cuda_test PROPERTIES TIMEOUT 240 LABELS "ista_cuda;physical_transaction")
 endif()

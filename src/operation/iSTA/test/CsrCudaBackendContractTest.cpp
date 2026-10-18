@@ -1,14 +1,17 @@
 #include <algorithm>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <variant>
 
+#include "AllocationFailureSupport.hpp"
 #include "CsrCpuReferenceBackend.hpp"
 #include "CsrCpuReferenceTestFixture.hpp"
 #include "CsrCudaBackend.hpp"
 #include "CsrCudaPacking.hpp"
+#include "CsrModelTestMutation.hpp"
 #include "IncreGpuStaBuildConfig.hpp"
 
 namespace ista::csr::test {
@@ -21,70 +24,77 @@ CsrComputationResult computeContractTiming(const CsrReferenceInput& input)
   return std::move(actual.computation);
 }
 
+void runPathDomainCases();
+
+void runModelValidationCases()
+{
+  using namespace cuda_detail;
+  const auto input = makeCpuReferenceCellFixture();
+  const auto arc = std::ranges::find(input.arcs, ArcKind::kCell, &ArcRecord::kind);
+  requireCpuReference(arc != input.arcs.end() && !arc->transfer.children().empty(), "model fixture has no children");
+  const auto original = arc->transfer;
+  ModelStorage models;
+  const auto first = models.internTransfer(original);
+  const auto reject = [&](const CellTransferModel& model) {
+    bool rejected = false;
+    try { (void) models.internTransfer(model); } catch (const std::invalid_argument&) { rejected = true; }
+    requireCpuReference(rejected && models.internTransfer(original) == first, "model validation accepted invalid transfer or lost valid owner");
+  };
+  auto invalid = original;
+  invalid.delay = std::numeric_limits<double>::infinity();
+  reject(invalid);  // Shared immutable owner cannot validate mutable fallback scalars.
+  invalid = original;
+  mutateChildren(invalid, [](auto& children) { children[0].delay_tables[0].values.push_back(1.0); });
+  reject(invalid);
+  auto duplicate = original;
+  mutateChildren(duplicate, [](auto& children) { children.push_back(children.front()); });
+  const auto check_begin = models.intern(duplicate.childrenOwner());
+  reject(duplicate);
+  auto equal_duplicate = duplicate;
+  equal_duplicate.setChildren(duplicate.children());
+  reject(equal_duplicate);
+  requireCpuReference(models.intern(equal_duplicate.childrenOwner()) == check_begin,
+                      "timing-check model acquired transfer-only unique-index restriction");
+  auto replacement = original;
+  mutateChildren(replacement, [](auto& children) { children[0].delay_tables[0].values[0] += 0.25; });
+  ModelStorage reference;
+  (void) reference.internTransfer(original);
+  const auto replacement_begin = reference.internTransfer(replacement);
+  if constexpr (incregpusta_debug_checks_enabled) {
+    std::size_t allocations{};
+    {
+      ModelStorage counted;
+      (void) counted.internTransfer(original);
+      ista_test_allocation::armCountOnly();
+      (void) counted.internTransfer(replacement);
+      allocations = ista_test_allocation::disable();
+    }
+    requireCpuReference(allocations > 0, "new model allocation path was not exercised");
+    for (std::size_t ordinal = 0; ordinal < allocations; ++ordinal) {
+      ModelStorage retry;
+      (void) retry.internTransfer(original);
+      const auto old_children = retry.children.size();
+      const auto old_tables = retry.tables;
+      bool failed = false;
+      ista_test_allocation::armFailure(ordinal);
+      try { (void) retry.internTransfer(replacement); } catch (const std::bad_alloc&) { failed = true; }
+      catch (...) { (void) ista_test_allocation::disable(); throw; }
+      const bool injected = ista_test_allocation::failureInjected();
+      (void) ista_test_allocation::disable();
+      requireCpuReference(failed && injected && retry.children.size() == old_children && retry.tables == old_tables,
+                          "model allocation failure published partial immutable data");
+      requireCpuReference(retry.internTransfer(original) == first && retry.internTransfer(replacement) == replacement_begin
+                              && retry.children.size() == reference.children.size() && retry.tables == reference.tables,
+                          "model allocation failure prevented exact retry");
+    }
+  }
+}
+
 void runPackingCases()
 {
   using namespace cuda_detail;
-  const std::vector<ArcBinding> arcs{
-      {0, 2, true, true, EdgeStorageKind::kBaseOut, 0b1001},
-      {1, 2, true, true, EdgeStorageKind::kBaseOut, 0b0110},
-      {2, 3, true, true, EdgeStorageKind::kBaseOut, 0b1111},
-      {4, 5, true, true, EdgeStorageKind::kBaseOut, 0b1001},
-      {0, 2, true, true, EdgeStorageKind::kAuxOut, 0b1001}};
-  const std::vector<PathSeed> seeds{{0, 9, {}}, {9, 2, {}}, {15, 7, {}}};
-  const auto domain = buildPathDomain(arcs, buildPathAdjacency(6, arcs), seeds);
-  const auto row = [&](Index index) {
-    return std::vector<Index>(domain.tags.begin() + domain.offsets[index], domain.tags.begin() + domain.offsets[index + 1]);
-  };
-  requireCpuReference(row(16) == std::vector<Index>{2, 9} && row(17).empty()
-                          && row(24) == std::vector<Index>{2, 9} && row(25) == std::vector<Index>{2, 9},
-                      "sparse paths lost ordered tags or transition identity");
-  requireCpuReference(row(22) == std::vector<Index>{7} && row(30) == std::vector<Index>{7}
-                          && row(31) == std::vector<Index>{7} && row(32).empty() && row(40).empty(),
-                      "sparse paths changed analysis/source identity or allocated an unseeded domain");
-  auto removed = arcs;
-  removed[1].active = false;
-  const auto smaller = buildPathDomain(removed, buildPathAdjacency(6, removed), seeds);
-  requireCpuReference(smaller.tags.size() < domain.tags.size(), "inactive arcs retained unreachable path payload");
-  removed[1].active = true;
-  removed.push_back({3, 2, true, true, EdgeStorageKind::kAuxOut, 0b1001});
-  const auto cyclic = buildPathDomain(removed, buildPathAdjacency(6, removed), seeds);
-  requireCpuReference(cyclic.offsets.back() == cyclic.tags.size(), "structural cycle did not terminate");
-  PathDomain updated;
-  const std::vector<Index> changed{2};
-  updatePathDomain(removed, buildPathAdjacency(6, removed), seeds, domain, changed, updated);
-  requireCpuReference(updated == cyclic, "incremental cyclic path closure differs from fresh construction");
-  // Drop the only seeded entrance to a structural cycle. Its own stale tags
-  // must not become new seeds, including register rows with empty PathState.
-  auto current = removed;
-  current[0].active = current[1].active = current[4].active = false;
-  updatePathDomain(current, buildPathAdjacency(6, current), seeds, cyclic, changed, updated);
-  requireCpuReference(updated == buildPathDomain(current, buildPathAdjacency(6, current), seeds)
-                          && updated.tags.size() < cyclic.tags.size(),
-                      "removed sources retained self-sustaining tags in a dirty cycle");
-  auto previous = updated;
-  current[0].active = true;
-  current[0].path_transitions = 0b0110;
-  updatePathDomain(current, buildPathAdjacency(6, current), seeds, previous, changed, updated);
-  requireCpuReference(updated == buildPathDomain(current, buildPathAdjacency(6, current), seeds),
-                      "negative transition update lost path identity");
-  previous = updated;
-  current[0].path_transitions = 0b1111;
-  updatePathDomain(current, buildPathAdjacency(6, current), seeds, previous, changed, updated);
-  requireCpuReference(updated == buildPathDomain(current, buildPathAdjacency(6, current), seeds),
-                      "non-unate update lost transition identity");
-  previous = updated;
-  current[0].path_transitions = 0b1001;
-  updatePathDomain(current, buildPathAdjacency(7, current), seeds, previous, changed, updated);
-  requireCpuReference(updated == buildPathDomain(current, buildPathAdjacency(7, current), seeds),
-                      "narrowed transitions or isolated appended node changed path identities");
-  previous = updated;
-  current[4].active = true;
-  updatePathDomain(current, buildPathAdjacency(7, current), seeds, previous, changed, updated);
-  requireCpuReference(updated == previous, "parallel duplicate path changed a tag set");
-  previous = updated;
-  current[0].active = false;
-  updatePathDomain(current, buildPathAdjacency(7, current), seeds, previous, changed, updated);
-  requireCpuReference(updated == previous, "removal of one parallel source removed a surviving tag");
+  runPathDomainCases();
+  runModelValidationCases();
   for (std::uint64_t seed = 0; seed < 20; ++seed) {
     const auto input = seed == 0 ? makeCpuReferenceCellFixture() : makeCpuReferencePropertyFixture(seed);
     ModelStorage models;
@@ -102,8 +112,8 @@ void runPackingCases()
     }
     for (std::size_t r = 0; r + 1 < timing->paths.row_offsets.size(); ++r)
       for (auto slot = timing->paths.row_offsets[r]; slot < timing->paths.row_offsets[r + 1]; ++slot) {
-        const auto begin = packed.paths.tags.begin() + packed.paths.offsets[r];
-        const auto end = packed.paths.tags.begin() + packed.paths.offsets[r + 1];
+        const auto begin = packed.paths.tags.begin() + packed.paths.rows[r].begin;
+        const auto end = packed.paths.tags.begin() + packed.paths.rows[r].end;
         requireCpuReference(std::binary_search(begin, end, timing->paths.clock_tags.values[slot].value()),
                             "computed path was omitted from the structural domain");
       }

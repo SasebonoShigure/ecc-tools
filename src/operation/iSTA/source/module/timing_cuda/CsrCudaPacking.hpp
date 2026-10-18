@@ -28,10 +28,24 @@ struct ArcBinding
   std::uint8_t path_transitions{0};
   Index rc_binding{absent};
 };
+struct PathSegment { Index row; PathRow range; };
 struct PathDomain
 {
-  std::vector<Index> offsets, tags;
-  friend bool operator==(const PathDomain&, const PathDomain&) = default;
+  std::vector<PathRow> rows;
+  std::vector<Index> tags;
+  std::vector<PathSegment> segments;
+  Index live_tags{};
+};
+// Actual old rows and payload owners survive until commit or completed undo.
+struct PathDomainUndo
+{
+  std::vector<PathRowUpdate> rows;
+  std::vector<Index> tags;
+  std::vector<PathSegment> segments;
+  Index row_count{}, tag_count{}, segment_count{}, live_tags{};
+  bool applied{false}, compacted{false};
+  void restore(PathDomain& domain) noexcept;
+  void clear() noexcept;
 };
 struct PathAdjacency
 {
@@ -39,8 +53,8 @@ struct PathAdjacency
 };
 [[nodiscard]] std::vector<PathAdjacency> buildPathAdjacency(Index nodes, std::span<const ArcBinding> arcs);
 void updatePathDomain(std::span<const ArcBinding> arcs, std::span<const PathAdjacency> adjacency,
-                      std::span<const PathSeed> seeds, const PathDomain& previous,
-                      std::span<const Index> changed_nodes, PathDomain& result);
+                      std::span<const PathSeed> seeds, std::span<const Index> changed_nodes,
+                      PathDomain& domain, PathDomainUndo& undo);
 [[nodiscard]] std::uint8_t pathTransitions(ArcKind kind, const CellTransferModel& transfer, bool data_arrival);
 [[nodiscard]] PathDomain buildPathDomain(std::span<const ArcBinding> arcs, std::span<const PathAdjacency> adjacency, std::span<const PathSeed> seeds);
 // Stable identities needed to decode the actual device results.
@@ -52,7 +66,7 @@ struct ResultLayout
 };
 struct DownloadData
 {
-  std::vector<NodeState> nodes;
+  std::vector<value_detail::NodeValue> nodes;
   std::vector<PathState> paths;
   std::vector<ArcState> arc_state;
   std::vector<ChildState> child_state;
@@ -65,6 +79,7 @@ struct ModelStorage
   std::vector<RcLoadCell> rc_load_cells;
   [[nodiscard]] Index libraryIndex(std::string_view name);
   [[nodiscard]] Index internLoadCell(const ReferencedLibraryCellModel& cell);
+  [[nodiscard]] Index internTransfer(const CellTransferModel& transfer);
   [[nodiscard]] Index intern(const std::shared_ptr<const std::vector<ChildTimingArcModel>>& owner);
 
  private:
@@ -72,6 +87,7 @@ struct ModelStorage
   {
     std::shared_ptr<const std::vector<ChildTimingArcModel>> source;
     Index begin;
+    bool arc_indices_unique;
   };
   std::map<std::string, Index, std::less<>> _libraries;
   std::map<std::pair<std::string, std::string>, Index> _load_cells;

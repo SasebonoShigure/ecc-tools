@@ -2,10 +2,12 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "CsrCudaBackend.hpp"
 #include "CsrBufferCandidateTiming.hpp"
+#include "CsrReportValues.hpp"
 #include "CudaDualCsrPatch.hpp"
 #include "MixedLevelizationTelemetry.hpp"
 #include "MixedLevelizationTypes.hpp"
@@ -69,7 +71,8 @@ class CudaDualCsrSession final
   friend class CsrCudaBackend;
   friend class ista::StaCudaSessionState;
   friend class ista::PhysicalStaSessionState;
-  [[nodiscard]] const std::vector<BufferCandidateTiming>& candidateTiming() const;
+  [[nodiscard]] const std::vector<BufferCandidateTiming>& candidateTiming(std::span<const NodeId> nodes) const;
+  [[nodiscard]] const CsrReportValues& reportValues(std::span<const NodeId> nodes, std::span<const CsrQueryPath> paths) const;
   // The native export already validated the initialization input.
   [[nodiscard]] static CudaDualCsrSession fromNativeExport(
       const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);

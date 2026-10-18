@@ -4,6 +4,8 @@
 #include <limits>
 #include <type_traits>
 
+#include "CsrQueryValues.hpp"
+
 namespace ista::csr {
 struct CsrRcTimingRow;
 struct CsrRcTimingRecord;
@@ -17,11 +19,14 @@ inline constexpr Index absent = std::numeric_limits<Index>::max();
 // These device codes are independent of runtime CUDA errors.
 enum class Status : int { success, invariant, numeric, cycle };
 
-template <class T> struct Value
+struct PathRow
 {
-  T value{};
-  bool present{false};
+  Index begin{}, end{};
+  friend bool operator==(const PathRow&, const PathRow&) = default;
 };
+struct PathRowUpdate { Index row; PathRow before, after; };
+
+using value_detail::Value;
 
 struct Table
 {
@@ -127,13 +132,7 @@ struct Arc
   bool clock_eligible{false};
 };
 
-struct ClockLane
-{
-  Value<double> arrival, slew;
-  Index predecessor{absent};
-  double predecessor_delay{0.0};
-  std::uint8_t predecessor_transition{2};
-};
+using value_detail::ClockLane;
 
 enum class SeedKind : std::uint8_t { none, clock, output, scalar };
 struct SequentialSeed
@@ -147,20 +146,9 @@ struct SequentialSeed
   std::uint8_t trigger{0};
 };
 
-struct NodeState
+struct NodeState : value_detail::NodeValue
 {
-  double arrival{-std::numeric_limits<double>::infinity()};
-  double required{std::numeric_limits<double>::infinity()};
-  double slack{0.0};
-  double launch{0.0};
-  Index clock_name{absent};
-  Index predecessor_node{absent};
-  Index predecessor_arc{absent};
-  Value<double> slew[4];
   Index clock_owner{absent};
-  bool clock_point{false};
-  bool propagated_clock{false};
-  ClockLane physical_clock[4];
   SequentialSeed sequential;
 };
 
@@ -170,20 +158,7 @@ struct NodeSeed
   NodeState state;
 };
 
-struct PathState
-{
-  double arrival{0.0};
-  double slew{0.0};
-  double launch{0.0};
-  double predecessor_delay{0.0};
-  Index start{0};
-  Index predecessor_node{absent};
-  Index predecessor_arc{absent};
-  std::uint8_t predecessor_transition{2};
-  Index crpr_node{absent};
-  std::uint8_t crpr_transition{2};
-  bool present{false};
-};
+using value_detail::PathState;
 
 struct PathSeed
 {
@@ -236,7 +211,8 @@ struct DeviceView
   Index tag_count{0};
   Index clock_count{0};
   Index path_count{0};
-  const Index *path_offsets{nullptr}, *path_tags{nullptr};
+  const PathRow* path_rows{nullptr};
+  const Index* path_tags{nullptr};
   Index root_count{0};
   Index end_count{0};
   Index endpoint_count{0};
@@ -266,7 +242,6 @@ struct DeviceView
   Index* order{nullptr};
   Index* node_levels{nullptr};
   Index* level_offsets{nullptr};
-  Index* level_offset_count{nullptr};
   Status* status{nullptr};
 };
 

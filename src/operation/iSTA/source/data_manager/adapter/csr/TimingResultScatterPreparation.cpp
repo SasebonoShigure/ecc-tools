@@ -27,6 +27,7 @@
 #include "CsrReferenceInputAdapterInternal.hpp"
 #include "Database.hpp"
 #include "TimingResultScatterInternal.hpp"
+#include "TimingResultValueDecode.hpp"
 #include "TimingSemanticKey.hpp"
 
 namespace ista::csr::detail {
@@ -236,24 +237,20 @@ bool validResolvedTimingShapes(const CsrTimingValues& result, std::size_t node_c
       if (arrival_present > 1 || predecessor_present > 1 || !lanePresence(lane, arrival_present, source.slews)
           || !lanePresence(lane, predecessor_present, source.predecessor_arc_delays, source.predecessor_transitions))
         return false;
-      if (source.arrivals.presence[lane] != 0)
-        prepared.arrivals[*analysis][*transition] = source.arrivals.values[lane];
-      if (source.slews.presence[lane] != 0)
-        prepared.slews[*analysis][*transition] = source.slews.values[lane];
-      if (source.predecessor_nodes.presence[lane] != 0) {
+      const std::string* predecessor_name = nullptr;
+      if (predecessor_present != 0) {
         const auto* predecessor = resolvedNode(targets, source.predecessor_nodes.values[lane]);
         if (predecessor == nullptr)
           return false;
-        prepared.predecessors[*analysis][*transition] = *predecessor->full_name;
+        predecessor_name = predecessor->full_name;
       }
-      if (source.predecessor_arc_delays.presence[lane] != 0)
-        prepared.predecessor_arc_delays[*analysis][*transition] = source.predecessor_arc_delays.values[lane];
-      if (source.predecessor_transitions.presence[lane] != 0) {
-        const auto predecessor_transition = nativeTransition(source.predecessor_transitions.values[lane]);
-        if (!predecessor_transition)
-          return false;
-        prepared.predecessor_transitions[*analysis][*transition] = *predecessor_transition;
-      }
+      const value_detail::ClockLane clock{
+          {source.arrivals.values[lane], arrival_present != 0},
+          {source.slews.values[lane], source.slews.presence[lane] != 0},
+          value_detail::absent, source.predecessor_arc_delays.values[lane],
+          static_cast<std::uint8_t>(source.predecessor_transitions.values[lane])};
+      if (!appendClockLane(prepared, *analysis, *transition, clock, predecessor_name))
+        return false;
     }
   }
   return true;
@@ -296,13 +293,11 @@ bool validResolvedTimingShapes(const CsrTimingValues& result, std::size_t node_c
           if (start == nullptr)
             return CsrScatterCode::kIdMappingMismatch;
 
-          ista::TimingPathState state;
-          state.set_arrival(paths.arrivals.values[entry]);
-          state.set_slew(paths.slews.values[entry]);
-          state.set_launch_time(paths.launches.values[entry]);
-          state.set_start_point(*start->full_name);
-          state.set_clock_name(clock_tag);
-          state.set_trans_type(*transition);
+          value_detail::PathState path_value;
+          path_value.arrival = paths.arrivals.values[entry];
+          path_value.slew = paths.slews.values[entry];
+          path_value.launch = paths.launches.values[entry];
+          auto state = preparePathBase(path_value, *transition, clock_tag, *start->full_name);
 
           const bool has_predecessor = paths.predecessor_nodes.presence[entry] != 0;
           if (has_predecessor != (paths.predecessor_arcs.presence[entry] != 0) || has_predecessor != (paths.predecessor_arc_delays.presence[entry] != 0)
@@ -314,10 +309,8 @@ bool validResolvedTimingShapes(const CsrTimingValues& result, std::size_t node_c
             const auto predecessor_transition = nativeTransition(paths.predecessor_transitions.values[entry]);
             if (predecessor == nullptr || predecessor_arc == nullptr || !predecessor_transition)
               return CsrScatterCode::kIdMappingMismatch;
-            state.set_predecessor(*predecessor->full_name);
-            state.set_predecessor_arc_idx(predecessor_arc->native_rank);
-            state.set_predecessor_arc_delay(paths.predecessor_arc_delays.values[entry]);
-            state.set_predecessor_trans_type(*predecessor_transition);
+            attachPathPredecessor(state, *predecessor->full_name, predecessor_arc->native_rank,
+                                  paths.predecessor_arc_delays.values[entry], *predecessor_transition);
           }
 
           const bool has_crpr = paths.crpr_nodes.presence[entry] != 0;

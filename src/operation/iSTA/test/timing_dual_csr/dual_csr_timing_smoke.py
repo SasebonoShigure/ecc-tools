@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release/OFF timing: legacy smoke or frozen two-mode final-only experiments."""
+"""Release/OFF frozen two-mode final-only timing experiments."""
 
 import argparse
 import datetime
@@ -11,7 +11,6 @@ import subprocess
 import sys
 from typing import Any
 
-from dual_csr_timing_evidence import duration_ms, validate_batch_phase_timings
 from trace_process import (
     ControllerError,
     read_json,
@@ -19,8 +18,6 @@ from trace_process import (
     run_child,
     write_json,
 )
-
-SCHEMA = "ista-dual-csr-timing-smoke/4.0.0"
 
 
 def _cpu_model() -> str:
@@ -66,58 +63,6 @@ def _environment(
     }
 
 
-def _run_sample(
-    probe: pathlib.Path,
-    trace: pathlib.Path,
-    batches: list[dict[str, Any]],
-    root: pathlib.Path,
-    name: str,
-    timeout: int,
-) -> dict[str, Any]:
-    result, wall_ms = run_child(
-        probe, "performance", trace, len(batches), root / name / "performance.json", timeout
-    )
-    require(
-        result["schema_version"] == "ista-incregpusta-performance-process/4.0.0",
-        f"{name} unsupported performance output",
-    )
-    require(
-        result["debug_checks_enabled"] is False, f"{name} diagnostics enabled in performance child"
-    )
-    require(
-        result["correctness_comparison"] == "not_run",
-        f"{name} unexpectedly performed a correctness comparison",
-    )
-    require(
-        result["result"]["generation"] == len(batches)
-        and result["result"]["lifecycle_cleanup_completed"] is True,
-        f"{name} workload or lifecycle did not complete",
-    )
-    require(result["diagnostics"] == "not_run", f"{name} unexpectedly collected diagnostics")
-    require(result["result_requirements"] == {
-        "scope": "final_prefix",
-        "timing_values": True, "summary": True, "timing_paths": True, "file_artifacts": False,
-    }, f"{name} did not execute the requested consumers")
-    timings = validate_batch_phase_timings(
-        result["run"]["batch_phase_timings"], len(batches), name, require, debug_checks=False,
-    )
-    require(all(phase["result_consumption"] == "not_run"
-                for phase in timings[:-1]),
-            f"{name} performed an unrequested intermediate materialization/report")
-    require(timings[-1]["result_consumption"] == "completed"
-            and timings[-1]["query_materialization_ms"] > 0 and timings[-1]["report_ms"] > 0,
-            f"{name} did not prepare final results")
-    return {
-        "targeted_pid": result["run"]["child_pid"],
-        "targeted_wall_ms": duration_ms(wall_ms, f"{name}.wall_ms", require, positive=True),
-        "batch_phase_timings": timings,
-        "requested_mode": result["requested_mode"],
-        "executed_mode": result["executed_mode"],
-        "result": result["result"],
-        "input": result["input"],
-        "debug_checks_enabled": False,
-        "correctness_comparison": "not_run",
-    }
 
 
 def probe_build_info(probe: pathlib.Path, timeout: int) -> dict[str, Any]:
@@ -154,6 +99,7 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
     from consumer_trace_samples import (
         BOOTSTRAP_RESAMPLES,
         BOOTSTRAP_SEED,
+        SECONDARY_TIMING_METRICS,
         TIMING_MODES,
         TIMING_PAIRS,
         consumer_statistics,
@@ -227,6 +173,12 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
         _verified_file(source)
     summaries, comparisons = consumer_statistics(
         samples, "consumer_loop_ms", modes=TIMING_MODES, pairs=TIMING_PAIRS)
+    additional_metrics = {}
+    for metric in SECONDARY_TIMING_METRICS:
+        phase_summaries, phase_comparisons = consumer_statistics(
+            samples, metric, modes=TIMING_MODES, pairs=TIMING_PAIRS)
+        additional_metrics[metric] = {
+            "summaries": phase_summaries, "comparisons": phase_comparisons}
     engineering = args.warmup_runs >= 5 and args.samples >= 30
     output = {
         "schema_version": "3.0.0", "manifest": manifest_identity,
@@ -244,6 +196,7 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
         "diagnostics": "not_run",
         "sampling_kind": "engineering" if engineering else "short_smoke",
         "samples": samples, "summaries": summaries, "comparisons": comparisons,
+        "additional_metrics": additional_metrics,
         "performance_gate": (
             "passed" if all(value["lower_bound_above_one"] for value in comparisons.values())
             else "failed"
@@ -258,10 +211,8 @@ def run_consumer_experiment(args: argparse.Namespace, probe: pathlib.Path,
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", required=True, type=pathlib.Path)
-    workload = parser.add_mutually_exclusive_group(required=True)
-    workload.add_argument("--trace", type=pathlib.Path)
-    workload.add_argument("--manifest", type=pathlib.Path)
-    parser.add_argument("--case", help="case name in the frozen experiment manifest")
+    parser.add_argument("--manifest", type=pathlib.Path, required=True)
+    parser.add_argument("--case", required=True, help="case name in the frozen experiment manifest")
     parser.add_argument("--run-root", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--warmup-runs", type=int, default=5)
@@ -277,52 +228,7 @@ def run(args: argparse.Namespace) -> bool:
     build = probe_build_info(probe, args.timeout_seconds)
     if build["build_config"] != "Release":
         return False
-    if getattr(args, "manifest", None) is not None:
-        return run_consumer_experiment(args, probe, build)
-    trace = args.trace.resolve(strict=True)
-    trace_value = read_json(trace)
-    batches = trace_value["replay"]["workload"]["batches"]
-    require(
-        isinstance(batches, list) and bool(batches),
-        "timing smoke trace must contain at least one batch",
-    )
-    root = args.run_root.resolve()
-    root.mkdir(parents=True, exist_ok=True)
-    warmups = [
-        _run_sample(probe, trace, batches, root, f"warmup-{index + 1}", args.timeout_seconds)
-        for index in range(args.warmup_runs)
-    ]
-    samples: list[dict[str, Any]] = []
-    for index in range(args.samples):
-        sample = _run_sample(
-            probe, trace, batches, root, f"sample-{index + 1}", args.timeout_seconds
-        )
-        sample["sample_ordinal"] = index + 1
-        samples.append(sample)
-    raw_sample_count = len(samples)
-    output = {
-        "schema_version": SCHEMA,
-        "sampling_kind": (
-            "short_smoke" if args.warmup_runs < 5 or args.samples < 30 else "engineering"
-        ),
-        "stage12_performance_acceptance": "not_run",
-        "trace_is_fixed": True,
-        "trace": str(trace),
-        "environment_fingerprint": _environment(
-            probe, trace, build["build_config"], build["compiler_id"], build["compiler_version"]
-        ),
-        "warmup": {"runs": args.warmup_runs, "completed": True, "observations": warmups},
-        "raw_samples": samples,
-        "raw_sample_count": raw_sample_count,
-        "build": build,
-        "debug_checks_enabled": False,
-        "correctness_comparison": "not_run",
-        "performance_claims_made": False,
-        "speedup_or_break_even_reported": False,
-    }
-    require(raw_sample_count == args.samples, "timing smoke did not retain every raw sample")
-    write_json(args.output.resolve(), output)
-    return True
+    return run_consumer_experiment(args, probe, build)
 
 
 def main() -> int:

@@ -293,11 +293,6 @@ if(BUILD_TESTING)
       ista_buffer_trace_terminal_empty_generation
       ista_buffer_trace_fresh_process
       ista_buffer_trace_source_isolation
-      ista_dual_csr_frozen_synthetic_differential
-      ista_dual_csr_frozen_real_differential
-      ista_stage6_frozen_synthetic_differential
-      ista_stage6_frozen_real_differential
-      ista_stage6_active_payload_microcase_test
       ista_csr_session_snapshot_adapter_contract_test
       ista_csr_session_context_test
       ista_csr_session_fresh_process

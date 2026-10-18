@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "MixedLevelizationInternal.hpp"
-#include "MixedTopologyInternal.hpp"
 
 namespace ista::timing_incremental_levelization {
 namespace {
@@ -19,10 +18,11 @@ MixedReconstructionFailure failure(MixedReconstructionFailureCode code,
   return {code, std::move(detail)};
 }
 
-template <bool ValidateInputs>
-MixedReconstructionAttempt reconstruct(
+}  // namespace
+
+MixedReconstructionAttempt reconstructMixedLevelization(
     const MixedIdDomain& domain,
-    const detail::PreviousLevels& previous,
+    const csr::CsrFifoLevelization& previous,
     const MixedKahnLevelization& mixed)
 {
   const auto expected_domain = makeMixedIdDomain(
@@ -32,8 +32,7 @@ MixedReconstructionAttempt reconstruct(
     return failure(MixedReconstructionFailureCode::kMappingOverflow,
                    "reconstruction received an inconsistent mixed domain");
   std::string previous_detail;
-  const bool previous_valid = ValidateInputs ? detail::validatePreviousLevelizationShape(previous, domain.n_last_nodes, previous_detail)
-                                             : detail::validatePreviousLevelizationDimensions(previous, domain.n_last_nodes, previous_detail);
+  const bool previous_valid = detail::validatePreviousLevelizationShape(previous, domain.n_last_nodes, previous_detail);
   if (!previous_valid || previous.level_offsets.size() - 1 != domain.n_old_levels)
     return failure(MixedReconstructionFailureCode::kMalformedPreviousLevels,
                    std::move(previous_detail));
@@ -54,10 +53,10 @@ MixedReconstructionAttempt reconstruct(
     return failure(MixedReconstructionFailureCode::kInvariantFailure,
                    "empty mixed result must use offsets {0}");
 
-  std::vector<std::uint8_t> mixed_seen(ValidateInputs ? mixed_count : 0, 0);
+  std::vector<std::uint8_t> mixed_seen(mixed_count, 0);
   const std::size_t actual_count =
       static_cast<std::size_t>(domain.n_current_nodes);
-  std::vector<std::uint8_t> actual_seen(ValidateInputs ? actual_count : 0, 0);
+  std::vector<std::uint8_t> actual_seen(actual_count, 0);
   csr::CsrFifoLevelization output;
   output.level_offsets.clear();
   output.level_offsets.push_back(0);
@@ -79,7 +78,7 @@ MixedReconstructionAttempt reconstruct(
       const MixedVertexId vertex =
           mixed.level_vertices[static_cast<std::size_t>(position)];
       if (vertex.value() >= domain.mixed_vertex_count
-          || (ValidateInputs && mixed_seen[static_cast<std::size_t>(vertex.value())] != 0))
+          || mixed_seen[static_cast<std::size_t>(vertex.value())] != 0)
         return failure(MixedReconstructionFailureCode::kInvariantFailure,
                        "mixed vertices are not a complete permutation");
       if (previous_vertex.has_value()
@@ -87,8 +86,7 @@ MixedReconstructionAttempt reconstruct(
         return failure(MixedReconstructionFailureCode::kInvariantFailure,
                        "mixed frontier is not in deterministic ID order");
       previous_vertex = vertex;
-      if constexpr (ValidateInputs)
-        mixed_seen[static_cast<std::size_t>(vertex.value())] = 1;
+      mixed_seen[static_cast<std::size_t>(vertex.value())] = 1;
       if (mixed.vertex_to_level[static_cast<std::size_t>(vertex.value())]
           != output_level)
         return failure(MixedReconstructionFailureCode::kInvariantFailure,
@@ -117,11 +115,10 @@ MixedReconstructionAttempt reconstruct(
           const std::size_t actual_index =
               static_cast<std::size_t>(actual.value());
           if (actual.value() >= domain.n_last_nodes
-              || (ValidateInputs && actual_seen[actual_index] != 0))
+              || actual_seen[actual_index] != 0)
             return failure(MixedReconstructionFailureCode::kInvariantFailure,
                            "old-level expansion duplicates or escapes old nodes");
-          if constexpr (ValidateInputs)
-            actual_seen[actual_index] = 1;
+          actual_seen[actual_index] = 1;
           output.level_nodes.push_back(actual);
           output.node_to_level[actual_index] = output_level;
         }
@@ -136,11 +133,10 @@ MixedReconstructionAttempt reconstruct(
             static_cast<std::size_t>(actual.value());
         if (actual.value() < domain.n_last_nodes
             || actual.value() >= domain.n_current_nodes
-            || (ValidateInputs && actual_seen[actual_index] != 0))
+            || actual_seen[actual_index] != 0)
           return failure(MixedReconstructionFailureCode::kInvariantFailure,
                          "new-node expansion duplicates or escapes new nodes");
-        if constexpr (ValidateInputs)
-          actual_seen[actual_index] = 1;
+        actual_seen[actual_index] = 1;
         output.level_nodes.push_back(actual);
         output.node_to_level[actual_index] = output_level;
       } else {
@@ -166,20 +162,6 @@ MixedReconstructionAttempt reconstruct(
                    "reconstructed levels do not cover current nodes");
   output.complete = true;
   return output;
-}
-
-}  // namespace
-
-MixedReconstructionAttempt reconstructMixedLevelization(
-    const MixedIdDomain& domain, const csr::CsrFifoLevelization& previous, const MixedKahnLevelization& mixed)
-{
-  return reconstruct<true>(domain, previous, mixed);
-}
-
-MixedReconstructionAttempt detail::reconstructOwnedMixedLevelization(
-    const MixedIdDomain& domain, const PreviousLevels& previous, const MixedKahnLevelization& mixed)
-{
-  return reconstruct<false>(domain, previous, mixed);
 }
 
 }  // namespace ista::timing_incremental_levelization

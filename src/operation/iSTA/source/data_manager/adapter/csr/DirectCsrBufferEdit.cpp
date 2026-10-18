@@ -235,9 +235,9 @@ class DirectEdit
   }
   csr::NodeId nodeId(const csr::NodeKey& key) const
   {
-    const auto* binding = resolver.findNodeBindingForKey(key);
-    demand(binding && !binding->tombstone, "arc endpoint has no live binding");
-    return csr::NodeId{binding->slot.value()};
+    const auto* entry = resolver.findNodeEntryForKey(key);
+    demand(entry && !entry->second.tombstone, "arc endpoint has no live binding");
+    return csr::NodeId{entry->second.slot.value()};
   }
   const csr::NodeRecord& node(csr::NodeId id) const
   {

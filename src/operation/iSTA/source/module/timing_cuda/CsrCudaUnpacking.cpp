@@ -23,7 +23,7 @@ void unpackNodes(DownloadData& data, const ResultLayout& layout, CsrTimingValues
 {
 
   for (std::size_t i = 0; i < data.nodes.size(); ++i) {
-    const auto& node = data.nodes[i];
+    const value_detail::NodeValue& node = data.nodes[i];
     result.nodes.is_clock_point.values[i] = node.clock_point;
     result.nodes.arrivals.values[i] = node.arrival;
     result.nodes.requireds.values[i] = node.required;
@@ -67,7 +67,7 @@ void unpackPaths(DownloadData& data, const PathDomain& domain, CsrTimingValues& 
   paths.row_offsets.reserve(row_count + 1);
   for (std::size_t row = 0; row < row_count; ++row) {
     paths.row_offsets.push_back(paths.arrivals.values.size());
-    for (Index slot = domain.offsets[row]; slot < domain.offsets[row + 1]; ++slot) {
+    for (Index slot = domain.rows[row].begin; slot < domain.rows[row].end; ++slot) {
       const Index tag = domain.tags[slot];
       const auto& path = data.paths[slot];
       if (!path.present)

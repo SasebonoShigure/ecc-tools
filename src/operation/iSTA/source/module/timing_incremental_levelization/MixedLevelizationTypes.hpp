@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <variant>
 
@@ -125,28 +124,6 @@ enum class MixedStageFailureCode : std::uint8_t
   kMalformedPreviousLevels,
   kMappingOverflow,
   kInvariantFailure
-};
-
-enum class MixedFailureOrigin : std::uint8_t
-{
-  kBuilderOldOld,
-  kMixedKahnQuotient,
-  kActualClassifier,
-  kViewTraversal,
-  kExternalLevelValidation,
-  kPropagation
-};
-
-struct MixedLevelizationFailure
-{
-  MixedStageFailureCode code{MixedStageFailureCode::kInvariantFailure};
-  MixedFailureOrigin origin{MixedFailureOrigin::kViewTraversal};
-  std::optional<csr::CsrViewError> view_error;
-  std::uint64_t generation{0};
-  std::string detail;
-
-  friend bool operator==(const MixedLevelizationFailure&,
-                         const MixedLevelizationFailure&) = default;
 };
 
 struct MixedLevelizationRequest

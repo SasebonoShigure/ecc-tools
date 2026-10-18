@@ -26,6 +26,8 @@ void CudaDualCsrSession::Impl::bindGraph() noexcept
   view.rc_net_by_node = storage->graph.rc_net_by_node.data;
   view.endpoints = storage->graph.endpoints.data;
   view.indegrees = storage->indegrees.data;
+  view.path_rows = storage->domain.rows.data;
+  view.path_tags = storage->domain.tags.data;
 }
 
 std::uint64_t CudaDualCsrSession::Impl::bindAuxRows()
@@ -64,7 +66,6 @@ void CudaDualCsrSession::Impl::allocate()
   grow(storage->tables, table_count, storage->uploaded_tables);
   grow(storage->rc_load_cells, storage->models.rc_load_cells.size(), storage->uploaded_rc_load_cells);
   grow(storage->graph.endpoints, view.endpoint_count, old ? old->view.endpoint_count : 0);
-  grow(storage->indegrees, view.node_count);
   if (storage->graph.aux_storage.size() < view.node_count)
     storage->graph.aux_storage.resize(view.node_count);
   grow(storage->graph.aux_rows, view.node_count, old ? old->view.node_count : 0);
@@ -79,28 +80,24 @@ void CudaDualCsrSession::Impl::allocate()
   grow(storage->graph.ends, host->ends.size(), old ? old->view.end_count : 0);
   grow(storage->graph.node_seeds, host->node_seeds.size(), old ? storage->host_undo.node_seeds : 0);
   grow(storage->graph.path_seeds, host->path_seeds.size(), old ? storage->host_undo.path_seeds : 0);
+  allocatePathDomain();
   bindGraph();
   const Index old_nodes = old ? old->view.node_count : 0;
   memory.zero(const_cast<AuxRow*>(view.aux_rows) + old_nodes, view.node_count - old_nodes);
   auto& result = storage->results[result_index];
-  auto& domain = storage->domains[domain_index];
-  view.path_offsets = grow(domain.offsets, domain.host.offsets.size());
-  view.path_tags = grow(domain.tags, domain.host.tags.size());
   view.nodes = grow(result.nodes, view.node_count);
   view.paths = grow(result.paths, view.path_count);
   view.arc_state = grow(result.arcs, view.arc_count);
   view.child_state = grow(result.children, view.child_state_count);
   view.order = grow(result.order, view.node_count);
-  view.node_levels = grow(result.node_levels, view.node_count);
-  view.level_offsets = grow(result.level_offsets, checkedAdd(view.node_count, 1));
-  view.level_offset_count = grow(result.level_offset_count, 1);
+  view.node_levels = result.node_levels.data;
+  view.level_offsets = result.level_offsets.data;
   view.status = grow(result.status, 1);
   if constexpr (incregpusta_debug_checks_enabled) {
     view.storage_visits = grow(result.storage_visits, 12);
     memory.zero(view.storage_visits, 12);
   }
   memory.zero(view.status, 1);
-  memory.zero(view.level_offset_count, 1);
 }
 
 void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCsrPatch& patch, PackedPatch& packed)
@@ -192,11 +189,7 @@ void CudaDualCsrSession::Impl::transferPatch(const Impl& prior, const CudaDualCs
       memory.upload(host->node_seeds.data() + node_seed_begin, seed_nodes + node_seed_begin, host->node_seeds.size() - node_seed_begin);
     if (host->path_seeds.size() > path_seed_begin)
       memory.upload(host->path_seeds.data() + path_seed_begin, seed_paths + path_seed_begin, host->path_seeds.size() - path_seed_begin);
-    if (domain_index != prior.domain_index) {
-      const auto& paths = storage->domains[domain_index].host;
-      memory.upload(paths.offsets, view.path_offsets);
-      memory.upload(paths.tags, view.path_tags);
-    }
+    transferPathDomain();
     memory.upload(endpoints.data(), const_cast<Endpoint*>(view.endpoints) + prior.view.endpoint_count, endpoints.size());
     memory.upload(packed.removes, device.removes);
     memory.upload(packed.changes, device.changes);

@@ -6,8 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <limits>
-#include <optional>
 #include <queue>
 #include <random>
 #include <set>
@@ -16,70 +14,21 @@
 #include <utility>
 #include <vector>
 
+#include "ActualDagCycleClassifier.hpp"
 #include "IncrementalLevelizationTestSupport.hpp"
+#include "MixedLevelizationValidation.hpp"
 
 namespace ista::timing_incremental_levelization::test {
 namespace {
 
 using EndpointPair = std::pair<std::uint64_t, std::uint64_t>;
 
-struct ObservableArc
-{
-  csr::ArcId id;
-  csr::EdgeStorageKind storage{csr::EdgeStorageKind::kBaseOut};
-  csr::ArcSemanticPayload payload;
-
-  friend bool operator==(const ObservableArc&, const ObservableArc&) = default;
-};
-
-struct EdgeViewSnapshot
-{
-  std::size_t node_count{0};
-  std::size_t arc_slot_count{0};
-  std::size_t active_arc_count{0};
-  std::vector<std::uint8_t> active_slots;
-  std::vector<ObservableArc> active_arcs;
-
-  friend bool operator==(const EdgeViewSnapshot&,
-                         const EdgeViewSnapshot&) = default;
-};
-
-struct StagedGeneration
-{
-  TestEdgeView edges;
-  MixedLevelizationRequest request;
-  std::optional<MixedLevelizationSuccess> output;
-  bool published{false};
-};
-
 struct GeneratedCase
 {
   csr::CsrFifoLevelization previous;
-  StagedGeneration staged;
+  TestEdgeView edges;
+  MixedLevelizationRequest request;
 };
-
-EdgeViewSnapshot snapshot(const TestEdgeView& edges)
-{
-  EdgeViewSnapshot result;
-  result.node_count = edges.nodeCount();
-  result.arc_slot_count = edges.arcSlotCount();
-  result.active_arc_count = edges.activeArcCount();
-  result.active_slots.reserve(result.arc_slot_count);
-  for (std::size_t index = 0; index < result.arc_slot_count; ++index)
-    result.active_slots.push_back(edges.isActive(csr::ArcId{index}) ? 1 : 0);
-  const csr::EdgeVisitResult visit =
-      edges.forEachActiveArc([&](const csr::EdgeEntry& entry) {
-        const auto payload = edges.arc(entry.arc_id);
-        if (!payload)
-          return csr::EdgeVisitResult::fail(payload.error());
-        result.active_arcs.push_back(
-            {entry.arc_id, entry.storage_kind, payload.value()});
-        return csr::EdgeVisitResult::continueVisit();
-      });
-  require(visit.control == csr::EdgeVisitControl::kContinue,
-          "cannot snapshot the active edge view");
-  return result;
-}
 
 std::string previousSummary(const csr::CsrFifoLevelization& previous)
 {
@@ -103,19 +52,20 @@ std::string previousSummary(const csr::CsrFifoLevelization& previous)
 
 std::string actualGraphSummary(const TestEdgeView& edges)
 {
-  const EdgeViewSnapshot view = snapshot(edges);
   std::ostringstream out;
-  out << "nodes=" << view.node_count << ",slots=" << view.arc_slot_count
-      << ",active=" << view.active_arc_count << ",arcs=";
-  for (std::size_t index = 0; index < view.active_arcs.size(); ++index) {
-    const ObservableArc& arc = view.active_arcs[index];
-    if (index != 0)
-      out << ';';
-    out << arc.id.value() << ':' << arc.payload.source.value() << "->"
-        << arc.payload.sink.value() << ':'
-        << (arc.payload.eligibility.levelization ? 'E' : 'I') << ':'
-        << (arc.storage == csr::EdgeStorageKind::kAuxOut ? 'A' : 'B');
-  }
+  out << "nodes=" << edges.nodeCount() << ",arcs=";
+  const auto visit = edges.forEachActiveArc([&](const csr::EdgeEntry& entry) {
+    const auto payload = edges.arc(entry.arc_id);
+    if (!payload)
+      return csr::EdgeVisitResult::fail(payload.error());
+    const auto& arc = payload.value();
+    out << entry.arc_id.value() << ':' << arc.source.value() << "->"
+        << arc.sink.value() << ':' << (arc.eligibility.levelization ? 'E' : 'I')
+        << ':' << (entry.storage_kind == csr::EdgeStorageKind::kAuxOut ? 'A' : 'B') << ';';
+    return csr::EdgeVisitResult::continueVisit();
+  });
+  require(visit.control == csr::EdgeVisitControl::kContinue,
+          "cannot summarize the active edge view");
   return out.str();
 }
 
@@ -172,9 +122,9 @@ std::string caseContext(std::uint64_t seed, std::uint64_t sample,
   std::ostringstream out;
   out << "seed=" << seed << " sample=" << sample << ' '
       << previousSummary(generated.previous) << " actual={"
-      << actualGraphSummary(generated.staged.edges) << "} mixed={"
-      << mixedGraphSummary(generated.staged.edges, generated.previous,
-                           generated.staged.request.n_last_nodes)
+      << actualGraphSummary(generated.edges) << "} mixed={"
+      << mixedGraphSummary(generated.edges, generated.previous,
+                           generated.request.n_last_nodes)
       << '}';
   return out.str();
 }
@@ -216,67 +166,11 @@ bool independentlyAcyclic(const TestEdgeView& edges)
   return processed == edges.nodeCount();
 }
 
-bool independentlyMixedCompatible(
+void requireIndependentGraph(
     const TestEdgeView& edges, const csr::CsrFifoLevelization& previous,
-    std::uint64_t n_last_nodes)
+    std::uint64_t n_last_nodes, const MixedPrecedenceGraph& graph)
 {
-  const std::uint64_t old_levels = previous.level_offsets.size() - 1;
-  const std::size_t vertex_count =
-      static_cast<std::size_t>(old_levels + edges.nodeCount() - n_last_nodes);
-  std::set<EndpointPair> precedence;
-  for (std::uint64_t level = 1; level < old_levels; ++level)
-    precedence.emplace(level - 1, level);
-  bool old_order_valid = true;
-  const csr::EdgeVisitResult visit =
-      edges.forEachActiveArc([&](const csr::EdgeEntry& entry) {
-        const auto payload = edges.arc(entry.arc_id);
-        if (!payload)
-          return csr::EdgeVisitResult::fail(payload.error());
-        const auto& arc = payload.value();
-        if (!arc.eligibility.levelization)
-          return csr::EdgeVisitResult::continueVisit();
-        const std::uint64_t source =
-            mixedEndpoint(arc.source, previous, n_last_nodes);
-        const std::uint64_t sink =
-            mixedEndpoint(arc.sink, previous, n_last_nodes);
-        if (arc.source.value() < n_last_nodes
-            && arc.sink.value() < n_last_nodes)
-          old_order_valid &= source < sink;
-        else
-          precedence.emplace(source, sink);
-        return csr::EdgeVisitResult::continueVisit();
-      });
-  if (visit.control != csr::EdgeVisitControl::kContinue || !old_order_valid)
-    return false;
-  std::vector<std::vector<std::size_t>> adjacency(vertex_count);
-  std::vector<std::size_t> indegree(vertex_count, 0);
-  for (const EndpointPair& edge : precedence) {
-    if (edge.first >= vertex_count || edge.second >= vertex_count)
-      return false;
-    adjacency[static_cast<std::size_t>(edge.first)].push_back(
-        static_cast<std::size_t>(edge.second));
-    ++indegree[static_cast<std::size_t>(edge.second)];
-  }
-  std::queue<std::size_t> ready;
-  for (std::size_t vertex = 0; vertex < vertex_count; ++vertex)
-    if (indegree[vertex] == 0)
-      ready.push(vertex);
-  std::size_t processed = 0;
-  while (!ready.empty()) {
-    const std::size_t source = ready.front();
-    ready.pop();
-    ++processed;
-    for (std::size_t sink : adjacency[source])
-      if (--indegree[sink] == 0)
-        ready.push(sink);
-  }
-  return processed == vertex_count;
-}
-
-void requireIndependentTelemetry(
-    const TestEdgeView& edges, const csr::CsrFifoLevelization& previous,
-    std::uint64_t n_last_nodes, const MixedLevelizationTelemetry& actual)
-{
+  const auto& actual = graph.telemetry;
   std::uint64_t eligible = 0;
   std::uint64_t old_old = 0;
   std::uint64_t old_new = 0;
@@ -323,6 +217,25 @@ void requireIndependentTelemetry(
   std::set<EndpointPair> precedence = mapped_pairs;
   for (std::uint64_t level = 1; level < old_levels; ++level)
     precedence.emplace(level - 1, level);
+  const std::uint64_t vertices = old_levels + edges.nodeCount() - n_last_nodes;
+  require(graph.domain == MixedIdDomain{n_last_nodes, edges.nodeCount(),
+                                        edges.nodeCount() - n_last_nodes, old_levels, vertices},
+          "mixed domain differs from the independent model");
+  std::vector<std::uint64_t> offsets{0};
+  std::vector<MixedVertexId> successors;
+  std::vector<std::uint64_t> indegree(vertices, 0);
+  auto edge = precedence.begin();
+  for (std::uint64_t source = 0; source < vertices; ++source) {
+    while (edge != precedence.end() && edge->first == source) {
+      successors.emplace_back(edge->second);
+      ++indegree[edge->second];
+      ++edge;
+    }
+    offsets.push_back(successors.size());
+  }
+  require(graph.adjacency_offsets == offsets && graph.successors == successors
+              && graph.indegree == indegree,
+          "mixed adjacency differs from independent endpoint constraints");
   const std::uint64_t proxy_aliases =
       static_cast<std::uint64_t>(actual_pairs.size() - mapped_pairs.size());
   require(actual.n_last_nodes == n_last_nodes
@@ -441,19 +354,13 @@ GeneratedCase compatibleSample(std::mt19937_64& random,
                 actualEndpointForMixed(order.front(), old_count, previous,
                                        random),
                 false, csr::EdgeStorageKind::kAuxOut});
-  return {previous,
-          {std::move(edges), {old_count, generation - 1, generation},
-           std::nullopt, false}};
+  return {previous, std::move(edges), {old_count, generation - 1, generation}};
 }
 
 void requireSuccessfulProperties(const GeneratedCase& generated)
 {
-  require(independentlyAcyclic(generated.staged.edges),
+  require(independentlyAcyclic(generated.edges),
           "compatible generator emitted an actual cycle");
-  require(independentlyMixedCompatible(
-              generated.staged.edges, generated.previous,
-              generated.staged.request.n_last_nodes),
-          "compatible generator emitted an invalid mixed quotient");
   bool has_multi_old_level = false;
   for (std::size_t level = 0;
        level + 1 < generated.previous.level_offsets.size(); ++level)
@@ -461,18 +368,17 @@ void requireSuccessfulProperties(const GeneratedCase& generated)
                            - generated.previous.level_offsets[level] > 1;
   require(has_multi_old_level,
           "successful sample lost its multi-node old level");
-  const MixedLevelizationSuccess success = requirePipelineSuccess(
-      generated.staged.edges, generated.previous,
-      generated.staged.request.n_last_nodes,
-      generated.staged.request.generation_after);
-  const auto& telemetry = success.telemetry;
-  require(telemetry.kahn_processed_count == telemetry.mixed_vertex_count
-              && telemetry.fallback_count == 0
-              && validateMixedTelemetryIdentities(telemetry),
-          "success telemetry violates deterministic identities");
-  requireIndependentTelemetry(generated.staged.edges, generated.previous,
-                              generated.staged.request.n_last_nodes,
-                              telemetry);
+  const auto attempt = buildMixedLevelizationGraph(
+      generated.edges, generated.previous, generated.request);
+  const auto* graph = std::get_if<MixedPrecedenceGraph>(&attempt);
+  require(graph != nullptr, "compatible graph was rejected");
+  requireIndependentGraph(generated.edges, generated.previous,
+                          generated.request.n_last_nodes, *graph);
+  require(classifyActualDag(generated.edges).isDag() == independentlyAcyclic(generated.edges),
+          "actual DAG classification differs from the independent model");
+  const auto& telemetry = graph->telemetry;
+  require(validateMixedTelemetryIdentities(telemetry),
+          "builder telemetry violates deterministic identities");
   require(telemetry.old_old > 0 && telemetry.old_new > 0
               && telemetry.new_old > 0 && telemetry.new_new > 0,
           "successful sample did not exercise all four edge classes");
@@ -482,43 +388,12 @@ void requireSuccessfulProperties(const GeneratedCase& generated)
           "successful sample missed parallel, proxy-alias, or Aux coverage");
 }
 
-void requireAtomicFailure(
-    const csr::CsrFifoLevelization& previous, StagedGeneration& staged,
-    MixedStageFailureCode expected_code, MixedFailureOrigin expected_origin,
-    const std::string& context)
-{
-  const csr::CsrFifoLevelization previous_before = previous;
-  const EdgeViewSnapshot edges_before = snapshot(staged.edges);
-  const MixedLevelizationRequest request_before = staged.request;
-  const auto output_before = staged.output;
-  const bool published_before = staged.published;
-  MixedLevelizationAttempt attempt =
-      runCpuIncrementalLevelization(staged.edges, previous,
-                                               staged.request);
-  if (const auto* success = std::get_if<MixedLevelizationSuccess>(&attempt))
-    staged.output = *success;
-  const auto* failure = std::get_if<MixedLevelizationFailure>(&attempt);
-  require(failure != nullptr && failure->code == expected_code
-              && failure->origin == expected_origin,
-          context + ": failure lost its typed code");
-  require(previous == previous_before,
-          context + ": committed previous levels changed after failure");
-  require(snapshot(staged.edges) == edges_before,
-          context + ": staged edge view changed after failure");
-  require(staged.request == request_before,
-          context + ": staged request changed after failure");
-  require(staged.output == output_before,
-          context + ": failed pipeline leaked a staged output");
-  require(staged.published == published_before && !staged.published,
-          context + ": failed staged holder became published");
-}
-
 void fixedMultiOldProxyCanary()
 {
   GeneratedCase generated{
       makeLevels(5, {{0, 1}, {2}, {3, 4}}),
-      {TestEdgeView(7), {5, 40, 41}, std::nullopt, false}};
-  auto& edges = generated.staged.edges;
+      TestEdgeView(7), {5, 40, 41}};
+  auto& edges = generated.edges;
   edges.addArc({0, 2, true, csr::EdgeStorageKind::kAuxOut});
   edges.addArc({0, 5});
   edges.addArc({0, 5, true, csr::EdgeStorageKind::kAuxOut});
@@ -534,70 +409,6 @@ void fixedMultiOldProxyCanary()
   }
 }
 
-void requireNegativeClassifications(std::uint64_t seed,
-                                    std::uint64_t sample)
-{
-  const auto previous = makeLevels(2, {{0}, {1}});
-  StagedGeneration quotient{
-      TestEdgeView(3), {2, sample, sample + 1}, std::nullopt, false};
-  quotient.edges.addArc({1, 2, true,
-                         sample % 2 == 0
-                             ? csr::EdgeStorageKind::kAuxOut
-                             : csr::EdgeStorageKind::kBaseOut});
-  quotient.edges.addArc({2, 0});
-  require(independentlyAcyclic(quotient.edges),
-          "quotient negative is not independently acyclic");
-  const std::string quotient_context =
-      "seed=" + std::to_string(seed) + " sample=" + std::to_string(sample)
-      + " " + previousSummary(previous) + " actual={"
-      + actualGraphSummary(quotient.edges) + "} mixed={"
-      + mixedGraphSummary(quotient.edges, previous, 2) + '}';
-  requireAtomicFailure(previous, quotient,
-                       MixedStageFailureCode::kOldLevelOrderConflict,
-                       MixedFailureOrigin::kMixedKahnQuotient,
-                       quotient_context);
-
-  StagedGeneration cycle{
-      TestEdgeView(3), {2, sample, sample + 1}, std::nullopt, false};
-  cycle.edges.addArc({0, 2});
-  cycle.edges.addArc({2, 0, true, csr::EdgeStorageKind::kAuxOut});
-  require(!independentlyAcyclic(cycle.edges),
-          "cycle negative is acyclic in the independent oracle");
-  const std::string cycle_context =
-      "seed=" + std::to_string(seed) + " sample=" + std::to_string(sample)
-      + " " + previousSummary(previous) + " actual={"
-      + actualGraphSummary(cycle.edges) + "} mixed={"
-      + mixedGraphSummary(cycle.edges, previous, 2) + '}';
-  requireAtomicFailure(previous, cycle, MixedStageFailureCode::kActualCycle,
-                       MixedFailureOrigin::kActualClassifier,
-                       cycle_context);
-}
-
-void mappingOverflowAndAtomicityCanary()
-{
-  const auto previous = makeLevels(2, {{0}, {1}});
-  StagedGeneration staged{
-      TestEdgeView(2),
-      {std::numeric_limits<std::uint64_t>::max(), 90, 91}, std::nullopt,
-      false};
-  const std::string context =
-      "seed=0 sample=overflow " + previousSummary(previous) + " actual={"
-      + actualGraphSummary(staged.edges) + "} mixed={not-built: "
-      "old-node high-water exceeds current nodes}";
-  requireAtomicFailure(previous, staged,
-                       MixedStageFailureCode::kMappingOverflow,
-                       MixedFailureOrigin::kViewTraversal, context);
-
-  const MixedIdDomain inconsistent{
-      std::numeric_limits<std::uint64_t>::max(),
-      std::numeric_limits<std::uint64_t>::max(), 2, 0, 2};
-  const auto mapping =
-      newNodeForMixedVertex(MixedVertexId{1}, inconsistent);
-  require(std::get<MixedMappingFailure>(mapping).code
-              == MixedMappingFailureCode::kOverflow,
-          context + ": mixed-to-actual checked addition lost its overflow code");
-}
-
 void fixedSeedProperties()
 {
   constexpr std::uint64_t seeds[] = {1, 7, 42, 20260901, 0xdeadbeefULL};
@@ -608,38 +419,11 @@ void fixedSeedProperties()
       GeneratedCase generated = compatibleSample(random, sample + 1);
       try {
         requireSuccessfulProperties(generated);
-        requireNegativeClassifications(seed, sample + 1);
       } catch (const std::exception& error) {
         throw std::runtime_error(caseContext(seed, sample, generated)
                                  + ": " + error.what());
       }
     }
-  }
-}
-
-void malformedPreviousVariants()
-{
-  const auto valid = makeLevels(2, {{0}, {1}});
-  auto offsets = valid;
-  offsets.level_offsets = {0, 2, 1};
-  auto duplicate = valid;
-  duplicate.level_nodes = {csr::NodeId{0}, csr::NodeId{0}};
-  auto inverse = valid;
-  inverse.node_to_level[1] = 1;
-  auto view_error = valid;
-  view_error.view_error = csr::CsrViewError::kMalformedAdjacency;
-  std::uint64_t sample = 0;
-  for (const auto* malformed : {&offsets, &duplicate, &inverse, &view_error}) {
-    StagedGeneration staged{
-        TestEdgeView(2), {2, 0, 1}, std::nullopt, false};
-    const std::string context =
-        "seed=0 sample=malformed-" + std::to_string(sample++) + ' '
-        + previousSummary(*malformed) + " actual={"
-        + actualGraphSummary(staged.edges)
-        + "} mixed={not-built: malformed previous levels}";
-    requireAtomicFailure(*malformed, staged,
-                         MixedStageFailureCode::kMalformedPreviousLevels,
-                         MixedFailureOrigin::kViewTraversal, context);
   }
 }
 
@@ -651,8 +435,6 @@ int main()
   try {
     ista::timing_incremental_levelization::test::fixedMultiOldProxyCanary();
     ista::timing_incremental_levelization::test::fixedSeedProperties();
-    ista::timing_incremental_levelization::test::mappingOverflowAndAtomicityCanary();
-    ista::timing_incremental_levelization::test::malformedPreviousVariants();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

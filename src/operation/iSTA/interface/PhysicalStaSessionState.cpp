@@ -1,7 +1,7 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
 #include "PhysicalStaSessionState.hpp"
-#include "PhysicalGreedySelection.hpp"
+#include "PhysicalGreedyScoring.hpp"
 #include "StaCsrSessionContext.hpp"
 #include "NativeCandidateExecutor.hpp"
 #include "DataManager.hpp"
@@ -116,8 +116,9 @@ PhysicalGreedySelection PhysicalStaSessionState::selectBuffers(Database& databas
 #if ISTA_ENABLE_CUDA
   if (cuda_graph) {
     try {
-      return selectCsrPhysicalBuffers(database, models, design, cuda_graph->graph, cuda_graph->index, cuda_graph->resolver,
-          context._cuda->device.candidateTiming(), cells, top_k, max_buffers, technology.dbu_per_um);
+      const auto prepared = prepareCsrPhysicalBuffers(database, models, design, cuda_graph->graph, cuda_graph->index, cuda_graph->resolver);
+      return selectCsrPhysicalBuffers(database, models, design, cuda_graph->graph, prepared,
+          context._cuda->device.candidateTiming(prepared.node_ids), cells, top_k, max_buffers, technology.dbu_per_um);
     } catch (...) {
       if (context._cuda->_poisoned || context._cuda->device.poisoned()) authority.poison();
       throw;

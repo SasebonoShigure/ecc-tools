@@ -21,14 +21,22 @@ namespace ista {
 namespace {
 using namespace timing_edit;
 using namespace physical_greedy;
-struct Member { const csr::NodeRecord* node; idb::IdbPin* pin; };
+using Member = PreparedCsrCandidates::Member;
 struct CriticalNet {
-  idb::IdbNet* physical;
-  Member driver;
+  const PreparedCsrCandidates::Net* prepared;
   double slack;
-  StableNetRef identity;
   Bytes key;
 };
+bool isDriver(const csr::NodeRecord& node)
+{
+  return node.direction == (node.is_port ? csr::PinDirection::kInput : csr::PinDirection::kOutput);
+}
+csr::NodeKey nodeKey(idb::IdbPin& pin)
+{
+  const auto name = idbTimingPinName(pin);
+  if (pin.is_io_pin()) return {csr::NodeKind::kPort, name, {}, {}};
+  return {csr::NodeKind::kInstancePin, name, pin.get_instance()->get_name(), pin.get_pin_name()};
+}
 const csr::LibraryPortModel& portModel(csr::detail::NativeLibraryModels& models, const csr::NodeRecord& node)
 {
   const auto& ports = models.cell(node.instance_cell).ports;
@@ -76,90 +84,106 @@ std::map<std::string, RcPath> rcPaths(const csr::ParasiticNetModel& rc, const st
   }
   return result;
 }
-std::optional<double> driverResistance(const timing_dual_csr::DualCsrState& graph,
-    csr::detail::NativeLibraryModels& models, const csr::NodeRecord& driver,
+std::optional<double> driverResistance(const PreparedCsrCandidates::Net& net,
     std::span<const csr::BufferCandidateTiming> timing, double load)
 {
-  const auto& instances = graph.reference_payload.instances;
-  const auto instance = std::ranges::find(instances, driver.key.instance_name, &csr::InstanceRecord::instance_name);
-  if (instance == instances.end()) throw std::logic_error("greedy: driver instance is missing");
-  const auto& cell = models.cell(driver.instance_cell);
   std::optional<double> result;
-  for (const auto& arc : cell.cell_arcs) {
-    if (arc.sink_port != driver.key.pin_name || arc.transfer.is_disabled || arc.transfer.is_clear_or_preset) continue;
-    for (const auto id : instance->ordered_pins) {
-      if (graph.nodes.at(id.value()).key.pin_name != arc.source_port) continue;
-      const auto& point = timing[id.value()];
-      const auto current_slew = arc.transfer.is_clock_arc ? point.clock_slew : point.data_slew;
-      if (current_slew < 0.0) continue;
-      if (const auto value = estimate(arc.transfer, current_slew, load))
-        result = std::max(result.value_or(0.0), value->resistance);
-    }
+  for (const auto& input : net.inputs) {
+    const auto& point = timing[input.timing_slot];
+    const auto slew = input.transfer->is_clock_arc ? point.clock_slew : point.data_slew;
+    if (slew < 0.0) continue;
+    if (const auto value = estimate(*input.transfer, slew, load))
+      result = std::max(result.value_or(0.0), value->resistance);
   }
   return result;
 }
 }  // namespace
 
-PhysicalGreedySelection selectCsrPhysicalBuffers(const Database& library, csr::detail::NativeLibraryModels& models,
+PreparedCsrCandidates prepareCsrPhysicalBuffers(const Database& library, csr::detail::NativeLibraryModels& models,
     idb::IdbDesign& design, const timing_dual_csr::DualCsrState& graph,
-    const timing_dual_csr::DualCsrArcGroupIndex& index, const timing_edit::TimingEditResolverState& resolver,
+    const timing_dual_csr::DualCsrArcGroupIndex& index, const TimingEditResolverState& resolver)
+{
+  const auto& parasitics = graph.reference_payload.parasitics;
+  if (parasitics.capacitance_unit != "PF" || parasitics.resistance_unit != "OHM")
+    throw std::invalid_argument("greedy: expected canonical pre-route PF/OHM");
+  const TimingEditResolverView bindings{resolver};
+  PreparedCsrCandidates result;
+  std::unordered_map<std::uint64_t, std::size_t> slots;
+  const auto slot = [&](csr::NodeId id) {
+    const auto [entry, added] = slots.emplace(id.value(), result.node_ids.size());
+    if (added) result.node_ids.push_back(id);
+    return entry->second;
+  };
+  for (const auto& [name, rc_slot] : graph.parasitic_net_slots) {
+    static_cast<void>(rc_slot);
+    auto* physical = design.get_net_list()->find_net(name);
+    if (!physical) throw std::logic_error("greedy: CSR net is absent from physical design");
+    PreparedCsrCandidates::Net net{};
+    for (auto* pins : {physical->get_io_pins(), physical->get_instance_pin_list()})
+      for (auto* pin : pins->get_pin_list()) {
+        if (!pin) throw std::logic_error("greedy: null physical terminal");
+        const auto key = nodeKey(*pin);
+        const auto* entry = bindings.findNodeEntryForKey(key);
+        if (!entry || entry->second.tombstone) throw std::logic_error("greedy: physical terminal has no CSR binding");
+        const auto& node = graph.nodes.at(entry->second.slot.value());
+        if (node.key != key || node.net_name != name) throw std::logic_error("greedy: physical/CSR net differs");
+        net.members.push_back({&node, pin, &entry->first});
+      }
+    // Preserve native load summation order and the existing candidate tie-break.
+    std::ranges::sort(net.members, [](const auto& a, const auto& b) { return a.node->key.full_name < b.node->key.full_name; });
+    bool clock = false, has_sink = false;
+    std::size_t drivers = 0;
+    for (std::size_t i = 0; i < net.members.size(); ++i) {
+      auto& member = net.members[i];
+      const auto& node = *member.node;
+      clock |= index.isClockSourceNode(node.id) || (!node.is_port && portModel(models, node).is_clock);
+      if (isDriver(node)) { ++drivers; net.driver = i; }
+      else { member.data_sink = dataSink(library, node); has_sink |= member.data_sink; }
+    }
+    if (clock || drivers != 1 || net.members[net.driver].node->is_port || !has_sink) continue;
+    for (auto& member : net.members) member.timing_slot = slot(member.node->id);
+    const auto& driver = net.members[net.driver];
+    auto* instance = driver.pin->get_instance();
+    if (!instance) throw std::logic_error("greedy: driver instance is missing");
+    for (const auto& arc : models.cell(driver.node->instance_cell).cell_arcs) {
+      if (arc.sink_port != driver.node->key.pin_name || arc.transfer.is_disabled || arc.transfer.is_clear_or_preset) continue;
+      auto* pin = instance->get_pin_list()->find_pin_by_term(arc.source_port);
+      if (!pin) continue;
+      const auto* entry = bindings.findNodeEntryForKey(nodeKey(*pin));
+      if (!entry || entry->second.tombstone) continue;
+      const auto& node = graph.nodes.at(entry->second.slot.value());
+      net.inputs.push_back({&arc.transfer, slot(node.id)});
+    }
+    const auto* identity = bindings.findNetEntryForName(name);
+    if (!identity || identity->second.tombstone) throw std::logic_error("greedy: physical net has no CSR binding");
+    net.identity = &identity->first;
+    result.nets.push_back(std::move(net));
+  }
+  return result;
+}
+
+PhysicalGreedySelection selectCsrPhysicalBuffers(const Database& library, csr::detail::NativeLibraryModels& models,
+    idb::IdbDesign& design, const timing_dual_csr::DualCsrState& graph, const PreparedCsrCandidates& prepared,
     std::span<const csr::BufferCandidateTiming> timing, std::span<const std::string> buffer_cells,
     std::uint64_t top_k, std::uint64_t max_buffers, std::int32_t dbu_per_um)
 {
   const auto generation = graph.generation.value();
   if (!top_k || !max_buffers || dbu_per_um <= 0 || generation == std::numeric_limits<std::uint64_t>::max()
-      || timing.size() != graph.nodes.size())
+      || timing.size() != prepared.node_ids.size())
     throw std::invalid_argument("greedy: invalid budget, generation, DBU or timing size");
-  const auto& parasitics = graph.reference_payload.parasitics;
-  if (parasitics.capacitance_unit != "PF" || parasitics.resistance_unit != "OHM")
-    throw std::invalid_argument("greedy: expected canonical pre-route PF/OHM");
   const auto choices = buffers(library, models, buffer_cells);
   if (choices.empty()) throw std::invalid_argument("greedy: buffer allowlist is empty");
-  // Borrow names for this protected query; no native graph or persistent duplicate mapping.
-  std::unordered_map<std::string_view, const csr::NodeRecord*> by_name;
-  by_name.reserve(graph.nodes.size());
-  for (const auto& node : graph.nodes) by_name.emplace(node.key.full_name, &node);
-  const auto members = [&](idb::IdbNet& net) {
-    std::vector<Member> result;
-    for (auto* pins : {net.get_io_pins(), net.get_instance_pin_list()})
-      for (auto* pin : pins->get_pin_list()) {
-        if (!pin) throw std::logic_error("greedy: null physical terminal");
-        const auto* node = by_name.at(idbTimingPinName(*pin));
-        if (node->net_name != net.get_net_name()) throw std::logic_error("greedy: physical/CSR net differs");
-        result.push_back({node, pin});
-      }
-    // Match native refreshNetDriverLoad's existing load summation order.
-    std::ranges::sort(result, [](const auto& a, const auto& b) { return a.node->key.full_name < b.node->key.full_name; });
-    return result;
-  };
-  const auto is_driver = [](const csr::NodeRecord& node) {
-    return node.direction == (node.is_port ? csr::PinDirection::kInput : csr::PinDirection::kOutput);
-  };
   std::vector<CriticalNet> nets;
-  for (const auto& [name, slot] : graph.parasitic_net_slots) {
-    static_cast<void>(slot);
-    auto* net = design.get_net_list()->find_net(name);
-    if (!net) throw std::logic_error("greedy: CSR net is absent from physical design");
-    const auto pins = members(*net);
-    std::optional<Member> driver;
+  for (const auto& net : prepared.nets) {
     std::optional<double> worst;
-    bool clock = false, multiple_drivers = false;
-    for (const auto& member : pins) {
-      const auto& node = *member.node;
-      const auto& point = timing[node.id.value()];
-      clock |= point.clock_point || index.isClockSourceNode(node.id)
-               || (!node.is_port && portModel(models, node).is_clock);
-      if (is_driver(node)) {
-        multiple_drivers |= driver.has_value();
-        driver = member;
-      } else if (dataSink(library, node) && std::isfinite(point.setup_slack)) {
+    bool clock = false;
+    for (const auto& member : net.members) {
+      const auto& point = timing[member.timing_slot];
+      clock |= point.clock_point;
+      if (member.data_sink && std::isfinite(point.setup_slack))
         worst = std::min(worst.value_or(point.setup_slack), point.setup_slack);
-      }
     }
-    if (clock || multiple_drivers || !driver || driver->node->is_port || !worst) continue;
-    auto identity = resolver.stableNetForNativeName(name);
-    auto key = canonicalStableNetRefBytes(identity);
-    nets.push_back({net, *driver, *worst, std::move(identity), std::move(key)});
+    if (!clock && worst) nets.push_back({&net, *worst, canonicalStableNetRefBytes(*net.identity)});
   }
   std::sort(nets.begin(), nets.end(), [](const auto& left, const auto& right) {
     return left.slack != right.slack ? left.slack < right.slack : timing_edit::detail::canonicalBytesLess(left.key, right.key);
@@ -167,15 +191,14 @@ PhysicalGreedySelection selectCsrPhysicalBuffers(const Database& library, csr::d
   PhysicalGreedySelection result{generation, {}};
   std::set<Bytes, timing_edit::detail::CanonicalBytesLess> accepted_nodes;
   for (std::size_t n = 0; n < std::min<std::uint64_t>(top_k, nets.size()) && result.candidates.size() < max_buffers; ++n) {
-    const auto& critical = nets[n];
-    const auto& driver = *critical.driver.node;
-    const auto& rc = parasitics.nets.at(graph.parasitic_net_slots.at(driver.net_name));
-    const auto paths = rcPaths(rc, driver.key.full_name);
-    const auto pins = members(*critical.physical);
+    const auto& net = *nets[n].prepared;
+    const auto& driver = net.members[net.driver];
+    const auto& rc = graph.reference_payload.parasitics.nets.at(graph.parasitic_net_slots.at(driver.node->net_name));
+    const auto paths = rcPaths(rc, driver.node->key.full_name);
     double total_load = rc.lumped_capacitance;
-    for (const auto& member : pins) {
+    for (const auto& member : net.members) {
       const auto& node = *member.node;
-      if (is_driver(node)) continue;
+      if (isDriver(node)) continue;
       if (!node.is_port) total_load += pinCapacitance(portModel(models, node));
       else {
         const auto& constraints = graph.reference_payload.port_constraints;
@@ -187,20 +210,19 @@ PhysicalGreedySelection selectCsrPhysicalBuffers(const Database& library, csr::d
         }
       }
     }
-    const auto resistance = driverResistance(graph, models, driver, timing, total_load);
-    const auto input_slew = timing[driver.id.value()].data_slew;
+    const auto resistance = driverResistance(net, timing, total_load);
+    const auto input_slew = timing[driver.timing_slot].data_slew;
     if (!resistance || input_slew < 0.0) continue;
-    const auto driver_key = canonicalStableNodeRefBytes(resolver.stableNodeForNativeName(driver.key.full_name));
+    const auto driver_key = canonicalStableNodeRefBytes(*driver.identity);
     if (accepted_nodes.contains(driver_key)) continue;
-    physical_greedy::Net candidate_net{critical.identity, position(critical.driver), input_slew, *resistance, {}};
-    for (const auto& member : pins) {
+    physical_greedy::Net candidate_net{*net.identity, position(driver), input_slew, *resistance, {}};
+    for (const auto& member : net.members) {
       const auto& node = *member.node;
-      const auto slack = timing[node.id.value()].setup_slack;
-      if (is_driver(node) || !dataSink(library, node) || !std::isfinite(slack)) continue;
-      auto stable_pin = resolver.stableNodeForNativeName(node.key.full_name);
-      if (accepted_nodes.contains(canonicalStableNodeRefBytes(stable_pin))) continue;
+      const auto slack = timing[member.timing_slot].setup_slack;
+      if (!member.data_sink || !std::isfinite(slack)) continue;
+      if (accepted_nodes.contains(canonicalStableNodeRefBytes(*member.identity))) continue;
       const auto path = paths.at(node.key.full_name);
-      candidate_net.sinks.push_back({std::move(stable_pin), position(member), slack,
+      candidate_net.sinks.push_back({*member.identity, position(member), slack,
           pinCapacitance(portModel(models, node)) + path.capacitance, path.resistance});
     }
     const CreationToken token{.case_id = library.get_design_name(), .profile_id = "physical-greedy",
@@ -208,7 +230,7 @@ PhysicalGreedySelection selectCsrPhysicalBuffers(const Database& library, csr::d
     auto best = physical_greedy::score(candidate_net, choices, token, dbu_per_um);
     if (best) {
       const auto names = defaultTokenMaterialization(best->edit.creation_token, best->edit.library_cell);
-      if (by_name.contains(names.input_pin_name) || by_name.contains(names.output_pin_name)
+      if (design.get_io_pin_list()->find_pin(names.input_pin_name) || design.get_io_pin_list()->find_pin(names.output_pin_name)
           || design.get_instance_list()->find_instance(names.instance_name)
           || design.get_net_list()->find_net(names.output_net_name))
         throw std::runtime_error("greedy: materialized name collision");

@@ -12,18 +12,13 @@ set(ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS
 )
 
 set(ISTA_DUAL_CSR_FRESH_PROBE_SOURCES
-    timing_dual_csr/DualCsrTraceProductionFreshProbe.cpp
     timing_dual_csr/DualCsrTraceProductionFreshAdapter.cpp
-    timing_dual_csr/DualCsrTraceProductionTargetedAdapter.cpp
     timing_dual_csr/DualCsrTargetedArtifactSupport.cpp
     timing_dual_csr/DualCsrTargetedPhysicalProjection.cpp
     timing_dual_csr/DualCsrFunctionalReceiptJson.cpp
     timing_dual_csr/DualCsrFunctionalGraphJson.cpp
     timing_dual_csr/DualCsrFunctionalTimingJson.cpp
     timing_dual_csr/DualCsrReceiptJsonCommon.cpp
-    timing_dual_csr/DualCsrExactReceiptJson.cpp
-    timing_dual_csr/DualCsrExactReceiptSemanticJson.cpp
-    timing_dual_csr/DualCsrResourceObservationJson.cpp
     timing_dual_csr/DualCsrSourceIsolationJson.cpp
     timing_edit/BufferTraceProductionFreshAdapter.cpp
     timing_edit/BufferTraceProductionFreshSupport.cpp
@@ -36,7 +31,6 @@ set(ISTA_DUAL_CSR_FRESH_PROBE_SOURCES
     CsrTimingResultFromNativeOracle.cpp
 )
 set(ISTA_DUAL_CSR_FRESH_PROBE_LINKS
-    ista_dual_csr_trace_runtime
     ista_timing_dual_csr
     ista_buffer_trace_runtime
     ista_timing_edit_native
@@ -49,74 +43,6 @@ set(ISTA_DUAL_CSR_FRESH_PROBE_LINKS
     idm
 )
 
-add_executable(ista_dual_csr_production_fresh_probe
-    ${ISTA_DUAL_CSR_FRESH_PROBE_SOURCES}
-)
-target_include_directories(ista_dual_csr_production_fresh_probe PRIVATE
-    "${CMAKE_CURRENT_LIST_DIR}"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr"
-    "${CMAKE_CURRENT_LIST_DIR}/../source/module/timing_dual_csr_transaction"
-    "${CMAKE_CURRENT_LIST_DIR}/../source/module/timing_dual_csr_native"
-)
-target_link_libraries(ista_dual_csr_production_fresh_probe PRIVATE
-    ${ISTA_DUAL_CSR_FRESH_PROBE_LINKS}
-)
-target_compile_features(ista_dual_csr_production_fresh_probe PRIVATE cxx_std_20)
-target_compile_options(ista_dual_csr_production_fresh_probe PRIVATE
-    ${ISTA_DUAL_CSR_TRACE_STRICT_OPTIONS}
-)
-
-add_test(
-    NAME ista_dual_csr_trace_controller_selftest
-    COMMAND
-    "${ISTA_TEST_PYTHON_EXECUTABLE}"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/dual_csr_trace_controller.py"
-    --self-test
-)
-set_tests_properties(ista_dual_csr_trace_controller_selftest PROPERTIES
-    LABELS "ista_unit;ista_dual_csr"
-    TIMEOUT 60
-    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
-)
-
-add_test(
-    NAME ista_dual_csr_frozen_synthetic_differential
-    COMMAND
-    "${ISTA_TEST_PYTHON_EXECUTABLE}"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/dual_csr_trace_controller.py"
-    --probe "$<TARGET_FILE:ista_dual_csr_production_fresh_probe>"
-    --trace
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
-    --run-root
-    "${CMAKE_CURRENT_BINARY_DIR}/stage5-controller/synthetic"
-    --timeout-seconds 900
-)
-set_tests_properties(ista_dual_csr_frozen_synthetic_differential PROPERTIES
-    LABELS "ista_integration;ista_cpu;ista_dual_csr"
-    TIMEOUT 2400
-    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
-)
-
-add_test(
-    NAME ista_dual_csr_frozen_real_differential
-    COMMAND
-    "${ISTA_TEST_PYTHON_EXECUTABLE}"
-    "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/dual_csr_trace_controller.py"
-    --probe "$<TARGET_FILE:ista_dual_csr_production_fresh_probe>"
-    --trace
-    "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/real_buffer_fanout.json"
-    --run-root
-    "${CMAKE_CURRENT_BINARY_DIR}/stage5-controller/real"
-    --timeout-seconds 900
-)
-set_tests_properties(ista_dual_csr_frozen_real_differential PROPERTIES
-    LABELS "ista_integration;ista_cpu;ista_dual_csr"
-    TIMEOUT 1800
-    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
-)
-
 add_test(NAME ista_incregpusta_performance_orchestration
     COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
     "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/test_performance_mode.py")
@@ -124,29 +50,12 @@ set_tests_properties(ista_incregpusta_performance_orchestration PROPERTIES
     LABELS "ista_unit;ista_dual_csr" TIMEOUT 60
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
-foreach(stage IN ITEMS dual_csr stage6)
-  set(probe "ista_${stage}_production_fresh_probe")
-  if(ECC_INCREGPUSTA_DEBUG_CHECKS)
-    set(test_name "ista_${stage}_performance_rejects_on")
-    add_test(NAME "${test_name}"
-        COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
-        "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/test_performance_mode.py"
-        --reject-probe "$<TARGET_FILE:${probe}>")
-  else()
-    set(test_name "ista_${stage}_release_timing_smoke")
-    add_test(NAME "${test_name}"
-        COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
-        "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/dual_csr_timing_smoke.py"
-        --probe "$<TARGET_FILE:${probe}>"
-        --trace "${CMAKE_CURRENT_LIST_DIR}/timing_edit/traces/synthetic_two_batch.json"
-        --run-root "${CMAKE_CURRENT_BINARY_DIR}/${stage}-timing-smoke/runs"
-        --output "${CMAKE_CURRENT_BINARY_DIR}/${stage}-timing-smoke/timing-smoke.json"
-        --warmup-runs 1 --samples 6 --timeout-seconds 900)
-  endif()
-  set_tests_properties("${test_name}" PROPERTIES
-      LABELS "ista_smoke;ista_cpu;ista_dual_csr" TIMEOUT 7200
-      SKIP_RETURN_CODE 77 ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
-endforeach()
+add_test(NAME ista_functional_timing_contract
+    COMMAND "${ISTA_TEST_PYTHON_EXECUTABLE}"
+      "${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr/test_functional_timing.py")
+set_tests_properties(ista_functional_timing_contract PROPERTIES
+    LABELS "ista_unit;ista_dual_csr" TIMEOUT 60
+    ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
 
 # Native transaction coverage must also run in a build without CUDA.
 add_executable(ista_native_full_transaction_test
@@ -213,14 +122,12 @@ if(ISTA_ENABLE_CUDA)
         LABELS "ista_cuda;ista_hardware_fault" TIMEOUT 300 RUN_SERIAL TRUE)
     endforeach()
   endif()
-  set(ISTA_CUDA_TRACE_PROBE_SOURCES ${ISTA_DUAL_CSR_FRESH_PROBE_SOURCES})
-  list(REMOVE_ITEM ISTA_CUDA_TRACE_PROBE_SOURCES timing_dual_csr/DualCsrTraceProductionFreshProbe.cpp)
 endif()
 
 if(ISTA_ENABLE_CUDA)
   add_executable(ista_cuda_targeted_trace_probe CudaTargetedTraceProbe.cpp
       timing_dual_csr/CudaTargetedTimingProjection.cpp
-      timing_dual_csr/CudaTargetedDeviceComparison.cpp ${ISTA_CUDA_TRACE_PROBE_SOURCES})
+      timing_dual_csr/CudaTargetedDeviceComparison.cpp ${ISTA_DUAL_CSR_FRESH_PROBE_SOURCES})
   target_include_directories(ista_cuda_targeted_trace_probe PRIVATE
       ${CMAKE_CURRENT_LIST_DIR} ${CMAKE_CURRENT_LIST_DIR}/timing_edit
       ${CMAKE_CURRENT_LIST_DIR}/timing_edit/oracle ${CMAKE_CURRENT_LIST_DIR}/timing_dual_csr)

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -19,7 +20,8 @@ struct PreviousLevels
 {
   const std::vector<std::uint64_t>& level_offsets;
   const std::vector<csr::NodeId>& level_nodes;
-  const std::vector<std::uint64_t>& node_to_level;
+  std::span<const std::uint64_t> node_to_level;
+  std::span<const std::uint64_t> group_levels;
   bool complete;
   std::optional<csr::CsrViewError> view_error;
 
@@ -31,6 +33,16 @@ struct PreviousLevels
                  std::optional<csr::CsrViewError> error = std::nullopt)
       : level_offsets(offsets), level_nodes(nodes), node_to_level(inverse), complete(done), view_error(error)
   {
+  }
+  PreviousLevels(const std::vector<std::uint64_t>& offsets, const std::vector<csr::NodeId>& nodes,
+                 std::span<const std::uint64_t> groups, std::span<const std::uint64_t> remap, bool done)
+      : level_offsets(offsets), level_nodes(nodes), node_to_level(groups), group_levels(remap), complete(done)
+  {
+  }
+  [[nodiscard]] std::uint64_t levelOf(std::size_t node) const noexcept
+  {
+    const auto value = node_to_level[node];
+    return group_levels.empty() ? value : group_levels[value];
   }
 };
 
@@ -73,7 +85,8 @@ struct PreviousLevels
     detail = "previous level offsets do not cover the old-node domain";
     return false;
   }
-  if (previous.node_to_level.size() != node_count) {
+  if (previous.node_to_level.size() != node_count
+      || (!previous.group_levels.empty() && previous.group_levels.size() != previous.level_offsets.size())) {
     detail = "previous inverse has the wrong size";
     return false;
   }
@@ -127,7 +140,7 @@ struct PreviousLevels
         return false;
       }
       seen[static_cast<std::size_t>(node.value())] = 1;
-      if (previous.node_to_level[static_cast<std::size_t>(node.value())]
+      if (previous.levelOf(static_cast<std::size_t>(node.value()))
           != expected_level) {
         detail = "previous inverse level map disagrees with offsets";
         return false;

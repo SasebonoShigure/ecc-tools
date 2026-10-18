@@ -28,7 +28,6 @@ target_link_libraries(ista_interface
     PRIVATE
     ista_source
     ista_timing_edit_native
-    ista_timing_dual_csr_transaction
     izh_timing_optimization
     ista_timing_graph_csr_adapter
     ista_timing_reporter
@@ -44,7 +43,7 @@ target_include_directories(ista_interface
 
 if(ISTA_ENABLE_CUDA)
   target_sources(ista_interface PRIVATE CudaCsrEditState.cpp StaCudaSessionState.cpp CudaTargetedExecution.cpp)
-  target_link_libraries(ista_interface PRIVATE ista_cuda ista_timing_edit_native)
+  target_link_libraries(ista_interface PRIVATE ista_cuda ista_timing_dual_csr_native)
 endif()
 
 set_source_files_properties(

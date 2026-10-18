@@ -27,7 +27,6 @@ CudaDualCsrSession CudaDualCsrTestReader::computeRc(const CsrReferenceInput& inp
   cuda_detail::demand(!state->code && threads > 0 && threads <= 1024, "RC component initialization failed");
   state->storage->kernel_threads = threads;
   state->memory.zero(state->view.status, 1);
-  state->memory.zero(state->view.level_offset_count, 1);
   state->execute();
   return CudaDualCsrSession(std::move(state));
 }
@@ -37,29 +36,12 @@ void CudaDualCsrTestReader::setKernelThreads(CudaDualCsrSession& session, unsign
                       "test launch shape needs an idle session and valid block size");
   session._impl->storage->kernel_threads = threads;
 }
-const CsrTimingValues& CudaDualCsrTestReader::materializeWithLevelOwnershipCheck(CudaDualCsrSession& session)
+const std::vector<BufferCandidateTiming>& CudaDualCsrTestReader::readCandidateTiming(
+    const CudaDualCsrSession& session, std::span<const NodeId> nodes)
 {
-  using namespace cuda_detail;
-  demand(session._impl && !session._impl->values, "level ownership check needs an unqueried generation");
-  const auto& levels = session._impl->levels;
-  const auto* offsets = levels.level_offsets.data();
-  const auto* nodes = levels.level_nodes.data();
-  if constexpr (!incregpusta_debug_checks_enabled)
-    demand(levels.level_nodes.empty(), "unqueried OFF generation retained a host permutation");
-  const auto* inverse = levels.node_to_level.data();
-  const auto& result = session.timingValues();
-  demand(offsets == result.level_offsets.data() && inverse == result.node_to_level.data(),
-         "materialization copied functional level storage");
-  if constexpr (incregpusta_debug_checks_enabled)
-    demand(nodes == result.level_nodes.data(), "materialization copied diagnostic level order");
-  demand(result.level_nodes.size() == result.node_to_level.size(), "query did not materialize the full level order");
-  return result;
-}
-const std::vector<BufferCandidateTiming>& CudaDualCsrTestReader::readCandidateTiming(const CudaDualCsrSession& session)
-{
-  cuda_detail::demand(session._impl && !session._impl->values, "candidate check requires no full timing cache");
-  const auto& result = session.candidateTiming();
-  cuda_detail::demand(!session._impl->values, "candidate query materialized full timing");
+  const bool had_full = session._impl && session._impl->values.has_value();
+  const auto& result = session.candidateTiming(nodes);
+  cuda_detail::demand(session._impl->values.has_value() == had_full, "candidate query materialized full timing");
   return result;
 }
 void CudaDualCsrTestReader::omitAuxAndRecompute(CudaDualCsrSession& candidate)
@@ -247,9 +229,9 @@ void runCudaClockContracts()
     }
   }
   DownloadData downloaded;
-  downloaded.nodes = result;
+  downloaded.nodes.assign(result.begin(), result.end());
   PathDomain empty_paths;
-  empty_paths.offsets.assign(result.size() * 8 + 1, 0);
+  empty_paths.rows.resize(result.size() * 8);
   const auto published = unpackValues(std::move(downloaded), ResultLayout{}, empty_paths);
   for (Index node = 0; node < 3; ++node)
     for (unsigned lane = 0; lane < 4; ++lane) {

@@ -2,13 +2,16 @@
 // Licensed under Mulan PSL v2.
 #include "CudaDualCsrInternal.cuh"
 #include "CsrCudaKernels.cuh"
+#include <algorithm>
 
 namespace ista::csr {
 namespace {
-__global__ void collectCandidateTiming(cuda_detail::DeviceView view, BufferCandidateTiming* output)
+__global__ void collectCandidateTiming(cuda_detail::DeviceView view, const cuda_detail::Index* nodes,
+    cuda_detail::Index count, BufferCandidateTiming* output)
 {
   using namespace cuda_detail;
-  for (Index id = blockIdx.x * blockDim.x + threadIdx.x; id < view.node_count; id += blockDim.x * gridDim.x) {
+  for (Index slot = blockIdx.x * blockDim.x + threadIdx.x; slot < count; slot += blockDim.x * gridDim.x) {
+    const auto id = nodes[slot];
     const auto& node = view.nodes[id];
     BufferCandidateTiming result;
     result.clock_point = node.clock_point;
@@ -21,56 +24,72 @@ __global__ void collectCandidateTiming(cuda_detail::DeviceView view, BufferCandi
     }
     if (!node.clock_point && isfinite(node.arrival) && isfinite(node.required) && isfinite(node.slack)) {
       const auto row = id * kAnalysisCount * kPathSourceCount * kTransitionCount;
-      for (Index slot = view.path_offsets[row]; slot < view.path_offsets[row + kPathSourceCount * kTransitionCount]; ++slot) {
-        if (view.paths[slot].present && isfinite(view.paths[slot].arrival)) {
-          result.setup_slack = node.slack;
-          break;
-        }
-      }
+      for (Index lane = 0; lane < kPathSourceCount * kTransitionCount; ++lane)
+        for (Index slot = view.path_rows[row + lane].begin; slot < view.path_rows[row + lane].end; ++slot)
+          if (view.paths[slot].present && isfinite(view.paths[slot].arrival)) {
+            result.setup_slack = node.slack;
+            break;
+          }
     }
-    output[id] = result;
+    output[slot] = result;
   }
 }
 }  // namespace
 
-const std::vector<BufferCandidateTiming>& CudaDualCsrSession::Impl::readCandidateTiming()
+const std::vector<BufferCandidateTiming>& CudaDualCsrSession::Impl::readCandidateTiming(std::span<const NodeId> nodes)
 {
   using namespace cuda_detail;
-  if (candidate_timing) return *candidate_timing;
-  // Allocate host storage before issuing any asynchronous work.
-  std::vector<BufferCandidateTiming> result(view.node_count);
+  static const std::vector<BufferCandidateTiming> empty;
+  if (nodes.empty()) return empty;
+  if (candidate_timing && std::ranges::equal(nodes, candidate_timing->nodes,
+      [](NodeId id, Index cached) { return id.value() == cached; })) return candidate_timing->values;
+  // Both upload source and download destination outlive the delivery wait.
+  CandidateTiming result;
+  result.nodes.reserve(nodes.size());
+  for (const auto id : nodes) {
+    demand(id.value() < view.node_count, "candidate node is out of range");
+    result.nodes.push_back(id.value());
+  }
+  result.values.resize(nodes.size());
+  if (values) {
+    for (std::size_t slot = 0; slot < nodes.size(); ++slot)
+      result.values[slot] = bufferCandidateTiming(*values, nodes[slot]);
+    candidate_timing.emplace(std::move(result));
+    return candidate_timing->values;
+  }
   memory.bindTelemetry(telemetry.cuda);
   try {
-    telemetry.grown_buffers += memory.ensure(storage->candidate_timing, view.node_count);
-    collectCandidateTiming<<<kernelBlocks(view.node_count, storage->kernel_threads), storage->kernel_threads, 0, memory.stream()>>>(
-        view, storage->candidate_timing.data);
+    telemetry.grown_buffers += memory.ensure(storage->candidate_nodes, nodes.size());
+    telemetry.grown_buffers += memory.ensure(storage->candidate_timing, nodes.size());
+    memory.upload(result.nodes, storage->candidate_nodes.data);
+    collectCandidateTiming<<<kernelBlocks(nodes.size(), storage->kernel_threads), storage->kernel_threads, 0, memory.stream()>>>(
+        view, storage->candidate_nodes.data, nodes.size(), storage->candidate_timing.data);
     ++telemetry.cuda.kernel_launches;
     check(cudaGetLastError(), "collect buffer candidate timing");
     const auto prior_readback = telemetry.cuda.d2h_bytes;
     const auto prior_wait = telemetry.cuda.stream_wait_ms;
     memory.record(6);
-    memory.download(storage->candidate_timing.data, result);
+    memory.download(storage->candidate_timing.data, result.values);
     memory.record(7);
     memory.synchronize();
     telemetry.cuda.delivery_d2h_ms += memory.milliseconds(6, 7);
     telemetry.cuda.candidate_d2h_bytes += telemetry.cuda.d2h_bytes - prior_readback;
     telemetry.cuda.candidate_wait_ms += telemetry.cuda.stream_wait_ms - prior_wait;
     candidate_timing.emplace(std::move(result));
-    return *candidate_timing;
+    return candidate_timing->values;
   } catch (const CudaAllocationError&) {
-    // ensure failed before any kernel/download; the committed result is intact.
+    // All growth precedes upload; the committed result and previous cache remain intact.
     throw;
   } catch (const CudaError&) {
-    // result remains alive until pending downloads have completed or failed.
     try { memory.synchronize(); } catch (...) { storage->poisoned = true; }
     poisoned = true;
     storage->poisoned = true;
     throw;
   }
 }
-const std::vector<BufferCandidateTiming>& CudaDualCsrSession::candidateTiming() const
+const std::vector<BufferCandidateTiming>& CudaDualCsrSession::candidateTiming(std::span<const NodeId> nodes) const
 {
   requireCommitted();
-  return _impl->readCandidateTiming();
+  return _impl->readCandidateTiming(nodes);
 }
 }  // namespace ista::csr

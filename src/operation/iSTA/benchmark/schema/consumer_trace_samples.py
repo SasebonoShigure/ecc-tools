@@ -7,6 +7,7 @@ from json_schema_contract import ValidationError
 MODES = ("cpu/full", "cpu/incremental", "cuda/full", "cuda/incremental")
 TIMING_MODES = ("cpu/full", "cuda/incremental")
 TIMING_PAIRS = (("cpu/full", "cuda/incremental"),)
+SECONDARY_TIMING_METRICS = ("edit_sta_loop_ms", "workload_ms", "cold_end_to_end_ms")
 BOOTSTRAP_SEED = 20260921
 BOOTSTRAP_RESAMPLES = 10000
 
@@ -230,6 +231,13 @@ def validate_consumer_samples(document: dict) -> None:
         if final_only else consumer_statistics(samples))
     if document["summaries"] != summaries or document["comparisons"] != comparisons:
         raise ValidationError("statistics differ from retained full-trace samples")
+    if final_only and "additional_metrics" in document:
+        for metric in SECONDARY_TIMING_METRICS:
+            phase_summaries, phase_comparisons = consumer_statistics(
+                samples, metric, modes=TIMING_MODES, pairs=TIMING_PAIRS)
+            if document["additional_metrics"][metric] != {
+                    "summaries": phase_summaries, "comparisons": phase_comparisons}:
+                raise ValidationError(f"{metric} statistics differ from retained samples")
     engineering = protocol["warmups"] >= 5 and protocol["repetitions"] >= 30
     expected_gate = (
         "passed" if all(result["lower_bound_above_one"] for result in comparisons.values())

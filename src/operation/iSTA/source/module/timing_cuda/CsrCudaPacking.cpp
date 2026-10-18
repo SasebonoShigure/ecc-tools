@@ -1,4 +1,5 @@
 #include "CsrCudaPacking.hpp"
+#include "CsrReferenceNativeModelValidatorInternal.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -12,13 +13,6 @@
 
 namespace ista::csr::cuda_detail {
 namespace {
-
-std::size_t product(std::size_t a, std::size_t b)
-{
-  if (a != 0 && b > std::numeric_limits<std::size_t>::max() / a)
-    throw std::length_error("CUDA timing state capacity overflow");
-  return a * b;
-}
 
 bool sameModel(const std::vector<ChildTimingArcModel>& a, const std::vector<ChildTimingArcModel>& b)
 {
@@ -89,7 +83,7 @@ Arc packArcFields(const auto& source, ModelStorage& models)
   Arc arc;
   arc.source = source.source.value();
   arc.sink = source.sink.value();
-  arc.child_begin = models.intern(source.transfer.childrenOwner());
+  arc.child_begin = models.internTransfer(source.transfer);
   arc.child_count = source.transfer.children().size();
   arc.delay = source.transfer.delay;
   arc.delay_min = source.transfer.delay_min;
@@ -262,7 +256,7 @@ void packSequential(const TimingPayloadView& input, HostData& data, ModelStorage
       seed.delay = ctq->delay;
       seed.delay_min = ctq->delay_min;
       seed.delay_max = ctq->delay_max;
-      seed.child_begin = models.intern(ctq->childrenOwner());
+      seed.child_begin = models.internTransfer(*ctq);
       seed.child_count = ctq->children().size();
     }
   }
@@ -338,147 +332,6 @@ std::uint8_t pathTransitions(ArcKind kind, const CellTransferModel& transfer, bo
   return mask;
 }
 
-PathDomain buildPathDomain(std::span<const ArcBinding> arcs, std::span<const PathAdjacency> adjacency, std::span<const PathSeed> seeds)
-{
-  const auto rows = product(adjacency.size(), 8);
-  if (rows == std::numeric_limits<std::size_t>::max())
-    throw std::length_error("CUDA path row capacity overflow");
-  std::vector<std::vector<Index>> tags(rows);
-  std::vector<std::pair<Index, Index>> pending;
-  const auto add = [&](Index row, Index tag) {
-    if (row >= rows)
-      throw std::invalid_argument("CUDA path seed row out of range");
-    auto& values = tags[row];
-    const auto found = std::ranges::lower_bound(values, tag);
-    if (found == values.end() || *found != tag) {
-      values.insert(found, tag);
-      pending.emplace_back(row, tag);
-    }
-  };
-  for (const auto& seed : seeds)
-    add(seed.row, seed.tag);
-  for (std::size_t head = 0; head < pending.size(); ++head) {
-    const auto [row, tag] = pending[head];
-    for (auto id : adjacency[row / 8].outgoing) {
-      const auto& arc = arcs[id];
-      if (!arc.active || !arc.path_transitions)
-        continue;
-      for (Index output = 0; output < 2; ++output)
-        if (arc.path_transitions & (1U << ((row % 2) * 2 + output)))
-          add(arc.sink * 8 + (row % 8 / 2) * 2 + output, tag);
-    }
-  }
-  PathDomain result;
-  result.offsets.reserve(rows + 1);
-  result.tags.reserve(pending.size());
-  result.offsets.push_back(0);
-  for (const auto& row : tags) {
-    result.tags.insert(result.tags.end(), row.begin(), row.end());
-    result.offsets.push_back(result.tags.size());
-  }
-  return result;
-}
-
-std::vector<PathAdjacency> buildPathAdjacency(Index nodes, std::span<const ArcBinding> arcs)
-{
-  std::vector<PathAdjacency> result(nodes);
-  for (Index id = 0; id < arcs.size(); ++id) {
-    const auto& arc = arcs[id];
-    if (arc.source >= nodes || arc.sink >= nodes)
-      throw std::invalid_argument("CUDA path-domain endpoint out of range");
-    result[arc.source].outgoing.push_back(id);
-    result[arc.sink].incoming.push_back(id);
-  }
-  return result;
-}
-
-void updatePathDomain(std::span<const ArcBinding> arcs, std::span<const PathAdjacency> adjacency,
-                      std::span<const PathSeed> seeds, const PathDomain& previous,
-                      std::span<const Index> changed_nodes, PathDomain& result)
-{
-  const auto row_count = product(adjacency.size(), 8);
-  if (row_count == std::numeric_limits<std::size_t>::max() || previous.offsets.empty()
-      || previous.offsets.size() - 1 > row_count || &previous == &result)
-    throw std::invalid_argument("CUDA incremental path-domain storage mismatch");
-  // Only affected structural rows own temporary tag payloads. Clear their old
-  // identities first so an edge removal can remove the last route to a tag.
-  std::map<Index, std::array<std::vector<Index>, 8>> dirty;
-  std::vector<Index> nodes;
-  const auto mark = [&](Index node) {
-    if (node >= adjacency.size())
-      throw std::invalid_argument("CUDA changed path-domain node out of range");
-    if (dirty.try_emplace(node).second)
-      nodes.push_back(node);
-  };
-  for (Index node : changed_nodes)
-    mark(node);
-  for (std::size_t head = 0; head < nodes.size(); ++head)
-    for (Index id : adjacency[nodes[head]].outgoing) {
-      const auto& arc = arcs[id];
-      if (arc.active && arc.path_transitions)
-        mark(arc.sink);
-    }
-
-  std::vector<std::pair<Index, Index>> pending;
-  const auto add = [&](Index row, Index tag) {
-    auto& values = dirty.at(row / 8)[row % 8];
-    const auto found = std::ranges::lower_bound(values, tag);
-    if (found == values.end() || *found != tag) {
-      values.insert(found, tag);
-      pending.emplace_back(row, tag);
-    }
-  };
-  for (const auto& seed : seeds)
-    if (dirty.contains(seed.row / 8))
-      add(seed.row, seed.tag);
-  // Entry identities from unchanged predecessors survive; identities carried
-  // solely around a now-unseeded dirty cycle do not.
-  for (Index node : nodes)
-    for (Index id : adjacency[node].incoming) {
-      const auto& arc = arcs[id];
-      if (!arc.active || !arc.path_transitions || dirty.contains(arc.source))
-        continue;
-      for (Index lane = 0; lane < 8; ++lane) {
-        const Index source = arc.source * 8 + lane;
-        if (source + 1 >= previous.offsets.size())
-          continue;
-        for (Index output = 0; output < 2; ++output)
-          if (arc.path_transitions & (1U << ((lane % 2) * 2 + output)))
-            for (Index slot = previous.offsets[source]; slot < previous.offsets[source + 1]; ++slot)
-              add(node * 8 + (lane / 2) * 2 + output, previous.tags[slot]);
-      }
-    }
-  for (std::size_t head = 0; head < pending.size(); ++head) {
-    const auto [row, tag] = pending[head];
-    for (Index id : adjacency[row / 8].outgoing) {
-      const auto& arc = arcs[id];
-      if (!arc.active || !arc.path_transitions)
-        continue;
-      for (Index output = 0; output < 2; ++output)
-        if (arc.path_transitions & (1U << ((row % 2) * 2 + output)))
-          add(arc.sink * 8 + (row % 8 / 2) * 2 + output, tag);
-    }
-  }
-  // Compact offsets and payload positions are a full-domain packing cost,
-  // distinct from incremental reachability and from AT/RAT propagation.
-  result.offsets.resize(row_count + 1);
-  result.tags.clear();
-  for (Index node = 0; node < adjacency.size(); ++node) {
-    const auto changed = dirty.find(node);
-    for (Index lane = 0; lane < 8; ++lane) {
-      const Index row = node * 8 + lane;
-      result.offsets[row] = result.tags.size();
-      if (changed != dirty.end()) {
-        const auto& values = changed->second[lane];
-        result.tags.insert(result.tags.end(), values.begin(), values.end());
-      } else if (row + 1 < previous.offsets.size()) {
-        result.tags.insert(result.tags.end(), previous.tags.begin() + previous.offsets[row], previous.tags.begin() + previous.offsets[row + 1]);
-      }
-    }
-  }
-  result.offsets.back() = result.tags.size();
-}
-
 Index ModelStorage::libraryIndex(std::string_view name)
 {
   const auto found = _libraries.find(name);
@@ -492,8 +345,12 @@ Index ModelStorage::intern(const std::shared_ptr<const std::vector<ChildTimingAr
   if (!owner || owner->empty())
     return 0;
   if (const auto found = _owners.find(owner); found != _owners.end())
-    return found->second;
+    return _entries[found->second].begin;
   const auto& source = *owner;
+  std::vector<CsrContractViolation> errors;
+  detail::validateTimingChildren(source, errors, "transfer.children");
+  if (!errors.empty())
+    throw std::invalid_argument("CUDA malformed transfer/table payload");
   // Cheap bucket selection, followed by exact equality. Different cells may
   // reuse arc indices or even table signatures; neither permits aliasing.
   std::size_t hash = source.size();
@@ -514,10 +371,10 @@ Index ModelStorage::intern(const std::shared_ptr<const std::vector<ChildTimingAr
   for (auto found = first; found != last; ++found)
     if (sameModel(*_entries[found->second].source, source)) {
       const auto begin = _entries[found->second].begin;
-      _owners.emplace(owner, begin);
+      _owners.emplace(owner, found->second);
       return begin;
     }
-  Entry entry{owner, children.size()};
+  Entry entry{owner, children.size(), detail::hasUniqueChildArcIndices(source)};
   std::vector<Child> packed;
   std::vector<double> values;
   packed.reserve(source.size());
@@ -534,7 +391,7 @@ Index ModelStorage::intern(const std::shared_ptr<const std::vector<ChildTimingAr
   reserveAppend(_entries, 1);
   reserveAppend(children, packed.size());
   reserveAppend(tables, values.size());
-  const auto owner_entry = _owners.emplace(owner, entry.begin).first;
+  const auto owner_entry = _owners.emplace(owner, _entries.size()).first;
   try {
     _lookup.emplace(hash, _entries.size());
   } catch (...) {
@@ -545,6 +402,18 @@ Index ModelStorage::intern(const std::shared_ptr<const std::vector<ChildTimingAr
   children.insert(children.end(), packed.begin(), packed.end());
   tables.insert(tables.end(), values.begin(), values.end());
   return _entries.back().begin;
+}
+
+Index ModelStorage::internTransfer(const CellTransferModel& transfer)
+{
+  std::vector<CsrContractViolation> errors;
+  detail::validateTransferScalars(transfer, errors, "transfer");
+  if (!errors.empty())
+    throw std::invalid_argument("CUDA malformed transfer/table payload");
+  const auto begin = intern(transfer.childrenOwner());
+  if (!transfer.children().empty() && !_entries[_owners.at(transfer.childrenOwner())].arc_indices_unique)
+    throw std::invalid_argument("CUDA malformed transfer/table payload");
+  return begin;
 }
 
 Arc packArc(const ArcSemanticPayload& source, ModelStorage& models)

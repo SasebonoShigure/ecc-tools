@@ -49,7 +49,7 @@ void CudaDualCsrTestReader::reportChainContracts()
     requireCpuReference(path_nodes == std::set<Index>{0, 1, 2, 3}, "report closure missed a fixed-tag predecessor");
     return keys;
   };
-  for (const unsigned threads : {64U, 257U}) {
+  for (const unsigned threads : {64U, 256U}) {
     auto owner = computeRc(input, threads);
     static_cast<void>(owner.prepareReport({{}, endpoints, {}, {}}));
     const auto partial = owner.telemetry().cuda;
@@ -89,7 +89,7 @@ void CudaDualCsrTestReader::reportChainContracts()
   const auto deep = withPaths(test::makeCpuReferenceDagFixture(130, edges));
   for (Index node = 0; node < 130; ++node)
     roots.push_back({NodeId{node}, AnalysisMode::kMax, PathSource::kInput, Transition::kRise, ClockTagId{0}});
-  for (const unsigned threads : {64U, 257U}) {
+  for (const unsigned threads : {64U, 256U}) {
     auto owner = computeRc(deep, threads);
     static_cast<void>(owner.prepareReport({{}, {}, {}, roots}));
     const auto& cache = owner._impl->report_values;

@@ -5,7 +5,7 @@
 #include "TimingResultScatterInternal.hpp"
 #include "DualCsrBaselineFactory.hpp"
 #include "TimingEditResolver.hpp"
-#include "BenchmarkTimingConsumer.hpp"
+#include "PublicTimingJson.hpp"
 #include "BufferTraceReplayInput.hpp"
 #include "DualCsrTargetedArtifactSupport.hpp"
 #include "ProductionFreshSessionLoader.hpp"

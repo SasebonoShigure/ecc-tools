@@ -1,23 +1,26 @@
 // Copyright (c) 2023-2025 Peng Cheng Laboratory
 // Licensed under Mulan PSL v2.
+#include <chrono>
+#include <cstring>
 #include "CudaDualCsrInternal.cuh"
 #include "CsrCudaKernels.cuh"
 
 namespace ista::csr {
 namespace {
+// D2H transfers whole records, including padding initialized in the source.
 template <class T> __global__ void collectReportNodes(const cuda_detail::NodeState* source,
     const cuda_detail::Index* ids, cuda_detail::Index count, T* output)
 {
   using cuda_detail::Index;
   for (Index slot = blockIdx.x * blockDim.x + threadIdx.x; slot < count; slot += blockDim.x * gridDim.x)
-    output[slot] = static_cast<const T&>(source[ids ? ids[slot] : slot]);
+    memcpy(&output[slot], &static_cast<const T&>(source[ids ? ids[slot] : slot]), sizeof(T));
 }
 __global__ void collectReportPaths(const value_detail::PathState* source,
     const cuda_detail::Index* ids, cuda_detail::Index count, value_detail::PathState* output)
 {
   using cuda_detail::Index;
   for (Index slot = blockIdx.x * blockDim.x + threadIdx.x; slot < count; slot += blockDim.x * gridDim.x)
-    output[slot] = source[ids[slot]];
+    memcpy(&output[slot], &source[ids[slot]], sizeof(value_detail::PathState));
 }
 }  // namespace
 
@@ -132,7 +135,7 @@ const std::vector<value_detail::NodeTimingScalars>& CudaDualCsrSession::Impl::re
   using namespace cuda_detail;
   using value_detail::NodeTimingScalars;
   if (timing_scalars) return *timing_scalars;
-  const auto start = Clock::now();
+  const auto start = std::chrono::steady_clock::now();
   std::vector<NodeTimingScalars> result(view.node_count);
   if (values) {
     const auto& nodes = values->nodes;
@@ -184,7 +187,7 @@ const std::vector<value_detail::NodeTimingScalars>& CudaDualCsrSession::Impl::re
     }
   }
   timing_scalars.emplace(std::move(result));
-  telemetry.materialize_ms += elapsed(start);
+  telemetry.materialize_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   return *timing_scalars;
 }
 const std::vector<value_detail::NodeTimingScalars>& CudaDualCsrSession::timingScalars() const

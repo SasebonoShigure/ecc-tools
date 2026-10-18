@@ -538,8 +538,11 @@ void runCudaLazySequence(CudaLevelizationMode mode)
   require(first_query.d2h_bytes > before_query.d2h_bytes && baseline_readback < first_query.d2h_bytes,
           "first query did not download deferred timing");
   require(&owner.timingValues() == &timing && owner.telemetry().cuda.d2h_bytes == first_query.d2h_bytes
-              && owner.telemetry().cuda.kernel_launches == before_query.kernel_launches
-              && owner.telemetry().cuda.device_algorithm_calls == before_query.device_algorithm_calls,
+              && owner.telemetry().cuda.h2d_bytes == first_query.h2d_bytes
+              && owner.telemetry().cuda.allocations == first_query.allocations
+              && owner.telemetry().cuda.stream_waits == first_query.stream_waits
+              && owner.telemetry().cuda.kernel_launches == first_query.kernel_launches
+              && owner.telemetry().cuda.device_algorithm_calls == first_query.device_algorithm_calls,
           "repeated query transferred or recomputed timing");
   const auto expected = timing;
   auto staged = owner.stage(patchFor(input, 3, water, water), mode);

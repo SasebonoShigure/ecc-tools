@@ -275,6 +275,13 @@ struct GraphBuffers
   DeviceBuffer<RcBinding> rc_bindings;
   DeviceBuffer<Index> rc_net_by_node;
 };
+struct ReportChain
+{
+  Index node{}, tag{};
+  unsigned analysis{}, source{}, transition{};
+  bool clock{false};
+};
+struct ReportChainStep { Index node{}, row{}, slot{absent}, tag{}; };
 struct ReportTransfer
 {
   // Empty IDs with a nonempty value buffer request the contiguous identity range.
@@ -309,7 +316,10 @@ struct DeviceStorage
   DeviceBuffer<double> tables;
   DeviceBuffer<BufferCandidateTiming> candidate_timing;
   DeviceBuffer<Index> candidate_nodes;
-  DeviceBuffer<Index> report_nodes, report_paths;
+  DeviceBuffer<Index> report_nodes, report_paths, report_chain_offsets;
+  DeviceBuffer<ReportChain> report_chains;
+  DeviceBuffer<ReportChainStep> report_chain_steps;
+  DeviceBuffer<Status> report_chain_status;
   DeviceBuffer<value_detail::NodeValue> report_node_values;
   DeviceBuffer<PathState> report_path_values;
   ResultBuffers results[2];
@@ -398,6 +408,8 @@ struct CudaDualCsrSession::Impl
   const std::vector<BufferCandidateTiming>& readCandidateTiming(std::span<const NodeId> nodes);
   const CsrReportValues& readReportValues(std::span<const NodeId> nodes, std::span<const CsrQueryPath> paths);
   void enqueueReportRead(cuda_detail::ReportTransfer& transfer);
+  std::vector<CsrQueryPath> prepareReportRead(const CsrReportRequest& request);
+  std::vector<cuda_detail::ReportChainStep> readReportChains(std::span<const cuda_detail::ReportChain> chains);
   std::optional<CsrFifoLevelization> reconstructMixed();
   void transferPatch(const Impl& before, const CudaDualCsrPatch& patch, cuda_detail::PackedPatch& packed);
 };

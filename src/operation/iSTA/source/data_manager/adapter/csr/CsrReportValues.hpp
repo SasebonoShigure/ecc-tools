@@ -3,6 +3,10 @@
 #pragma once
 
 #include <map>
+#include <span>
+#include <functional>
+#include <vector>
+#include "CsrReferencePrimitives.hpp"
 #include "CsrQueryValues.hpp"
 
 namespace ista::csr {
@@ -10,8 +14,30 @@ struct CsrTimingValues;
 
 struct CsrQueryPath
 {
-  value_detail::Index row{}, slot{};
+  value_detail::Index row{}, slot{}, tag{};
 };
+
+struct CsrClockChainSeed
+{
+  NodeId node;
+  AnalysisMode analysis;
+  Transition transition;
+};
+struct CsrPathChainSeed
+{
+  NodeId endpoint;
+  AnalysisMode analysis;
+  PathSource source;
+  Transition transition;
+  ClockTagId tag;
+};
+struct CsrReportRequest
+{
+  std::span<const NodeId> nodes, all_path_nodes;
+  std::span<const CsrClockChainSeed> clock_chains;
+  std::span<const CsrPathChainSeed> path_chains;
+};
+using PrepareCsrReport = std::function<std::vector<CsrQueryPath>(const CsrReportRequest&)>;
 
 struct CsrQueryNode
 {

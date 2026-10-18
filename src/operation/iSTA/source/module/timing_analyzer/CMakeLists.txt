@@ -1,6 +1,7 @@
 add_library(ista_timing_analyzer
     ${ISTA_MODULE}/timing_analyzer/TimingAnalyzer.cpp
     ${ISTA_MODULE}/timing_analyzer/TimingPathTrace.cpp
+    ${ISTA_MODULE}/timing_analyzer/TimingCrpr.cpp
 )
 
 target_link_libraries(ista_timing_analyzer

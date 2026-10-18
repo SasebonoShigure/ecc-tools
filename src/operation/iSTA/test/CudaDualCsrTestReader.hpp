@@ -11,6 +11,7 @@ class CudaDualCsrTestReader final
  public:
   static void clockWorkReuseContracts();
   static void reportQueryContracts(CudaLevelizationMode mode);
+  static void reportChainContracts();
   // Component-only RC inputs while the public unsupported gate remains closed.
   static CudaDualCsrSession computeRc(const CsrReferenceInput& input, unsigned threads,
       std::optional<timing_edit::AppendOnlyHighWater> high_water = std::nullopt);

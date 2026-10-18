@@ -107,8 +107,12 @@ class TimingAnalyzer
   TransType getClockTransType(TimingCellArc& timing_cell_arc);
   bool isRegisterStartPoint(std::string& start_point);
   bool hasClockPoint(std::string& pin_name);
-  double getClockReconvergencePessimism(std::pair<std::string, TransType>& launch_crpr_pin, std::string& end_point,
-                                        AnalysisType analysis_type, std::string& common_pin_name);
+  struct ClockPathRoot { std::string pin; AnalysisType analysis; TransType transition; };
+  struct CrprRoots { ClockPathRoot launch, capture; };
+  std::optional<CrprRoots> resolveCrprRoots(TimingPathState& state, std::string& end, AnalysisType analysis);
+  std::optional<CrprRoots> resolveCrprRoots(std::string& start, std::string& end, AnalysisType analysis);
+  std::optional<CrprRoots> resolveCrprRoots(std::pair<std::string, TransType>& launch, std::string& end, AnalysisType analysis);
+  double evaluateCrpr(CrprRoots& roots, std::string& common_pin_name);
   double getClockCommonPathDelayDelta(std::pair<std::string, TransType>& common_pin, AnalysisType analysis_type);
   void shrinkClockPathToCrprPath(std::vector<std::pair<std::string, TransType>>& clock_path);
   bool isLeafClockDriverPin(std::string& pin_name);

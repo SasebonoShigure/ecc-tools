@@ -73,6 +73,8 @@ class CudaDualCsrSession final
   friend class ista::PhysicalStaSessionState;
   [[nodiscard]] const std::vector<BufferCandidateTiming>& candidateTiming(std::span<const NodeId> nodes) const;
   [[nodiscard]] const CsrReportValues& reportValues(std::span<const NodeId> nodes, std::span<const CsrQueryPath> paths) const;
+  [[nodiscard]] std::vector<CsrQueryPath> prepareReport(const CsrReportRequest& request) const;
+  [[nodiscard]] std::span<const std::string> reportClockNames() const;
   // The native export already validated the initialization input.
   [[nodiscard]] static CudaDualCsrSession fromNativeExport(
       const CsrReferenceInput& input, timing_edit::AppendOnlyHighWater high_water);

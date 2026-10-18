@@ -617,30 +617,6 @@ double TimingAnalyzer::getEndPointClockArrival(std::string& end_point, AnalysisT
   return getClockArrival(instance.get_clock_pin_name(), analysis_type, trans_type);
 }
 
-double TimingAnalyzer::getClockReconvergencePessimism(TimingPathState& end_path_state, std::string& end_point, AnalysisType analysis_type,
-                                                        std::string& common_pin_name)
-{
-  if (end_path_state.get_crpr_clock_pin().empty()) {
-    return getClockReconvergencePessimism(end_path_state.get_start_point(), end_point, analysis_type, common_pin_name);
-  }
-  std::pair<std::string, TransType> launch_crpr_pin(end_path_state.get_crpr_clock_pin(), end_path_state.get_crpr_clock_trans_type());
-  return getClockReconvergencePessimism(launch_crpr_pin, end_point, analysis_type, common_pin_name);
-}
-
-double TimingAnalyzer::getClockReconvergencePessimism(std::string& start_point, std::string& end_point, AnalysisType analysis_type,
-                                                       std::string& common_pin_name)
-{
-  Database& database = STADM.getDatabase();
-  if (!isRegisterStartPoint(start_point) || (!isRegisterEndPoint(end_point) && !isTimingCheckEndPoint(end_point))) {
-    return 0.0;
-  }
-  Pin& start_pin = database.get_pin_map()[start_point];
-  Instance& start_instance = database.get_instance_map()[start_pin.get_instance_name()];
-  TransType launch_trans_type = getClockTransType(start_instance.get_clock_to_q_arc());
-  std::pair<std::string, TransType> launch_crpr_pin(start_instance.get_clock_pin_name(), launch_trans_type);
-  return getClockReconvergencePessimism(launch_crpr_pin, end_point, analysis_type, common_pin_name);
-}
-
 TransType TimingAnalyzer::getClockTransType(TimingCellArc& timing_cell_arc)
 {
   if (timing_cell_arc.get_timing_arc_list().empty()) {
@@ -668,45 +644,6 @@ bool TimingAnalyzer::isRegisterStartPoint(std::string& start_point)
 bool TimingAnalyzer::hasClockPoint(std::string& pin_name)
 {
   return hasTimingPoint(pin_name) && timingPoint(pin_name).get_is_clock_point();
-}
-
-double TimingAnalyzer::getClockReconvergencePessimism(std::pair<std::string, TransType>& launch_crpr_pin, std::string& end_point,
-                                                        AnalysisType analysis_type, std::string& common_pin_name)
-{
-  Database& database = STADM.getDatabase();
-  if ((!isRegisterEndPoint(end_point) && !isTimingCheckEndPoint(end_point)) || database.get_pin_map().count(launch_crpr_pin.first) == 0) {
-    return 0.0;
-  }
-  Pin& end_pin = database.get_pin_map()[end_point];
-  Instance& end_instance = database.get_instance_map()[end_pin.get_instance_name()];
-  AnalysisType launch_analysis_type = analysis_type;
-  AnalysisType capture_analysis_type = getCaptureAnalysisType(analysis_type);
-  TransType launch_trans_type = launch_crpr_pin.second == TransType::kNone ? TransType::kRise : launch_crpr_pin.second;
-  TimingCheckArc* timing_check_arc = getEndPointCheckArc(end_point, analysis_type);
-  TransType capture_trans_type = timing_check_arc == nullptr ? TransType::kRise : getClockTransType(*timing_check_arc);
-  std::vector<std::pair<std::string, TransType>> launch_clock_path
-      = getClockPathPinList(launch_crpr_pin.first, launch_analysis_type, launch_trans_type);
-  std::vector<std::pair<std::string, TransType>> capture_clock_path
-      = getClockPathPinList(end_instance.get_clock_pin_name(), capture_analysis_type, capture_trans_type);
-  shrinkClockPathToCrprPath(launch_clock_path);
-  shrinkClockPathToCrprPath(capture_clock_path);
-  std::pair<std::string, TransType> launch_common_pin;
-  std::pair<std::string, TransType> capture_common_pin;
-  std::size_t path_size = std::min(launch_clock_path.size(), capture_clock_path.size());
-  for (std::size_t i = 0; i < path_size; i++) {
-    if (launch_clock_path[i].first != capture_clock_path[i].first || launch_clock_path[i].second != capture_clock_path[i].second) {
-      break;
-    }
-    launch_common_pin = launch_clock_path[i];
-    capture_common_pin = capture_clock_path[i];
-    common_pin_name = launch_clock_path[i].first;
-  }
-  if (common_pin_name.empty()) {
-    return 0.0;
-  }
-  double launch_delay_delta = getClockCommonPathDelayDelta(launch_common_pin, launch_analysis_type);
-  double capture_delay_delta = getClockCommonPathDelayDelta(capture_common_pin, capture_analysis_type);
-  return std::min(launch_delay_delta, capture_delay_delta);
 }
 
 double TimingAnalyzer::getClockCommonPathDelayDelta(std::pair<std::string, TransType>& common_pin, AnalysisType analysis_type)

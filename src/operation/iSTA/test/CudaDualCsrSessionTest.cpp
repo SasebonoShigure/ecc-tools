@@ -743,6 +743,7 @@ int main(int argc, char** argv)
       multiBlockReconstruction();
     csr::test::runCudaDualCsrStorageContracts(mode);
     CudaDualCsrTestReader::reportQueryContracts(mode);
+    CudaDualCsrTestReader::reportChainContracts();
     runCudaClockContracts();
     runCudaSequentialContracts();
     runCudaRcPropagationContracts();

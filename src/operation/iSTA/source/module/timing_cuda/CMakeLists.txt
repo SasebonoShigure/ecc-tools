@@ -9,6 +9,7 @@ add_library(ista_cuda STATIC
     CudaDualCsrSession.cu
     CudaBufferCandidateTiming.cu
     CudaReportValues.cu
+    CudaReportChains.cu
     CudaDualCsrTransfer.cu
     CudaPathDomain.cu
     CudaDualCsrParasitics.cu
